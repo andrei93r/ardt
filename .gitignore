@@ -1,10 +1,53 @@
+# Adrt — ignore rules
+
+## Dependencies
 node_modules/
+
+## TypeScript build output (dist/ is the packaged extension layout)
 dist/
 build/
+*.tsbuildinfo
+
+## GNOME extension packaging
 *.zip
 *.gschema.valid
 gschemas.compiled
+schemas/**/gschemas.compiled
+# In-tree install target (e.g. XDG_DATA_HOME=. scripts/install.sh)
+adrt@adrt.dev/
+
+## Tests and coverage
 coverage/
-.tmp/
-__pycache__/
+.vitest/
+.nyc_output/
+
+## Test / tooling logs and caches
 *.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+.eslintcache
+.cache/
+
+## Python helpers (tests/agent/parse.py)
+__pycache__/
+*.py[cod]
+
+## Temporary scratch
+.tmp/
+tmp/
+
+## Local environment
+.env
+.env.*
+!.env.example
+
+## Editors and OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
