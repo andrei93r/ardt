@@ -237,6 +237,13 @@ ydotool_ready() {
   return 0
 }
 
+# Keyboard injection needs a compositor that owns the input seat. A nested
+# headless Shell does not, so keybindings only work against the live session.
+keyboard_injection_ready() {
+  [ "${ADRT_TARGET:-nested}" = "session" ] || return 1
+  ydotool_ready
+}
+
 summary() {
   echo
   echo "checks=$checks failures=$failures"

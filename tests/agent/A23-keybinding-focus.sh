@@ -5,8 +5,8 @@
 # A23 Keybinding focus via synthetic input (requires ydotool).
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-if ! ydotool_ready; then
-  skip "A23 keybinding focus: ydotoold is not running with /dev/uinput access (would run: ydotool key super+Right)"
+if ! keyboard_injection_ready; then
+  skip "A23 keybinding focus: needs the interactive session (a nested headless Shell has no input focus); use scripts/keybinding-test.sh"
   exit 0
 fi
 

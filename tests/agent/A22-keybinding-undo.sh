@@ -5,8 +5,8 @@
 # A22 Keybinding undo via synthetic input (requires ydotool).
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-if ! ydotool_ready; then
-  skip "A22 keybinding undo: ydotoold is not running with /dev/uinput access (would run: ydotool key super+z)"
+if ! keyboard_injection_ready; then
+  skip "A22 keybinding undo: needs the interactive session (a nested headless Shell has no input focus); use scripts/keybinding-test.sh"
   exit 0
 fi
 

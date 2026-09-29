@@ -18,6 +18,19 @@ npm run test:all      # all of the above
 installs the extension into an isolated `XDG_DATA_HOME`, enables it, and drives
 it through D-Bus. It requires no display, no touchpad and no human.
 
+### Keybindings need the interactive session
+
+A22–A24 inject real key events with `ydotool`. A nested **headless** Shell does
+not own the input seat, so those events never reach it — the scenarios report
+`SKIP` there by design. Run them against your live session instead:
+
+```bash
+bash scripts/keybinding-test.sh   # Adrt enabled + ydotoold running
+```
+
+It injects `Super+Z`, `Super+Right` and `Super+f`, so expect your desktop to see
+those shortcuts.
+
 ### Agent scenarios (§40.4)
 
 | #   | Area             | How it is driven                          |
@@ -43,9 +56,9 @@ it through D-Bus. It requires no display, no touchpad and no human.
 | A19 | Gesture 3-vert   | `SimulateGesture('swipe-3-vertical', …)`  |
 | A20 | Gesture pinch    | `SimulateGesture('pinch-in', …)`          |
 | A21 | Gesture disabled | disable via GSettings, expect `false`     |
-| A22 | Keybinding undo  | `ydotool` (skipped when absent)           |
-| A23 | Keybinding focus | `ydotool` (skipped when absent)           |
-| A24 | Keybinding float | `ydotool` (skipped when absent)           |
+| A22 | Keybinding undo  | `ydotool` on the interactive session      |
+| A23 | Keybinding focus | `ydotool` on the interactive session      |
+| A24 | Keybinding float | `ydotool` on the interactive session      |
 | A25 | Settings change  | `gsettings set gaps-base`                 |
 | A26 | Shell restart    | restart the nested Shell                  |
 | A27 | Session unlock   | `SimulateSessionMode('user')`             |
