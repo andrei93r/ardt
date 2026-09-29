@@ -87,3 +87,8 @@ export function unpackVariant(value: any): any {
   if (value === null || value === undefined) return undefined;
   return typeof value.recursiveUnpack === 'function' ? value.recursiveUnpack() : value.unpack();
 }
+
+/** True for a window move/resize grab (a user drag), false for other grabs. */
+export function isDragOp(op: number): boolean {
+  return op !== Meta.GrabOp.NONE && op !== Meta.GrabOp.WINDOW_BASE;
+}

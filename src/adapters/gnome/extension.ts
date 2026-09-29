@@ -36,8 +36,12 @@ import { GnomeSettings } from './settings.js';
 import { Tiling } from './tiling.js';
 
 const EXTENSION_VERSION = 1;
-const WORKSPACE_SWITCH_POLL_MS = 32;
-const WORKSPACE_SWITCH_MAX_MS = 2000;
+/** §23.2: how often the focused actor's position is sampled, and how many
+ * stable samples end a transition. */
+const MOTION_POLL_MS = 32;
+const MOTION_STABLE_SAMPLES = 3;
+/** Ignore movement for this long after we applied a plan ourselves. */
+const MOTION_SELF_MS = 200;
 
 interface ExtraHandlers {
   ActivateWindow(id: number): boolean;
@@ -50,6 +54,8 @@ interface ExtraHandlers {
   FocusCycle(): boolean;
   SpawnWindow(command: string): number;
   CloseWindow(id: number): boolean;
+  BeginDrag(id: number): boolean;
+  EndDrag(id: number): boolean;
   MaximizeWindow(id: number): boolean;
   UnmaximizeWindow(id: number): boolean;
   ResetLayoutState(): boolean;
@@ -75,8 +81,10 @@ export default class AdrtExtension extends Extension {
 
   private sessionModeId = 0;
   private overviewSignals: number[] = [];
-  private switchPollId: number | null = null;
-  private switchPollStartedMs = 0;
+  private motionSource: number | null = null;
+  private motionLastX = Number.NaN;
+  private motionLastY = Number.NaN;
+  private motionStable = 0;
   private settingWatchers: (() => void)[] = [];
   private keybindings: string[] = [];
   private hostUnsubscribers: (() => void)[] = [];
@@ -134,6 +142,7 @@ export default class AdrtExtension extends Extension {
       onStateChanged: () => this.onStateChanged(),
       onStubborn: (appId) => this.onStubborn(appId),
       onClosed: (id, rect) => this.onWindowClosed(id, rect),
+      onDragChanged: (dragging) => this.onDragChanged(dragging),
     });
 
     const injectedFailures = this.settings.int('debug-inject-verify-failure', 0);
@@ -173,7 +182,7 @@ export default class AdrtExtension extends Extension {
 
   disable(): void {
     this.history.log('disable', {});
-    this.stopSwitchPoll();
+    this.stopMotionWatch();
     if (this.sessionModeId !== 0) {
       sessionMode.disconnect(this.sessionModeId);
       this.sessionModeId = 0;
@@ -241,68 +250,112 @@ export default class AdrtExtension extends Extension {
   private onFocusChanged(id: number | null): void {
     if (id === null) {
       this.border.clearFocus();
+      this.stopMotionWatch();
       this.syncIndicator();
       return;
     }
     const tracked = this.session.windows.get(id);
     if (tracked === undefined || !this.session.classify(tracked).tileable) {
       this.border.clearFocus();
+      this.stopMotionWatch();
       this.syncIndicator();
       return;
     }
     this.border.setFocus(id, tracked.surface.frame);
+    this.startMotionWatch();
     this.syncIndicator();
   }
 
   private onWorkspaceSwitched(payload: { from: number; to: number }): void {
     this.border.suppress('workspace-switch');
+    this.startMotionWatch();
     this.syncIndicator();
     this.history.log('ws_switch_empty', { from: payload.from, to: payload.to, reason: 'switch' });
-    this.beginSwitchPoll();
   }
 
-  /** §23.2: release suppression when the focused actor settles, ceiling 2s. */
-  private beginSwitchPoll(): void {
-    this.stopSwitchPoll();
-    this.switchPollStartedMs = GLib.get_monotonic_time();
-    let lastX = Number.NaN;
-    let lastY = Number.NaN;
-    let stableFrames = 0;
-    this.switchPollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, WORKSPACE_SWITCH_POLL_MS, () => {
-      const elapsedMs = (GLib.get_monotonic_time() - this.switchPollStartedMs) / 1000;
-      const win = global.display.get_focus_window();
-      if (win === null) {
-        this.endSwitchPoll();
-        return GLib.SOURCE_REMOVE;
-      }
-      const actor = win.get_compositor_private();
-      if (actor === null) {
-        this.endSwitchPoll();
-        return GLib.SOURCE_REMOVE;
-      }
-      const [x, y] = [actor.x, actor.y];
-      if (x === lastX && y === lastY) stableFrames += 1;
-      else stableFrames = 0;
-      lastX = x;
-      lastY = y;
-      if (stableFrames >= 3 || elapsedMs >= WORKSPACE_SWITCH_MAX_MS) {
-        this.endSwitchPoll();
-        return GLib.SOURCE_REMOVE;
-      }
-      return GLib.SOURCE_CONTINUE;
-    });
-  }
-
-  private stopSwitchPoll(): void {
-    if (this.switchPollId === null) return;
-    GLib.source_remove(this.switchPollId);
-    this.switchPollId = null;
-  }
-
-  private endSwitchPoll(): void {
-    this.switchPollId = null;
-    this.border.unsuppress('workspace-switch');
+  /** §23.1: the user is dragging; hide the border and stop reflowing. */
+  private onDragChanged(dragging: boolean): void {
+    if (dragging) {
+      this.border.suppress('drag');
+      this.stopMotionWatch();
+    } else {
+      this.border.unsuppress('drag');
+      this.startMotionWatch();
+    }
     this.syncIndicator();
+  }
+
+  /**
+   * §23.2: while a tileable window is focused, sample its compositor position.
+   * A workspace switch (keyboard or touchpad) slides the actor, so the border
+   * hides as soon as it moves and returns once it has been stable. This is what
+   * covers gesture-driven switches, which emit no start signal.
+   */
+  private startMotionWatch(): void {
+    if (this.motionSource !== null) return;
+    this.motionLastX = Number.NaN;
+    this.motionLastY = Number.NaN;
+    this.motionStable = 0;
+    this.motionSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, MOTION_POLL_MS, () => this.onMotionTick());
+  }
+
+  private stopMotionWatch(): void {
+    if (this.motionSource === null) return;
+    GLib.source_remove(this.motionSource);
+    this.motionSource = null;
+  }
+
+  private onMotionTick(): boolean {
+    // No transition can be in flight while paused, in the overview or dragging;
+    // release any stale suppression so the border is not stuck hidden.
+    if (this.isPaused() || overview.visible || this.session.isDragging) {
+      this.stopMotionWatch();
+      if (this.border.isSuppressed('workspace-switch')) {
+        this.border.unsuppress('workspace-switch');
+        this.syncIndicator();
+      }
+      return GLib.SOURCE_REMOVE;
+    }
+    const focused = this.session.focused();
+    if (focused === null) {
+      this.stopMotionWatch();
+      return GLib.SOURCE_REMOVE;
+    }
+    const actor = focused.win.get_compositor_private();
+    if (actor === null) return GLib.SOURCE_CONTINUE;
+
+    const x = actor.x;
+    const y = actor.y;
+    // Movement we caused ourselves is not a transition.
+    if (this.animator.activeCount > 0 || Date.now() - this.session.perf().lastApplyAtMs < MOTION_SELF_MS) {
+      this.motionLastX = x;
+      this.motionLastY = y;
+      this.motionStable = 0;
+      return GLib.SOURCE_CONTINUE;
+    }
+    if (Number.isNaN(this.motionLastX)) {
+      this.motionLastX = x;
+      this.motionLastY = y;
+      return GLib.SOURCE_CONTINUE;
+    }
+
+    const moved = Math.abs(x - this.motionLastX) > 1 || Math.abs(y - this.motionLastY) > 1;
+    this.motionLastX = x;
+    this.motionLastY = y;
+    if (moved) {
+      this.motionStable = 0;
+      if (!this.border.isSuppressed('workspace-switch')) {
+        this.border.suppress('workspace-switch');
+        this.syncIndicator();
+      }
+    } else {
+      this.motionStable += 1;
+      if (this.motionStable >= MOTION_STABLE_SAMPLES && this.border.isSuppressed('workspace-switch')) {
+        this.border.unsuppress('workspace-switch');
+        this.syncIndicator();
+      }
+    }
+    return GLib.SOURCE_CONTINUE;
   }
 
   private syncIndicator(): void {
@@ -325,6 +378,7 @@ export default class AdrtExtension extends Extension {
     const focused = this.session.focused();
     if (focused !== null) {
       this.border.setFocus(focused.id, focused.surface.frame);
+      this.startMotionWatch();
     }
     this.syncIndicator();
   }
@@ -576,6 +630,8 @@ export default class AdrtExtension extends Extension {
       },
       SpawnWindow: (command) => this.spawnWindow(command),
       CloseWindow: (id) => this.closeWindow(id),
+      BeginDrag: (id) => this.session.beginDrag(id),
+      EndDrag: (id) => this.session.endDrag(id),
       MaximizeWindow: (id) => {
         if (!this.session.windows.has(id)) return false;
         this.host.maximize(id);

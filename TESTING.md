@@ -66,6 +66,11 @@ those shortcuts.
 | A29 | Frame timing     | `trace-enabled`, assert history events    |
 | A30 | Memory bounds    | open/close repeatedly, assert bounds      |
 
+Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
+`BeginDrag`, `EndDrag`, `MaximizeWindow`, `UnmaximizeWindow`,
+`ResetLayoutState`, `ActivateWindow`, `ActivateWorkspace`, `FocusDirection`,
+`FocusCycle`.
+
 ## Manual scenarios (§31.3)
 
 Run `npm run dev`, then use the nested Shell. Scenarios that need real

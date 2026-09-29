@@ -37,6 +37,7 @@ export interface SessionDeps {
   onStateChanged(): void;
   onStubborn(appId: string): void;
   onClosed(id: number, rect: Rect): void;
+  onDragChanged(dragging: boolean): void;
 }
 
 interface WindowSignal {
@@ -54,9 +55,13 @@ export class WindowSession {
   /** Workspaces this extension created; empty ones are removed again (§16). */
   private readonly dynamicWorkspaces = new Set<number>();
   private reorderSignal = 0;
+  private grabBeginSignal = 0;
+  private grabEndSignal = 0;
+  private dragging = false;
   private scanPerfCounter = 0;
   private lastReconcileMs = 0;
   private lastApplyMs = 0;
+  private lastApplyAtMs = 0;
 
   constructor(private readonly deps: SessionDeps) {}
 
@@ -71,6 +76,13 @@ export class WindowSession {
     this.scheduleScan();
     // §7.6: user reorders shift every window's workspace index.
     this.reorderSignal = global.workspace_manager.connect('workspaces-reordered', () => this.onWorkspacesReordered());
+    // §11.3 / §23.1: never retile or show the border while the user is dragging.
+    this.grabBeginSignal = global.display.connect('grab-op-begin', (_display: any, win: any, op: number) =>
+      this.onGrabBegin(win, op),
+    );
+    this.grabEndSignal = global.display.connect('grab-op-end', (_display: any, win: any, op: number) =>
+      this.onGrabEnd(win, op),
+    );
   }
 
   private scanBaseMs(): number {
@@ -86,6 +98,53 @@ export class WindowSession {
       global.workspace_manager.disconnect(this.reorderSignal);
       this.reorderSignal = 0;
     }
+    if (this.grabBeginSignal !== 0) {
+      global.display.disconnect(this.grabBeginSignal);
+      this.grabBeginSignal = 0;
+    }
+    if (this.grabEndSignal !== 0) {
+      global.display.disconnect(this.grabEndSignal);
+      this.grabEndSignal = 0;
+    }
+  }
+
+  get isDragging(): boolean {
+    return this.dragging;
+  }
+
+  private onGrabBegin(win: any, op: number): void {
+    if (!compat.isDragOp(op)) return;
+    if (win === null) return;
+    this.beginDrag(win.get_id());
+  }
+
+  private onGrabEnd(win: any, op: number): void {
+    if (!compat.isDragOp(op)) return;
+    if (win === null) return;
+    this.endDrag(win.get_id());
+  }
+
+  /** §11.3: while a drag is in flight, freeze reflow and hide the border. */
+  beginDrag(id: number): boolean {
+    if (!this.windows.has(id)) return false;
+    if (this.dragging) return true;
+    this.dragging = true;
+    this.deps.onDragChanged(true);
+    return true;
+  }
+
+  /** Drag released: reflow the workspace into a valid plan. */
+  endDrag(id: number): boolean {
+    const tracked = this.windows.get(id);
+    if (tracked === undefined) return false;
+    const wasDragging = this.dragging;
+    this.dragging = false;
+    this.deps.onDragChanged(false);
+    if (wasDragging) {
+      this.signatures.clearAll();
+      this.scheduleRetile(tracked.surface.workspaceId, 'drag-end');
+    }
+    return true;
   }
 
   /** §18 invariant: paused means no retiles, no scan tick.**/
@@ -184,6 +243,8 @@ export class WindowSession {
 
   scheduleRetile(workspaceId: number, reason: string): void {
     if (this.deps.isPaused()) return;
+    // Never reflow under the user's finger; grab-op-end re-tiles instead.
+    if (this.dragging) return;
     if (!this.scheduler.schedule(`ws:${workspaceId}`)) return;
     if (this.retileSource !== null) return;
     this.retileSource = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
@@ -226,6 +287,8 @@ export class WindowSession {
   /** Compute and apply the plan for every monitor of one workspace (§6). */
   retile(workspaceId: number, reason: string, animate = true): void {
     if (this.deps.isPaused()) return;
+    // §11.3: no reflow while the user is dragging.
+    if (this.dragging) return;
     // §7.2: a window maximized on its own was left maximized when a sibling
     // arrived; unmaximize it and tile the pair.
     if (this.unmaximizeStaleLone(workspaceId)) {
@@ -263,6 +326,7 @@ export class WindowSession {
       this.deps.tiling.applyPlan(plan, screen, reason, animate);
       // §36.14: one retile must complete well under 10ms.
       this.lastApplyMs = (GLib.get_monotonic_time() - startedUs) / 1000;
+      this.lastApplyAtMs = Date.now();
       if (this.lastApplyMs > 5 && this.deps.settings.boolean('debug-enabled', false)) {
         this.deps.history.log('perf', { workspaceId, screen: screen.index, apply_ms: this.lastApplyMs });
       }
@@ -676,6 +740,11 @@ export class WindowSession {
 
   private onFrameSignal(tracked: TrackedWindow): void {
     tracked.surface.refreshFrame();
+    // While the user is dragging, follow the frame but do not reflow (§11.3).
+    if (this.dragging) {
+      this.deps.onStateChanged();
+      return;
+    }
     // Size hints usually arrive just after the first frame. Until they do, the
     // window reports max 0 and a plan built against it will be refused. This is
     // the only path that re-queries Mutter for hints (§24 item 2).
@@ -786,8 +855,8 @@ export class WindowSession {
   }
 
   /** §21: retile timings for the perf event. */
-  perf(): { lastReconcileMs: number; lastApplyMs: number } {
-    return { lastReconcileMs: this.lastReconcileMs, lastApplyMs: this.lastApplyMs };
+  perf(): { lastReconcileMs: number; lastApplyMs: number; lastApplyAtMs: number } {
+    return { lastReconcileMs: this.lastReconcileMs, lastApplyMs: this.lastApplyMs, lastApplyAtMs: this.lastApplyAtMs };
   }
 
   layerOf(id: number): Layer | null {
