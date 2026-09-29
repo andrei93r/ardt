@@ -35,8 +35,9 @@ code changes, MINOR for features, PATCH for fixes.
 - `keybindings` accepts `name=accelerator` overrides.
 - `perf` telemetry measures scan reconciliation and retile application time.
 - `workspace-auto-name` names spawned workspaces.
-- Dragging a window freezes reflow and hides the border; releasing reflows the
-  workspace into a valid plan (`grab-op-begin`/`grab-op-end`).
+- Dragging a window freezes reflow and hides the border; releasing interprets
+  the gesture: an inner-edge resize saves the split ratio (§12), dragging a
+  window past its sibling swaps the pair (§13), and anything else reflows.
 - The border hides during any workspace transition — keyboard or touchpad —
-  by watching the focused actor's position, and returns once it settles. This
-  also covers gesture-driven switches, which emit no start signal.
+  by watching the focused actor's stage-space position (so a sliding workspace
+  parent is detected), returning once it settles.

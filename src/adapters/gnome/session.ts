@@ -14,7 +14,7 @@ import type { HeuristicContext } from '../../core/classify.js';
 import { checkPlan } from '../../core/invariants.js';
 import { RetileScheduler, SignatureCache, planSignature } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
-import { computePlans, pairKey } from '../../core/tiler.js';
+import { computePlans, pairKey, ratioKey, screenArea } from '../../core/tiler.js';
 import { Layer } from '../../core/types.js';
 import type { Rect, Screen } from '../../core/types.js';
 import type { AdaptationStore, FloatStore } from './adapt.js';
@@ -58,6 +58,8 @@ export class WindowSession {
   private grabBeginSignal = 0;
   private grabEndSignal = 0;
   private dragging = false;
+  private dragOp = 0;
+  private dragStartRect: Rect | null = null;
   private scanPerfCounter = 0;
   private lastReconcileMs = 0;
   private lastApplyMs = 0;
@@ -115,7 +117,7 @@ export class WindowSession {
   private onGrabBegin(win: any, op: number): void {
     if (!compat.isDragOp(op)) return;
     if (win === null) return;
-    this.beginDrag(win.get_id());
+    this.beginDrag(win.get_id(), op);
   }
 
   private onGrabEnd(win: any, op: number): void {
@@ -125,26 +127,107 @@ export class WindowSession {
   }
 
   /** §11.3: while a drag is in flight, freeze reflow and hide the border. */
-  beginDrag(id: number): boolean {
-    if (!this.windows.has(id)) return false;
+  beginDrag(id: number, op: number = compat.MOVE_OP): boolean {
+    const tracked = this.windows.get(id);
+    if (tracked === undefined) return false;
     if (this.dragging) return true;
     this.dragging = true;
+    this.dragOp = op;
+    this.dragStartRect = { ...tracked.surface.frame };
     this.deps.onDragChanged(true);
     return true;
   }
 
-  /** Drag released: reflow the workspace into a valid plan. */
+  /**
+   * Drag released: interpret the gesture before reflowing.
+   * - §12 inner-edge resize of a pair saves the new split ratio.
+   * - §13 dragging one window past its sibling swaps the pair.
+   * - otherwise the workspace simply reflows.
+   */
   endDrag(id: number): boolean {
     const tracked = this.windows.get(id);
     if (tracked === undefined) return false;
     const wasDragging = this.dragging;
     this.dragging = false;
     this.deps.onDragChanged(false);
-    if (wasDragging) {
-      this.signatures.clearAll();
-      this.scheduleRetile(tracked.surface.workspaceId, 'drag-end');
+    if (!wasDragging) return true;
+
+    tracked.surface.refreshFrame();
+    const sibling = this.pairSibling(tracked);
+    const screen = this.screenFor(tracked.surface.screenId);
+    if (sibling !== null && screen !== null) {
+      if (compat.isMoveOp(this.dragOp)) this.applySwapIntent(tracked, sibling, screen);
+      else this.applyResizeIntent(tracked, sibling, screen);
     }
+    this.dragStartRect = null;
+    this.signatures.clearAll();
+    this.scheduleRetile(tracked.surface.workspaceId, 'drag-end');
     return true;
+  }
+
+  private pairSibling(tracked: TrackedWindow): TrackedWindow | null {
+    const peers = this.tileables(tracked.surface.workspaceId).filter(
+      (t) => t.id !== tracked.id && t.surface.screenId === tracked.surface.screenId,
+    );
+    return peers.length === 1 ? peers[0] : null;
+  }
+
+  /** §13: the window was dropped on the far side of its sibling. */
+  private applySwapIntent(tracked: TrackedWindow, sibling: TrackedWindow, screen: Screen): void {
+    const horizontal = screenArea(screen).width >= screenArea(screen).height;
+    const rect = tracked.surface.frame;
+    const other = sibling.surface.frame;
+    const center = horizontal ? rect.x + rect.width / 2 : rect.y + rect.height / 2;
+    const otherCenter = horizontal ? other.x + other.width / 2 : other.y + other.height / 2;
+    const start = this.dragStartRect ?? rect;
+    const startCenter = horizontal ? start.x + start.width / 2 : start.y + start.height / 2;
+    const startSide = Math.sign(startCenter - otherCenter);
+    const nowSide = Math.sign(center - otherCenter);
+    if (startSide !== 0 && nowSide !== 0 && startSide !== nowSide) {
+      this.deps.tiling.toggleSwap(tracked.id, sibling.id);
+      this.deps.history.log('swap', { a: tracked.id, b: sibling.id, reason: 'drag' });
+    }
+  }
+
+  /** §12: a shared inner edge moved; save the resulting ratio. */
+  private applyResizeIntent(tracked: TrackedWindow, sibling: TrackedWindow, screen: Screen): void {
+    const start = this.dragStartRect;
+    if (start === null) return;
+    const horizontal = screenArea(screen).width >= screenArea(screen).height;
+    const rect = tracked.surface.frame;
+    const other = sibling.surface.frame;
+
+    const leftIsTracked = horizontal ? rect.x <= other.x : rect.y <= other.y;
+    const movedStart = horizontal ? start.x : start.y;
+    const movedEnd = horizontal ? start.x + start.width : start.y + start.height;
+    const nowStart = horizontal ? rect.x : rect.y;
+    const nowEnd = horizontal ? rect.x + rect.width : rect.y + rect.height;
+    const startMoved = Math.abs(nowStart - movedStart) > Math.abs(nowEnd - movedEnd);
+    // Inner edge = the edge shared with the sibling.
+    const isInner = leftIsTracked ? !startMoved : startMoved;
+    if (!isInner) return;
+
+    const near = horizontal ? Math.min(rect.x, other.x) : Math.min(rect.y, other.y);
+    const far = horizontal
+      ? Math.max(rect.x + rect.width, other.x + other.width)
+      : Math.max(rect.y + rect.height, other.y + other.height);
+    const span = far - near;
+    if (span <= 0) return;
+    const leftExtent = leftIsTracked
+      ? horizontal
+        ? rect.width
+        : rect.height
+      : horizontal
+        ? other.width
+        : other.height;
+    const ratioLeft = leftExtent / span;
+    const leftAppId = leftIsTracked ? tracked.surface.appId : sibling.surface.appId;
+    const rightAppId = leftIsTracked ? sibling.surface.appId : tracked.surface.appId;
+    const sortedFirstIsLeft = leftAppId <= rightAppId;
+    const axis = horizontal ? 'horizontal' : 'vertical';
+    const key = ratioKey(tracked.surface.appId, sibling.surface.appId, axis);
+    this.deps.tiling.setRatio(key, sortedFirstIsLeft ? ratioLeft : 1 - ratioLeft);
+    this.deps.history.log('split_resize', { pair: key, ratio: ratioLeft, reason: 'drag' });
   }
 
   /** §18 invariant: paused means no retiles, no scan tick.**/

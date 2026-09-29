@@ -25,6 +25,7 @@ import type { Rect } from '../../core/types.js';
 import type { GestureKind } from '../../core/gestures.js';
 import type { DbusHandlers } from '../../platform/dbus.js';
 import { AdaptationStore, FloatStore, dataDir, readText, writeAtomic } from './adapt.js';
+import * as compat from './compat.js';
 import { GnomeDbus } from './dbus.js';
 import { FrameClockAnimator } from './frame-clock.js';
 import { GestureInput } from './gesture-input.js';
@@ -55,7 +56,9 @@ interface ExtraHandlers {
   SpawnWindow(command: string): number;
   CloseWindow(id: number): boolean;
   BeginDrag(id: number): boolean;
+  BeginResize(id: number): boolean;
   EndDrag(id: number): boolean;
+  MoveWindow(id: number, x: number, y: number, width: number, height: number): boolean;
   MaximizeWindow(id: number): boolean;
   UnmaximizeWindow(id: number): boolean;
   ResetLayoutState(): boolean;
@@ -324,8 +327,8 @@ export default class AdrtExtension extends Extension {
     const actor = focused.win.get_compositor_private();
     if (actor === null) return GLib.SOURCE_CONTINUE;
 
-    const x = actor.x;
-    const y = actor.y;
+    // Stage-space, so a sliding workspace (moving parent actor) is detected too.
+    const [x, y] = compat.actorStagePosition(actor);
     // Movement we caused ourselves is not a transition.
     if (this.animator.activeCount > 0 || Date.now() - this.session.perf().lastApplyAtMs < MOTION_SELF_MS) {
       this.motionLastX = x;
@@ -631,7 +634,9 @@ export default class AdrtExtension extends Extension {
       SpawnWindow: (command) => this.spawnWindow(command),
       CloseWindow: (id) => this.closeWindow(id),
       BeginDrag: (id) => this.session.beginDrag(id),
+      BeginResize: (id) => this.session.beginDrag(id, compat.RESIZE_OP),
       EndDrag: (id) => this.session.endDrag(id),
+      MoveWindow: (id, x, y, width, height) => this.moveWindow(id, x, y, width, height),
       MaximizeWindow: (id) => {
         if (!this.session.windows.has(id)) return false;
         this.host.maximize(id);
@@ -671,6 +676,13 @@ export default class AdrtExtension extends Extension {
     const tracked = this.session.windows.get(id);
     if (tracked === undefined) return false;
     tracked.win.delete(global.get_current_time());
+    return true;
+  }
+
+  /** Test trigger: place a window directly, to emulate a drag. */
+  private moveWindow(id: number, x: number, y: number, width: number, height: number): boolean {
+    if (!this.session.windows.has(id)) return false;
+    this.host.applyFrame(id, { x, y, width, height });
     return true;
   }
 

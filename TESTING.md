@@ -67,9 +67,9 @@ those shortcuts.
 | A30 | Memory bounds    | open/close repeatedly, assert bounds      |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
-`BeginDrag`, `EndDrag`, `MaximizeWindow`, `UnmaximizeWindow`,
-`ResetLayoutState`, `ActivateWindow`, `ActivateWorkspace`, `FocusDirection`,
-`FocusCycle`.
+`BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,
+`UnmaximizeWindow`, `ResetLayoutState`, `ActivateWindow`, `ActivateWorkspace`,
+`FocusDirection`, `FocusCycle`.
 
 ## Manual scenarios (§31.3)
 
