@@ -29,7 +29,7 @@ echo "before: active=$before_active workspaces=$before_count third=$third on ws$
 adrt MinimizeWindow "$third" >/dev/null
 wait_settled 30
 
-check_python "the window returned to the previous workspace and the empty one was removed" '
+check_python "the window returned to the previous workspace and followed" '
 import json, sys
 d = json.load(sys.stdin)
 third = int("'"$third"'")
@@ -38,12 +38,17 @@ if not w or not w[0]["minimized"]:
     print("window is not minimized"); sys.exit(1)
 if w[0]["workspace"] != int("'"$third_ws"'") - 1:
     print("window on ws", w[0]["workspace"], "expected", int("'"$third_ws"'") - 1); sys.exit(1)
-if d["workspaces"] >= int("'"$before_count"'"):
-    print("empty workspace was not removed:", d["workspaces"]); sys.exit(1)
 if d["activeWorkspace"] != w[0]["workspace"]:
     print("view did not follow: active", d["activeWorkspace"], "window ws", w[0]["workspace"]); sys.exit(1)
-print("returned to ws", w[0]["workspace"], "workspaces now", d["workspaces"])
+print("returned to ws", w[0]["workspace"])
 '
+
+# The emptied workspace is reaped on the safety-net scan, never while active.
+if wait_for 20 bash -c "[ \"\$(bash '$NESTED' dbus DumpState | python3 '$PARSE' | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"workspaces\"])')\" -lt '$before_count' ]"; then
+  pass "the empty workspace was removed"
+else
+  fail "the empty workspace was not removed"
+fi
 
 ensure_clean
 summary

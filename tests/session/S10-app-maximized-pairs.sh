@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Generated with AI for personal use.
+# S10 An app that opens maximized (Files) tiles with the sibling.
+source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+session_begin
+
+spawn
+wait_tests 1 25 || true
+sleep 1
+adrt SpawnWindow "nautilus" >/dev/null
+wait_tests 2 30 || true
+sleep 3
+
+TEST_IDS="$(test_ids)" check_python "the maximized app was tiled with its sibling" '
+import os, json, sys
+ids = set(int(x) for x in os.environ["TEST_IDS"].split())
+d = json.load(sys.stdin)
+area = d["monitors"][0].get("workArea") or d["monitors"][0]["geometry"]
+ws = [w for w in d["windows"] if w["id"] in ids]
+if len(ws) < 2:
+    print("only", len(ws), "test windows"); sys.exit(1)
+if len({w["workspace"] for w in ws}) != 1:
+    print("different workspaces"); sys.exit(1)
+if any(w["maximized"] for w in ws):
+    print("a window is still maximized"); sys.exit(1)
+for w in ws:
+    if w["rect"]["width"] >= area["width"] - 1:
+        print("window fills the monitor", w["id"]); sys.exit(1)
+print("paired")
+'
+
+summary

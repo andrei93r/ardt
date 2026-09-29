@@ -57,9 +57,18 @@ code changes, MINOR for features, PATCH for fixes.
 - An app that opens maximized (e.g. Files/Nautilus) is tiled with its siblings
   instead of being exiled; only a user-initiated maximize gets its own
   workspace.
-- Minimizing a lone window on a later workspace moves it back, switches the
-  view to follow it, and removes the workspace it left.
-- Tiling is suspended while the overview is open and resumed with a single
+- A new workspace is created immediately to the **right** of the current one
+  (appended then reordered) and the view follows the window there, instead of
+  parking it at the end of the workspace line.
+- Empty dynamic workspaces are reaped on the safety-net scan and never while
+  the user is on them, which avoids the Shell bouncing into the overview when
+  a workspace is removed mid-action.
+- Window resizing no longer depends on the mouse-button state being reported;
+  a frame change that differs from the last planned rect (and is not our own
+  apply, an animation, a maximize/fullscreen/minimize state change, or a
+  stubborn refusal) is treated as the user resizing.
+- `DumpState` reports `workspaceActors`, `wsSwitchEvents` and
+  `motionSuppressions` to diagnose border suppression on real hardware.- Tiling is suspended while the overview is open and resumed with a single
   pass on close, which removes the reconcile churn that could stall the Shell.
 - The border's workspace-switch suppression is driven by the workspace actors'
   positions (they move only during a switch), so it is focus-independent and

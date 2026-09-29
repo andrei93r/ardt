@@ -93,6 +93,8 @@ export default class AdrtExtension extends Extension {
   private motionLastX = Number.NaN;
   private motionLastY = Number.NaN;
   private motionStable = 0;
+  private wsSwitchEvents = 0;
+  private motionSuppressions = 0;
   private settingWatchers: (() => void)[] = [];
   private keybindings: string[] = [];
   private hostUnsubscribers: (() => void)[] = [];
@@ -282,6 +284,7 @@ export default class AdrtExtension extends Extension {
   }
 
   private onWorkspaceSwitched(payload: { from: number; to: number }): void {
+    this.wsSwitchEvents += 1;
     this.border.suppress('workspace-switch');
     this.startMotionWatch();
     this.syncIndicator();
@@ -360,6 +363,7 @@ export default class AdrtExtension extends Extension {
       this.motionStable = 0;
       if (!this.border.isSuppressed('workspace-switch')) {
         this.border.suppress('workspace-switch');
+        this.motionSuppressions += 1;
         this.syncIndicator();
       }
     } else {
@@ -400,6 +404,7 @@ export default class AdrtExtension extends Extension {
 
   private onWorkspaceActorMoved(): void {
     if (this.isPaused()) return;
+    this.motionSuppressions += 1;
     this.border.suppress('workspace-switch');
     this.startMotionWatch();
     this.syncIndicator();
@@ -779,6 +784,9 @@ export default class AdrtExtension extends Extension {
       border: this.border.snapshot(),
       indicator: { ...this.indicator.describe(), visible: this.indicator.isVisible, ghosts: this.indicator.ghostCount, suppressed: this.border.activeSuppressions },
       overview: overview.visible,
+      workspaceActors: this.workspaceActorSignals.length / 2,
+      wsSwitchEvents: this.wsSwitchEvents,
+      motionSuppressions: this.motionSuppressions,
       adaptations: this.adaptation.size,
       perf: this.session.perf(),
       bounds: this.session.memoryBounds(),

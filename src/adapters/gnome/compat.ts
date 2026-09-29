@@ -97,9 +97,9 @@ export function actorStagePosition(actor: any): [number, number] {
 }
 
 /**
- * Whether the primary mouse button is currently held. A user move or resize
- * always drags with the button down; our own applies never do, so this cleanly
- * separates user geometry changes from compositor/extension ones.
+ * Whether the primary mouse button is held. A user move/resize always drags
+ * with the button down; our own applies never do, so this is the reliable way
+ * to tell user geometry changes from compositor/extension ones.
  */
 export function button1Pressed(): boolean {
   const [, , modifiers] = global.get_pointer();

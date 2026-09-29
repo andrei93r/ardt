@@ -330,6 +330,7 @@ export class WindowSession {
       // An app that opens maximized (Nautilus, Files, …) is tiled with the
       // siblings instead of being exiled. A user-initiated maximize still gets
       // its own workspace via `onMaximizeSignal`.
+      this.deps.tiling.noteSelfApply();
       this.deps.host.unmaximize(tracked.id);
       tracked.surface.refresh();
       this.evaluateLoneMaximize(workspaceId);
@@ -543,6 +544,7 @@ export class WindowSession {
     if (tileables.length < 2) return false;
     const stale = tileables.filter((t) => compat.isMaximized(t.win) && t.previousWorkspaceIdx === null);
     if (stale.length === 0) return false;
+    this.deps.tiling.noteSelfApply();
     for (const tracked of stale) this.deps.host.unmaximize(tracked.id);
     this.deps.history.log('tile', { reason: 'lone-unmaximize', workspaceId });
     return true;
@@ -712,34 +714,60 @@ export class WindowSession {
     if (nonTransient.length === 1 && tileables.length === 1) {
       const only = tileables[0];
       if (!compat.isMaximized(only.win)) {
+        this.deps.tiling.noteSelfApply();
         this.deps.host.maximize(only.id);
         this.deps.history.log('tile', { id: only.id, reason: 'lone-maximize' });
       }
       return;
     }
     if (nonTransient.length > 1 && tileables.length === 1 && compat.isMaximized(tileables[0].win)) {
+      this.deps.tiling.noteSelfApply();
       this.deps.host.unmaximize(tileables[0].id);
       this.scheduleRetile(workspaceId, 'lone-unmaximize');
     }
   }
 
-  /** §7.1 / §7.3: move a window to a brand-new workspace appended to the right. */
+  /**
+   * §7.1 / §7.3: move a window to a new workspace placed **immediately to the
+   * right** of its current one, then follow it there.
+   */
   private moveToNewWorkspace(tracked: TrackedWindow, rememberPrevious: boolean): void {
     if (this.userMoveProtected(tracked)) return;
     const manager = global.workspace_manager;
-    const index = manager.get_n_workspaces();
-    manager.append_new_workspace(false, global.get_current_time());
+    const previous = tracked.surface.workspaceId;
+    const target = previous + 1;
+
+    let index: number;
+    const existing = target < manager.get_n_workspaces() ? manager.get_workspace_by_index(target) : null;
+    if (existing !== null && this.workspaceIsEmpty(existing)) {
+      // An empty workspace already sits to the right: use it (no reorder, which
+      // would disturb window state).
+      index = target;
+    } else {
+      const appended = manager.get_n_workspaces();
+      manager.append_new_workspace(false, global.get_current_time());
+      const created = manager.get_workspace_by_index(appended);
+      if (created !== null && target < appended) manager.reorder_workspace(created, target);
+      index = Math.min(target, manager.get_n_workspaces() - 1);
+    }
+
     this.dynamicWorkspaces.add(index);
     this.maybeNameWorkspace(index);
-    const previous = tracked.surface.workspaceId;
     this.suppress.add(tracked.id);
+    this.deps.tiling.noteSelfApply();
     this.deps.host.applyWorkspace(tracked.id, index);
     this.suppress.delete(tracked.id);
     tracked.surface.workspaceId = index;
     tracked.lastWorkspaceIdx = index;
     if (rememberPrevious) tracked.previousWorkspaceIdx = previous;
     this.deps.history.log('spawn_ws', { id: tracked.id, workspaceId: index, previous });
+    // Follow the window to the workspace it was just given.
+    this.activateWorkspace(index);
     this.signatures.clearAll();
+  }
+
+  private workspaceIsEmpty(workspace: any): boolean {
+    return workspace.list_windows().filter((win: any) => this.windows.has(win.get_id())).length === 0;
   }
 
   /** §7.6 `workspace-auto-name`: name a spawned workspace. */
@@ -769,11 +797,13 @@ export class WindowSession {
     if (previous === null) {
       const tileables = this.tileables(tracked.surface.workspaceId);
       if (tileables.length <= 1 && !compat.isMaximized(tracked.win)) {
+        this.deps.tiling.noteSelfApply();
         this.deps.host.maximize(tracked.id);
       }
       return;
     }
     this.suppress.add(tracked.id);
+    this.deps.tiling.noteSelfApply();
     this.deps.host.applyWorkspace(tracked.id, previous);
     this.suppress.delete(tracked.id);
     const current = tracked.surface.workspaceId;
@@ -802,37 +832,45 @@ export class WindowSession {
     const tileables = this.tileables(workspaceId);
     if (tileables.length === 0 && workspaceId > 0) {
       this.suppress.add(tracked.id);
+      this.deps.tiling.noteSelfApply();
       this.deps.host.applyWorkspace(tracked.id, workspaceId - 1);
       this.suppress.delete(tracked.id);
       tracked.surface.workspaceId = workspaceId - 1;
       this.deps.history.log('new_ws', { id: tracked.id, workspaceId: workspaceId - 1, reason: 'minimize' });
-      // Follow the window and drop the workspace it just left (§7.4/§16).
+      // Follow the window. The empty workspace it left is pruned safely later.
       this.activateWorkspace(workspaceId - 1);
-      this.removeVacatedWorkspace(workspaceId);
     }
     this.scheduleRetile(workspaceId, 'minimize');
   }
 
-  /** Remove an empty workspace we emptied, activating the previous one first. */
-  private removeVacatedWorkspace(workspaceId: number): boolean {
+  /**
+   * §16: reap empty dynamic workspaces we created. Runs on the scan tick, when
+   * no user action is in flight, and never removes the active workspace.
+   */
+  private pruneEmptyDynamicWorkspaces(): void {
     const manager = global.workspace_manager;
-    if (workspaceId <= 0 || manager.get_n_workspaces() <= 1) return false;
-    const workspace = manager.get_workspace_by_index(workspaceId);
-    if (workspace === null) return false;
-    const remaining = workspace.list_windows().filter((win: any) => this.windows.has(win.get_id()));
-    if (remaining.length > 0) return false;
-    if (manager.get_active_workspace_index() === workspaceId) this.activateWorkspace(workspaceId - 1);
-
-    this.dynamicWorkspaces.delete(workspaceId);
-    const shifted = new Set<number>();
-    for (const index of this.dynamicWorkspaces) shifted.add(index > workspaceId ? index - 1 : index);
-    this.dynamicWorkspaces.clear();
-    for (const index of shifted) this.dynamicWorkspaces.add(index);
-    manager.remove_workspace(workspace, global.get_current_time());
-    this.realignWorkspaces();
-    this.signatures.clearAll();
-    this.deps.history.log('ws_removed', { workspaceId, reason: 'vacated' });
-    return true;
+    const active = manager.get_active_workspace_index();
+    if (manager.get_n_workspaces() <= 1) return;
+    for (const workspaceId of [...this.dynamicWorkspaces]) {
+      if (workspaceId === active) continue;
+      const workspace = manager.get_workspace_by_index(workspaceId);
+      if (workspace === null) {
+        this.dynamicWorkspaces.delete(workspaceId);
+        continue;
+      }
+      const remaining = workspace.list_windows().filter((win: any) => this.windows.has(win.get_id()));
+      if (remaining.length > 0) continue;
+      this.dynamicWorkspaces.delete(workspaceId);
+      const shifted = new Set<number>();
+      for (const index of this.dynamicWorkspaces) shifted.add(index > workspaceId ? index - 1 : index);
+      this.dynamicWorkspaces.clear();
+      for (const index of shifted) this.dynamicWorkspaces.add(index);
+      manager.remove_workspace(workspace, global.get_current_time());
+      this.realignWorkspaces();
+      this.signatures.clearAll();
+      this.deps.history.log('ws_removed', { workspaceId, reason: 'pruned' });
+      return;
+    }
   }
 
   /** §7.5 close: leave an empty workspace, removing dynamic ones (§16). */
@@ -857,6 +895,9 @@ export class WindowSession {
     if (!this.dynamicWorkspaces.has(workspaceId)) return false;
     const manager = global.workspace_manager;
     if (manager.get_n_workspaces() <= 1) return false;
+    // Never remove the workspace the user is on; a periodic prune handles it
+    // once they have moved away (removing it live can bounce into the overview).
+    if (manager.get_active_workspace_index() === workspaceId) return false;
     const workspace = manager.get_workspace_by_index(workspaceId);
     if (workspace === null) return false;
     const remaining = workspace.list_windows().filter((win: any) => this.windows.has(win.get_id()));
@@ -997,10 +1038,16 @@ export class WindowSession {
   private isUserChange(tracked: TrackedWindow): boolean {
     const target = tracked.lastTarget;
     if (target === null) return false;
-    // A user move/resize drags with the button held; our own applies do not.
+    // State changes (maximize, fullscreen, minimize) move the frame away from
+    // the tile plan but are not the user dragging; they have their own signals.
+    if (compat.isMaximized(tracked.win)) return false;
+    if (tracked.surface.flags.fullscreen || tracked.surface.flags.minimized) return false;
+    // A user move/resize holds the button; our own applies do not.
     if (!compat.button1Pressed()) return false;
+    // Our own applies set `lastTarget`, so a frame that differs from it and is
+    // not an animation or a stubborn refusal is the user moving the window.
     if (this.deps.tiling.activeAnimations > 0) return false;
-    if (Date.now() - this.deps.tiling.lastApplyAtMs < 250) return false;
+    if (Date.now() - this.deps.tiling.lastApplyAtMs < 200) return false;
     const frame = tracked.surface.frame;
     return (
       Math.abs(frame.x - target.x) > 3 ||
@@ -1056,21 +1103,28 @@ export class WindowSession {
     const area = screenArea(screen);
     const horizontal = area.width >= area.height;
     const gap = this.effectiveGap(area);
+    // Stay inside the tiled (inset) area so gaps are preserved.
+    const inset: Rect = {
+      x: area.x + gap,
+      y: area.y + gap,
+      width: Math.max(0, area.width - 2 * gap),
+      height: Math.max(0, area.height - 2 * gap),
+    };
     const a = tracked.surface.frame;
     const b = sibling.surface.frame;
     let rect: Rect;
     if (horizontal) {
       if (a.x <= b.x) {
         const x = a.x + a.width + gap;
-        rect = { x, y: area.y, width: Math.max(0, area.x + area.width - x), height: area.height };
+        rect = { x, y: inset.y, width: Math.max(0, inset.x + inset.width - x), height: inset.height };
       } else {
-        rect = { x: area.x, y: area.y, width: Math.max(0, a.x - gap - area.x), height: area.height };
+        rect = { x: inset.x, y: inset.y, width: Math.max(0, a.x - gap - inset.x), height: inset.height };
       }
     } else if (a.y <= b.y) {
       const y = a.y + a.height + gap;
-      rect = { x: area.x, y, width: area.width, height: Math.max(0, area.y + area.height - y) };
+      rect = { x: inset.x, y, width: inset.width, height: Math.max(0, inset.y + inset.height - y) };
     } else {
-      rect = { x: area.x, y: area.y, width: area.width, height: Math.max(0, a.y - gap - area.y) };
+      rect = { x: inset.x, y: inset.y, width: inset.width, height: Math.max(0, a.y - gap - inset.y) };
     }
     if (rect.width <= 0 || rect.height <= 0) return;
     this.deps.tiling.applyFrame(sibling, rect, screen, false, 'follow', 0);
@@ -1164,6 +1218,7 @@ export class WindowSession {
     }
     this.deps.adaptation.prune();
     this.deps.adaptation.save();
+    this.pruneEmptyDynamicWorkspaces();
     this.retileAll('scan');
     this.lastReconcileMs = (GLib.get_monotonic_time() - startedUs) / 1000;
     this.scanPerfCounter += 1;

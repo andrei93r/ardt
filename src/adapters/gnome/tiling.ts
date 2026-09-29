@@ -54,6 +54,11 @@ export class Tiling {
     return this.lastAppliedAtMs;
   }
 
+  /** Mark a state change we are about to make (maximize/unmaximize/workspace). */
+  noteSelfApply(): void {
+    this.lastAppliedAtMs = Date.now();
+  }
+
   loadRatios(ratios: Record<string, number>, swapPairs: string[]): void {
     this.ratios.clear();
     for (const [key, value] of Object.entries(ratios)) this.ratios.set(key, value);
