@@ -16,10 +16,11 @@ NESTED="$ROOT/scripts/nested-shell.sh"
 AGENT_DIR="$ROOT/tests/agent"
 BASE_STATE="${ADRT_BASE_STATE:-${XDG_RUNTIME_DIR:-/tmp}/adrt}"
 FILTER="${ADRT_SCENARIOS:-}"
-DEFAULT_WORKERS=$(( $(nproc 2>/dev/null || echo 4) / 4 ))
+DEFAULT_WORKERS=$(( ( ($(nproc 2>/dev/null || echo 4) * 80) + 99 ) / 100 ))
 [ "$DEFAULT_WORKERS" -lt 1 ] && DEFAULT_WORKERS=1
-[ "$DEFAULT_WORKERS" -gt 4 ] && DEFAULT_WORKERS=4
+[ "$DEFAULT_WORKERS" -gt 16 ] && DEFAULT_WORKERS=16
 WORKERS="${ADRT_WORKERS:-$DEFAULT_WORKERS}"
+[ "$WORKERS" -lt 1 ] && WORKERS=1
 
 scenario_files() {
   local script
@@ -116,8 +117,9 @@ if [ "${#ALL[@]}" -eq 0 ]; then
   echo "agent-test: no scenarios matched '${FILTER}'" >&2
   exit 1
 fi
+[ "$WORKERS" -gt "${#ALL[@]}" ] && WORKERS=${#ALL[@]}
 echo
-echo "== running ${#ALL[@]} scenarios across $WORKERS nested Shells =="
+echo "== running ${#ALL[@]} scenarios across $WORKERS nested Shells ($(( WORKERS * 100 / ( $(nproc 2>/dev/null || echo 4) ) ))% of cores) =="
 
 export ADRT_SKIP_BUILD=1
 declare -a PIDS=() LISTS=()
@@ -202,7 +204,7 @@ fi
   echo "- Node: $(node --version 2>/dev/null || echo 'n/a')"
   echo "- GNOME Shell: $(gnome-shell --version 2>/dev/null || echo 'n/a')"
   echo "- Nested shells: $WORKERS in parallel, each \`gnome-shell --devkit --wayland --headless --no-x11 --virtual-monitor 1280x800\`"
-  echo "- Workers: ${LISTS[*]:-none}"
+  echo "- Sharding: round-robin across $WORKERS workers"
   echo
   echo "## Commands"
   echo

@@ -33,6 +33,7 @@ export interface SessionDeps {
   isPaused(): boolean;
   onStateChanged(): void;
   onStubborn(appId: string): void;
+  onClosed(id: number, rect: Rect): void;
 }
 
 interface WindowSignal {
@@ -57,7 +58,12 @@ export class WindowSession {
 
   startScan(): void {
     if (this.scanSource !== null) return;
+    this.scanIntervalMs = this.scanBaseMs();
     this.scheduleScan();
+  }
+
+  private scanBaseMs(): number {
+    return Math.max(1000, this.deps.settings.int('scan-interval', 5000));
   }
 
   stopScan(): void {
@@ -129,9 +135,11 @@ export class WindowSession {
     const tracked = this.windows.get(id);
     if (tracked === undefined) return;
     const workspaceId = tracked.surface.workspaceId;
+    const closedRect: Rect = { ...tracked.surface.frame };
     this.disconnectWindow(id);
     this.windows.delete(id);
     this.deps.host.forgetSurface(id);
+    this.deps.onClosed(id, closedRect);
     this.signatures.clear(`ws:${workspaceId}`);
     this.deps.history.log('close', { id, workspaceId });
     this.deps.onStateChanged();
@@ -581,7 +589,8 @@ export class WindowSession {
       this.idleScans = 0;
       this.idleWindows = before;
     }
-    const steps = [5000, 10000, 30000, 60000];
+    const base = this.scanBaseMs();
+    const steps = [base, base * 2, base * 6, base * 12];
     const target = steps[Math.min(this.idleScans, steps.length - 1)];
     if (target !== this.scanIntervalMs) this.scanIntervalMs = target;
   }

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Generated with AI for personal use.
+# Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+# and can maintain this code.
 # A24 Keybinding float via synthetic input (requires ydotool).
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Generated with AI for personal use.
+# Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+# and can maintain this code.
 # A27 Session unlock: the active workspace retiles once on resume.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 

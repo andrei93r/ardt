@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Generated with AI for personal use.
+# Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+# and can maintain this code.
 # A20 Gesture pinch fires the configured action (show desktop).
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 

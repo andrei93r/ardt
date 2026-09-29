@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Generated with AI for personal use.
+# Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+# and can maintain this code.
 # A11 Float toggle: the focused/app window floats above the tiling.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 

@@ -8,6 +8,7 @@
  */
 
 import Clutter from 'gi://Clutter';
+import GLib from 'gi://GLib';
 import St from 'gi://St';
 import { layoutManager } from 'resource:///org/gnome/shell/ui/main.js';
 
@@ -21,6 +22,8 @@ const PREVIEW_CLASS = 'adrt-indicator-preview';
 export class GnomeIndicator implements IndicatorBackend {
   private readonly widget: any;
   private readonly preview: any;
+  private readonly ghosts = new Set<any>();
+  private readonly closeSources = new Set<number>();
   private pulseActive = false;
 
   constructor(private readonly settings: GnomeSettings) {
@@ -65,19 +68,46 @@ export class GnomeIndicator implements IndicatorBackend {
     ghost.set_size(rect.width, rect.height);
     ghost.set_style(this.styleString());
     layoutManager.addChrome(ghost, { affectsStruts: false, trackFullscreen: false });
+    this.ghosts.add(ghost);
+
+    let sourceId = 0;
+    const cleanup = () => {
+      if (!this.ghosts.has(ghost)) return;
+      this.ghosts.delete(ghost);
+      if (sourceId !== 0) {
+        this.closeSources.delete(sourceId);
+        GLib.source_remove(sourceId);
+        sourceId = 0;
+      }
+      layoutManager.removeChrome(ghost);
+      ghost.destroy();
+    };
+
+    // A frame-clock-less compositor may never complete the ease; the timeout
+    // guarantees the ghost is destroyed either way.
+    sourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, durationMs + 50, () => {
+      sourceId = 0;
+      cleanup();
+      return GLib.SOURCE_REMOVE;
+    });
+    this.closeSources.add(sourceId);
     ghost.ease({
       opacity: 0,
       duration: durationMs,
       mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-      onComplete: () => {
-        layoutManager.removeChrome(ghost);
-        ghost.destroy();
-      },
+      onComplete: cleanup,
     });
   }
 
   destroy(): void {
     this.stopPulse();
+    for (const id of this.closeSources) GLib.source_remove(id);
+    this.closeSources.clear();
+    for (const ghost of this.ghosts) {
+      layoutManager.removeChrome(ghost);
+      ghost.destroy();
+    }
+    this.ghosts.clear();
     layoutManager.removeChrome(this.widget);
     layoutManager.removeChrome(this.preview);
     this.widget.destroy();

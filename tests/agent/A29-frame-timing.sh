@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Generated with AI for personal use.
+# Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+# and can maintain this code.
 # A29 Frame timing: a retile writes history events without errors.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 

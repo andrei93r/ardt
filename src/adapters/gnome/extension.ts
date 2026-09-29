@@ -21,6 +21,7 @@ import { SessionMachine } from '../../core/session.js';
 import type { SessionMode } from '../../core/session.js';
 import type { SplitAxis } from '../../core/tiler.js';
 import { clamp } from '../../core/types.js';
+import type { Rect } from '../../core/types.js';
 import type { GestureKind } from '../../core/gestures.js';
 import type { DbusHandlers } from '../../platform/dbus.js';
 import { AdaptationStore, dataDir, readText, writeAtomic } from './adapt.js';
@@ -127,7 +128,11 @@ export default class AdrtExtension extends Extension {
       isPaused: () => this.isPaused(),
       onStateChanged: () => this.onStateChanged(),
       onStubborn: (appId) => this.onStubborn(appId),
+      onClosed: (id, rect) => this.onWindowClosed(id, rect),
     });
+
+    const injectedFailures = this.settings.int('debug-inject-verify-failure', 0);
+    if (injectedFailures > 0) this.tiling.injectVerifyFailures(injectedFailures);
 
     this.gestures = new GestureInput(this.settings, this.history, {
       switchWorkspace: (direction) => this.switchWorkspace(direction),
@@ -315,7 +320,12 @@ export default class AdrtExtension extends Extension {
     if (!this.settings.boolean('trace-enabled', false)) return;
     this.frameSamples += 1;
     if (this.frameSamples % 60 !== 0) return;
-    this.history.log('frame_timing', { samples: this.frameSamples, budgetMs: 0 });
+    this.history.log('frame_timing', { samples: this.frameSamples, budgetMs: this.settings.int('max-frame-interval-ms', 16) });
+  }
+
+  /** §23: fade a ghost at the closing window's rect. */
+  private onWindowClosed(_id: number, rect: Rect): void {
+    this.indicator.ghostClose(rect, this.settings.int('close-animation-duration', 150));
   }
 
   // ------------------------------------------------------------- workspace

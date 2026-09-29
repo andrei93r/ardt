@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Generated with AI for personal use.
+# Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+# and can maintain this code.
 # A2 Third window: the third window moves to a new workspace, the pair is unchanged.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 

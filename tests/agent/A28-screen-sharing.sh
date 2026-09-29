@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Generated with AI for personal use.
+# Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+# and can maintain this code.
 # A28 Screen sharing: the indicator hides but tiling continues.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 

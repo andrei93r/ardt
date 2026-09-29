@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Generated with AI for personal use.
+# Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+# and can maintain this code.
 # A4 Maximized window: maximizing a window with a sibling sends it to a new workspace.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 

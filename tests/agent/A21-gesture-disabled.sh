@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Generated with AI for personal use.
+# Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+# and can maintain this code.
 # A21 Gesture disabled: SimulateGesture returns false.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
