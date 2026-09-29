@@ -15,7 +15,7 @@ open_pair
 ids=($(list_ids))
 adrt ActivateWindow "${ids[0]}" >/dev/null
 sleep 1
-YDOTOOL_SOCKET="${YDOTOOL_SOCKET:-/run/ydotoold/socket}" ydotool key 125:1 106:1 106:0 125:0
+ydotool key 125:1 106:1 106:0 125:0
 wait_settled 25
 focused="$(state_expr 'd["border"]["visible"]')"
 assert_true "focus keybinding moved the border" "$focused"
