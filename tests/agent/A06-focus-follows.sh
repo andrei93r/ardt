@@ -9,7 +9,7 @@ ensure_clean
 open_pair
 ids=($(list_ids))
 adrt ActivateWindow "${ids[0]}" >/dev/null
-sleep 2
+wait_border_visible 20 || true
 
 assert_true "border is visible after focusing a tile" "$(border_visible)"
 check_python "border rect matches the focused window" '

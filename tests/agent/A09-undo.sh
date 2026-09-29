@@ -10,9 +10,9 @@ open_pair
 ids=($(list_ids))
 before="$(window_field "${ids[0]}" rect)"
 adrt SimulateResize "${ids[0]}" "${ids[1]}" 0.25 >/dev/null
-sleep 2
+wait_settled 25
 adrt Undo >/dev/null
-sleep 2
+wait_settled 25
 after="$(window_field "${ids[0]}" rect)"
 
 if [ "$before" = "$after" ]; then pass "previous rects restored"; else fail "rects differ (before '$before', after '$after')"; fi

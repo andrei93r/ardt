@@ -16,7 +16,7 @@ ids=($(list_ids))
 adrt ActivateWindow "${ids[0]}" >/dev/null
 sleep 1
 YDOTOOL_SOCKET="${YDOTOOL_SOCKET:-/run/ydotoold/socket}" ydotool key 125:1 33:1 33:0 125:0
-sleep 2
+wait_settled 25
 assert_eq "keybinding floated the focused window" "2" "$(window_field "${ids[0]}" layer)"
 ensure_clean
 summary

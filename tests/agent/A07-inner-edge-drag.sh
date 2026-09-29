@@ -9,7 +9,7 @@ ensure_clean
 open_pair
 ids=($(list_ids))
 adrt SimulateResize "${ids[0]}" "${ids[1]}" 0.3 >/dev/null
-sleep 2
+wait_settled 25
 
 check_python "split moved to roughly 30/70" '
 import json, sys

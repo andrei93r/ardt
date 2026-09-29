@@ -10,7 +10,7 @@ for _ in $(seq 1 6); do
   spawn_window >/dev/null
   sleep 1
 done
-sleep 3
+wait_settled 25
 opened="$(count_windows)"
 if [ "$opened" -ge 2 ]; then pass "opened $opened windows"; else fail "only $opened windows opened"; fi
 

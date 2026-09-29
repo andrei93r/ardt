@@ -1665,10 +1665,16 @@ npm run test:agent      # 30 scenarios in a nested GNOME Shell
 npm run test:all        # lint + build + core + agent
 ```
 
-The agent harness (`scripts/agent-test.sh`) starts a headless nested GNOME
-Shell (`gnome-shell --devkit --wayland --headless`), installs the extension,
+The agent harness (`scripts/agent-test.sh`) starts headless nested GNOME
+Shells (`gnome-shell --devkit --wayland --headless`), installs the extension,
 drives it over D-Bus and reports a per-scenario pass/fail table. It never
 requires a human at the machine.
+
+Scenarios are sharded round-robin across isolated nested Shells, each with its
+own state directory and Wayland display. By default it uses ~80% of the
+machine's cores; set `ADRT_WORKERS=N` to override, or `ADRT_SCENARIOS='A0[12]'`
+to run a subset. Geometry assertions poll until the layout settles, so the
+suite is safe to run at high parallelism.
 
 ## Uninstall
 

@@ -8,7 +8,11 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 ensure_clean
 open_pair
 spawn_window >/dev/null
-wait_count 3 20 || true
+wait_count 3 30 || true
+wait_python 25 '
+import json, sys
+if len({w["workspace"] for w in json.load(sys.stdin)["windows"]}) < 2:
+    sys.exit(1)' || true
 
 assert_eq "three windows are tracked" "3" "$(count_windows)"
 check_python "the third window sits on its own workspace" '

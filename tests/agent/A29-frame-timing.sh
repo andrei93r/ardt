@@ -12,7 +12,7 @@ sleep 1
 open_pair
 ids=($(list_ids))
 adrt SimulateResize "${ids[0]}" "${ids[1]}" 0.4 >/dev/null
-sleep 3
+wait_settled 25
 
 file="$(history_file)"
 if [ -f "$file" ]; then

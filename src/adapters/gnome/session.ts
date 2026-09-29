@@ -91,23 +91,26 @@ export class WindowSession {
     this.deferReady(tracked, 0);
   }
 
-  private isMapped(tracked: TrackedWindow): boolean {
-    if (compat.compositorActor(tracked.win) === null) return false;
-    const frame = tracked.surface.frame;
-    return frame.width > 0 && frame.height > 0;
-  }
-
   /** §7.1: wait for the first frame plus the configured delay. */
   private deferReady(tracked: TrackedWindow, attempt: number): void {
     const delay = Math.max(50, this.deps.settings.int('gnome-animation-delay', 0));
     this.addTimeout(delay, () => this.onReady(tracked, attempt));
   }
 
+  private isMapped(tracked: TrackedWindow): boolean {
+    if (compat.compositorActor(tracked.win) === null) return false;
+    // Mutter assigns wm-class slightly after window-created; classifying before
+    // that caches the wrong app identity and window type.
+    if (tracked.surface.appId.length === 0) return false;
+    const frame = tracked.surface.frame;
+    return frame.width > 0 && frame.height > 0;
+  }
+
   private onReady(tracked: TrackedWindow, attempt: number): void {
     if (!this.windows.has(tracked.id)) return;
     tracked.refresh();
     // Not mapped yet: reschedule rather than classify a half-built window.
-    if (!this.isMapped(tracked) && attempt < 40) {
+    if (!this.isMapped(tracked) && attempt < 100) {
       this.deferReady(tracked, attempt + 1);
       return;
     }

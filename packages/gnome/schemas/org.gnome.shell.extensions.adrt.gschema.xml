@@ -262,58 +262,58 @@
       <summary>Keybinding overrides</summary>
       <description>Optional 'action=accelerator' overrides.</description>
     </key>
-    <key name="kb-undo" type="s">
-      <default>'&lt;Super&gt;z'</default>
+    <key name="kb-undo" type="as">
+      <default>['&lt;Super&gt;z']</default>
       <summary>Undo</summary>
       <description>Undo the last retile.</description>
     </key>
-    <key name="kb-focus-next" type="s">
-      <default>'&lt;Super&gt;grave'</default>
+    <key name="kb-focus-next" type="as">
+      <default>['&lt;Super&gt;grave']</default>
       <summary>Focus next</summary>
       <description>Cycle focus between tiles.</description>
     </key>
-    <key name="kb-focus-left" type="s">
-      <default>'&lt;Super&gt;Left'</default>
+    <key name="kb-focus-left" type="as">
+      <default>['&lt;Super&gt;Left']</default>
       <summary>Focus left</summary>
       <description>Focus the tile to the left.</description>
     </key>
-    <key name="kb-focus-right" type="s">
-      <default>'&lt;Super&gt;Right'</default>
+    <key name="kb-focus-right" type="as">
+      <default>['&lt;Super&gt;Right']</default>
       <summary>Focus right</summary>
       <description>Focus the tile to the right.</description>
     </key>
-    <key name="kb-focus-up" type="s">
-      <default>'&lt;Super&gt;Up'</default>
+    <key name="kb-focus-up" type="as">
+      <default>['&lt;Super&gt;Up']</default>
       <summary>Focus up</summary>
       <description>Focus the tile above.</description>
     </key>
-    <key name="kb-focus-down" type="s">
-      <default>'&lt;Super&gt;Down'</default>
+    <key name="kb-focus-down" type="as">
+      <default>['&lt;Super&gt;Down']</default>
       <summary>Focus down</summary>
       <description>Focus the tile below.</description>
     </key>
-    <key name="kb-toggle-float" type="s">
-      <default>'&lt;Super&gt;f'</default>
+    <key name="kb-toggle-float" type="as">
+      <default>['&lt;Super&gt;f']</default>
       <summary>Toggle float</summary>
       <description>Float or re-tile the focused window.</description>
     </key>
-    <key name="kb-nudge-left" type="s">
-      <default>'&lt;Super&gt;shift+h'</default>
+    <key name="kb-nudge-left" type="as">
+      <default>['&lt;Super&gt;shift+h']</default>
       <summary>Nudge split left</summary>
       <description>Move the shared edge left.</description>
     </key>
-    <key name="kb-nudge-right" type="s">
-      <default>'&lt;Super&gt;shift+l'</default>
+    <key name="kb-nudge-right" type="as">
+      <default>['&lt;Super&gt;shift+l']</default>
       <summary>Nudge split right</summary>
       <description>Move the shared edge right.</description>
     </key>
-    <key name="kb-move-left" type="s">
-      <default>'&lt;Super&gt;shift+Left'</default>
+    <key name="kb-move-left" type="as">
+      <default>['&lt;Super&gt;shift+Left']</default>
       <summary>Move tile left</summary>
       <description>Swap with the sibling or move to the left monitor.</description>
     </key>
-    <key name="kb-move-right" type="s">
-      <default>'&lt;Super&gt;shift+Right'</default>
+    <key name="kb-move-right" type="as">
+      <default>['&lt;Super&gt;shift+Right']</default>
       <summary>Move tile right</summary>
       <description>Swap with the sibling or move to the right monitor.</description>
     </key>

@@ -11,14 +11,12 @@ open_pair
 ids=($(list_ids))
 adrt InjectVerifyFailure "${ids[0]}" 6 >/dev/null
 adrt SimulateResize "${ids[0]}" "${ids[1]}" 0.35 >/dev/null
-sleep 6
 
-adaptations="$(adrt_json GetAdaptations)"
-check_python "an adaptation record exists" '
-import json, sys
-records = json.load(sys.stdin)
-print("records", len(records))
-'
+if wait_for 25 bash -c "bash '$NESTED' dbus GetAdaptations | python3 '$PARSE' | python3 -c 'import json,sys; sys.exit(0 if len(json.load(sys.stdin)) > 0 else 1)'"; then
+  pass "adaptation record created after repeated refusals"
+else
+  fail "no adaptation record was created"
+fi
 
 ensure_clean
 adrt ResetPerApp org.gnome.TextEditor >/dev/null 2>&1 || true

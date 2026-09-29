@@ -11,7 +11,7 @@ sleep 1
 
 handled="$(adrt SimulateGesture swipe-3-horizontal 300 0 3 | python3 "$PARSE")"
 assert_true "gesture was handled" "$handled"
-sleep 2
+wait_settled 25
 assert_eq "active workspace advanced to 1" "1" "$(state_expr 'd["activeWorkspace"]')"
 
 adrt ActivateWorkspace 0 >/dev/null

@@ -8,7 +8,7 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 ensure_clean
 handled="$(adrt SimulateGesture pinch-in -100 0 2 | python3 "$PARSE")"
 assert_true "pinch gesture was handled" "$handled"
-sleep 2
+wait_settled 25
 
 # show-desktop maps to the overview toggle in this adapter.
 check_python "an action was applied without error" '
