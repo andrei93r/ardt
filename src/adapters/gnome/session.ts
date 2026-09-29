@@ -64,8 +64,9 @@ export class WindowSession {
   private grabBeginSignal = 0;
   private grabEndSignal = 0;
   private dragging = false;
-  private dragOp = 0;
   private dragStartRect: Rect | null = null;
+  /** True while a compositor state makes tiling pointless (the overview). */
+  private suspended = false;
   private adjustId: number | null = null;
   private adjustSource: number | null = null;
   /** While set, plan-mismatch re-applies are suppressed (e.g. right after Undo). */
@@ -141,25 +142,29 @@ export class WindowSession {
     return this.dragging || this.adjustId !== null;
   }
 
-  private onGrabBegin(win: any, op: number): void {
-    if (!compat.isDragOp(op)) return;
-    if (win === null) return;
-    this.beginDrag(win.get_id(), op);
+  /** Suspend tiling (e.g. the overview is open); one pass runs on resume. */
+  setSuspended(suspended: boolean): void {
+    if (this.suspended === suspended) return;
+    this.suspended = suspended;
+    if (!suspended) this.scheduleReconcile('resume');
   }
 
-  private onGrabEnd(win: any, op: number): void {
-    if (!compat.isDragOp(op)) return;
+  private onGrabBegin(win: any, _op: number): void {
+    if (win === null) return;
+    this.beginDrag(win.get_id());
+  }
+
+  private onGrabEnd(win: any, _op: number): void {
     if (win === null) return;
     this.endDrag(win.get_id());
   }
 
   /** §11.3: while a drag is in flight, freeze reflow and hide the border. */
-  beginDrag(id: number, op: number = compat.MOVE_OP): boolean {
+  beginDrag(id: number): boolean {
     const tracked = this.windows.get(id);
     if (tracked === undefined) return false;
     if (this.dragging) return true;
     this.dragging = true;
-    this.dragOp = op;
     this.dragStartRect = { ...tracked.surface.frame };
     this.deps.onDragChanged(true);
     return true;
@@ -180,7 +185,7 @@ export class WindowSession {
     if (!wasDragging) return true;
 
     tracked.surface.refreshFrame();
-    this.interpretDrop(tracked, compat.isMoveOp(this.dragOp) ? 'move' : 'resize');
+    this.interpretDrop(tracked, this.adjustMode(tracked));
     this.dragStartRect = null;
     this.signatures.clearAll();
     this.scheduleRetile(tracked.surface.workspaceId, 'drag-end');
@@ -194,21 +199,30 @@ export class WindowSession {
     return peers.length === 1 ? peers[0] : null;
   }
 
-  /** §13: the window was dropped on the far side of its sibling. */
-  private applySwapIntent(tracked: TrackedWindow, sibling: TrackedWindow, screen: Screen): void {
-    const horizontal = screenArea(screen).width >= screenArea(screen).height;
+  /**
+   * §13: the window was dropped onto its sibling. The trigger is geometric:
+   * the drop's centre inside the sibling, or more than half the smaller
+   * window's area overlapping it. Crossing the centre is not required.
+   */
+  private applySwapIntent(tracked: TrackedWindow, sibling: TrackedWindow): void {
     const rect = tracked.surface.frame;
     const other = sibling.surface.frame;
-    const center = horizontal ? rect.x + rect.width / 2 : rect.y + rect.height / 2;
-    const otherCenter = horizontal ? other.x + other.width / 2 : other.y + other.height / 2;
-    const start = this.dragStartRect ?? rect;
-    const startCenter = horizontal ? start.x + start.width / 2 : start.y + start.height / 2;
-    const startSide = Math.sign(startCenter - otherCenter);
-    const nowSide = Math.sign(center - otherCenter);
-    if (startSide !== 0 && nowSide !== 0 && startSide !== nowSide) {
-      this.deps.tiling.toggleSwap(tracked.id, sibling.id);
-      this.deps.history.log('swap', { a: tracked.id, b: sibling.id, reason: 'drag' });
-    }
+    if (!this.landsOn(rect, other)) return;
+    this.deps.tiling.toggleSwap(tracked.id, sibling.id);
+    this.deps.history.log('swap', { a: tracked.id, b: sibling.id, reason: 'drag' });
+  }
+
+  /** Would a drop at `rect` land on `target`? */
+  private landsOn(rect: Rect, target: Rect): boolean {
+    const overlapX = Math.max(0, Math.min(rect.x + rect.width, target.x + target.width) - Math.max(rect.x, target.x));
+    const overlapY = Math.max(0, Math.min(rect.y + rect.height, target.y + target.height) - Math.max(rect.y, target.y));
+    const overlap = overlapX * overlapY;
+    const minArea = Math.min(rect.width * rect.height, target.width * target.height);
+    const centreX = rect.x + rect.width / 2;
+    const centreY = rect.y + rect.height / 2;
+    const centreInside =
+      centreX >= target.x && centreX <= target.x + target.width && centreY >= target.y && centreY <= target.y + target.height;
+    return centreInside || (minArea > 0 && overlap >= minArea * 0.35);
   }
 
   /** §12: a shared inner edge moved; save the resulting ratio. */
@@ -310,7 +324,13 @@ export class WindowSession {
     const workspaceId = tracked.surface.workspaceId;
     const siblings = this.tileables(workspaceId).filter((t) => t.id !== tracked.id);
     if (compat.isFullyMaximized(tracked.win) && siblings.length > 0) {
-      this.moveToNewWorkspace(tracked, true);
+      // An app that opens maximized (Nautilus, Files, …) is tiled with the
+      // siblings instead of being exiled. A user-initiated maximize still gets
+      // its own workspace via `onMaximizeSignal`.
+      this.deps.host.unmaximize(tracked.id);
+      tracked.surface.refresh();
+      this.evaluateLoneMaximize(workspaceId);
+      this.scheduleReconcile('register-unmaximize');
       return;
     }
     if (!compat.isMaximized(tracked.win) && siblings.length >= 2) {
@@ -356,7 +376,7 @@ export class WindowSession {
   }
 
   scheduleReconcile(reason: string): void {
-    if (this.deps.isPaused()) return;
+    if (this.deps.isPaused() || this.suspended) return;
     if (this.dragging || this.adjustId !== null) return;
     if (this.reconcileSource !== null) return;
     this.reconcileSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, RECONCILE_DEBOUNCE_MS, () => {
@@ -368,7 +388,7 @@ export class WindowSession {
 
   /** Check every workspace on every screen and correct anything out of place. */
   reconcileAll(reason: string): void {
-    if (this.deps.isPaused() || this.dragging || this.adjustId !== null) return;
+    if (this.deps.isPaused() || this.suspended || this.dragging || this.adjustId !== null) return;
     const count = global.workspace_manager.get_n_workspaces();
     const seen = new Set<number>();
     for (let index = 0; index < count; index++) {
@@ -408,7 +428,7 @@ export class WindowSession {
 
   /** Compute and apply the plan for every monitor of one workspace (§6). */
   retile(workspaceId: number, reason: string, animate = true): void {
-    if (this.deps.isPaused()) return;
+    if (this.deps.isPaused() || this.suspended) return;
     // §11.3: no reflow while the user is dragging.
     if (this.dragging) return;
     // §7.2: a window maximized on its own was left maximized when a sibling
@@ -780,9 +800,33 @@ export class WindowSession {
       this.suppress.delete(tracked.id);
       tracked.surface.workspaceId = workspaceId - 1;
       this.deps.history.log('new_ws', { id: tracked.id, workspaceId: workspaceId - 1, reason: 'minimize' });
-      this.removeIfEmptyDynamic(workspaceId);
+      // Follow the window and drop the workspace it just left (§7.4/§16).
+      this.activateWorkspace(workspaceId - 1);
+      this.removeVacatedWorkspace(workspaceId);
     }
     this.scheduleRetile(workspaceId, 'minimize');
+  }
+
+  /** Remove an empty workspace we emptied, activating the previous one first. */
+  private removeVacatedWorkspace(workspaceId: number): boolean {
+    const manager = global.workspace_manager;
+    if (workspaceId <= 0 || manager.get_n_workspaces() <= 1) return false;
+    const workspace = manager.get_workspace_by_index(workspaceId);
+    if (workspace === null) return false;
+    const remaining = workspace.list_windows().filter((win: any) => this.windows.has(win.get_id()));
+    if (remaining.length > 0) return false;
+    if (manager.get_active_workspace_index() === workspaceId) this.activateWorkspace(workspaceId - 1);
+
+    this.dynamicWorkspaces.delete(workspaceId);
+    const shifted = new Set<number>();
+    for (const index of this.dynamicWorkspaces) shifted.add(index > workspaceId ? index - 1 : index);
+    this.dynamicWorkspaces.clear();
+    for (const index of shifted) this.dynamicWorkspaces.add(index);
+    manager.remove_workspace(workspace, global.get_current_time());
+    this.realignWorkspaces();
+    this.signatures.clearAll();
+    this.deps.history.log('ws_removed', { workspaceId, reason: 'vacated' });
+    return true;
   }
 
   /** §7.5 close: leave an empty workspace, removing dynamic ones (§16). */
@@ -995,7 +1039,7 @@ export class WindowSession {
     const start = this.dragStartRect;
     if (start === null) return 'move';
     const rect = tracked.surface.frame;
-    return Math.abs(rect.width - start.width) > 3 || Math.abs(rect.height - start.height) > 3 ? 'resize' : 'move';
+    return Math.abs(rect.width - start.width) > 8 || Math.abs(rect.height - start.height) > 8 ? 'resize' : 'move';
   }
 
   /** Keep the sibling in step with the user's live resize. */
@@ -1038,7 +1082,7 @@ export class WindowSession {
     const sibling = this.pairSibling(tracked);
     const screen = this.screenFor(tracked.surface.screenId);
     if (sibling === null || screen === null) return;
-    if (mode === 'move') this.applySwapIntent(tracked, sibling, screen);
+    if (mode === 'move') this.applySwapIntent(tracked, sibling);
     else this.applyResizeIntent(tracked, sibling, screen);
   }
 

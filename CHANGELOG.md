@@ -50,6 +50,17 @@ code changes, MINOR for features, PATCH for fixes.
   not match its plan. Window creation/destruction, mapping, focus, monitor
   changes, workspace add/remove/count/switch and screen/work-area changes all
   funnel into the same debounced reconcile pass.
+- Dragging a window swaps with its sibling when it lands on the sibling's area
+  (its centre inside, or ≥35% overlap), not only when it crosses the sibling's
+  centre. Move-vs-resize is inferred from the geometry, so it no longer depends
+  on which grab-op code the compositor reports.
+- An app that opens maximized (e.g. Files/Nautilus) is tiled with its siblings
+  instead of being exiled; only a user-initiated maximize gets its own
+  workspace.
+- Minimizing a lone window on a later workspace moves it back, switches the
+  view to follow it, and removes the workspace it left.
+- Tiling is suspended while the overview is open and resumed with a single
+  pass on close, which removes the reconcile churn that could stall the Shell.
 - Keybinding defaults no longer collide with GNOME's own bindings: focus is
   `Super+Alt+{h,j,k,l}`, swap is `Super+Shift+{h,l}`, nudge split is
   `Super+Ctrl+{h,l}`. The previous `Super+Shift+Left/Right` was shadowed by

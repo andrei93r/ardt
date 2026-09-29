@@ -19,8 +19,8 @@ by={w["id"]:w["rect"] for w in d["windows"]}
 b=by[int("'"$b"'")]
 print(area["x"],area["y"],area["width"],area["height"],b["x"],b["y"],b["width"],b["height"])
 ')"
-# Drop a on the far right, i.e. past b's centre, keeping b's size.
-NX=$((AX + AW - BW))
+# Drop a onto b's area (its centre lands inside b) without crossing b's centre.
+NX=$((BX - 4))
 
 adrt BeginDrag "$a" >/dev/null
 adrt MoveWindow "$a" "$NX" "$AY" "$BW" "$BH" >/dev/null

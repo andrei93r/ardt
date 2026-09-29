@@ -10,7 +10,7 @@ scenarios in a nested GNOME Shell, and manual scenarios that need hardware
 npm run lint          # eslint src tests
 npm run build         # tsc
 npm run test:core     # Vitest, plain Node
-npm run test:agent    # 33 scenarios in a nested GNOME Shell
+npm run test:agent    # 35 scenarios in a nested GNOME Shell
 npm run test:all      # all of the above
 ```
 
@@ -67,6 +67,8 @@ those shortcuts.
 | A31 | Swap (keyboard)  | `MoveToward('right')`                     |
 | A32 | Swap (drag)      | `BeginDrag`, `MoveWindow`, `EndDrag`      |
 | A33 | Reconcile all    | move a window, assert every workspace coherent |
+| A34 | App opens maximized | `SpawnWindow('nautilus')`, assert it tiles with the sibling |
+| A35 | Minimize         | `MinimizeWindow`, assert return + empty workspace removed |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

@@ -57,9 +57,9 @@ interface ExtraHandlers {
   SpawnWindow(command: string): number;
   CloseWindow(id: number): boolean;
   BeginDrag(id: number): boolean;
-  BeginResize(id: number): boolean;
   EndDrag(id: number): boolean;
   MoveWindow(id: number, x: number, y: number, width: number, height: number): boolean;
+  MinimizeWindow(id: number): boolean;
   MaximizeWindow(id: number): boolean;
   UnmaximizeWindow(id: number): boolean;
   ResetLayoutState(): boolean;
@@ -375,6 +375,8 @@ export default class AdrtExtension extends Extension {
   private onOverviewChanged(visible: boolean): void {
     if (visible) this.border.suppress('overview');
     else this.border.unsuppress('overview');
+    // Tiling during the overview cannot converge and just burns CPU.
+    this.session.setSuspended(visible);
     this.syncIndicator();
   }
 
@@ -639,9 +641,13 @@ export default class AdrtExtension extends Extension {
       SpawnWindow: (command) => this.spawnWindow(command),
       CloseWindow: (id) => this.closeWindow(id),
       BeginDrag: (id) => this.session.beginDrag(id),
-      BeginResize: (id) => this.session.beginDrag(id, compat.RESIZE_OP),
       EndDrag: (id) => this.session.endDrag(id),
       MoveWindow: (id, x, y, width, height) => this.moveWindow(id, x, y, width, height),
+      MinimizeWindow: (id) => {
+        if (!this.session.windows.has(id)) return false;
+        this.host.minimize(id);
+        return true;
+      },
       MaximizeWindow: (id) => {
         if (!this.session.windows.has(id)) return false;
         this.host.maximize(id);

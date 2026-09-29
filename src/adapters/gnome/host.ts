@@ -158,6 +158,12 @@ export class GnomeHost implements PlatformHost {
     win.unmaximize();
   }
 
+  minimize(id: number): void {
+    const win = this.windowById(id);
+    if (win === null) return;
+    win.minimize();
+  }
+
   maximize(id: number): void {
     const win = this.windowById(id);
     if (win === null) return;

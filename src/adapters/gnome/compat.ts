@@ -89,17 +89,6 @@ export function unpackVariant(value: any): any {
 }
 
 export const MOVE_OP: number = Meta.GrabOp.MOVING_UNCONSTRAINED;
-export const RESIZE_OP: number = Meta.GrabOp.RESIZING_E;
-
-/** True for a window move/resize grab (a user drag), false for other grabs. */
-export function isDragOp(op: number): boolean {
-  return op !== Meta.GrabOp.NONE && op !== Meta.GrabOp.WINDOW_BASE;
-}
-
-/** True when the grab is moving a window rather than resizing it. */
-export function isMoveOp(op: number): boolean {
-  return op === Meta.GrabOp.MOVING_UNCONSTRAINED || op === Meta.GrabOp.KEYBOARD_MOVING;
-}
 
 /** Stage-space position of an actor, including any moving parent (workspace). */
 export function actorStagePosition(actor: any): [number, number] {

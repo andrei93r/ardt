@@ -49,12 +49,12 @@ const INTERFACE_XML = `
     <method name="SpawnWindow"><arg type="s" direction="in"/><arg type="i" direction="out"/></method>
     <method name="CloseWindow"><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
     <method name="BeginDrag"><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
-    <method name="BeginResize"><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
     <method name="EndDrag"><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
     <method name="MoveWindow">
       <arg type="u" direction="in"/><arg type="i" direction="in"/><arg type="i" direction="in"/>
       <arg type="i" direction="in"/><arg type="i" direction="in"/><arg type="b" direction="out"/>
     </method>
+    <method name="MinimizeWindow"><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
 
     <!-- Test triggers used by the autonomous agent harness (§40.4). -->
     <method name="ActivateWindow"><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
