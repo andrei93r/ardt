@@ -44,6 +44,9 @@ interface WindowSignal {
   id: number;
 }
 
+/** Quiet period after the last user frame change before a drop is interpreted. */
+const ADJUST_SETTLE_MS = 180;
+
 export class WindowSession {
   readonly windows = new Map<number, TrackedWindow>();
   private readonly signals = new Map<number, WindowSignal[]>();
@@ -60,6 +63,8 @@ export class WindowSession {
   private dragging = false;
   private dragOp = 0;
   private dragStartRect: Rect | null = null;
+  private adjustId: number | null = null;
+  private adjustSource: number | null = null;
   private scanPerfCounter = 0;
   private lastReconcileMs = 0;
   private lastApplyMs = 0;
@@ -111,7 +116,7 @@ export class WindowSession {
   }
 
   get isDragging(): boolean {
-    return this.dragging;
+    return this.dragging || this.adjustId !== null;
   }
 
   private onGrabBegin(win: any, op: number): void {
@@ -153,12 +158,7 @@ export class WindowSession {
     if (!wasDragging) return true;
 
     tracked.surface.refreshFrame();
-    const sibling = this.pairSibling(tracked);
-    const screen = this.screenFor(tracked.surface.screenId);
-    if (sibling !== null && screen !== null) {
-      if (compat.isMoveOp(this.dragOp)) this.applySwapIntent(tracked, sibling, screen);
-      else this.applyResizeIntent(tracked, sibling, screen);
-    }
+    this.interpretDrop(tracked, compat.isMoveOp(this.dragOp) ? 'move' : 'resize');
     this.dragStartRect = null;
     this.signatures.clearAll();
     this.scheduleRetile(tracked.surface.workspaceId, 'drag-end');
@@ -549,6 +549,10 @@ export class WindowSession {
     }
     for (const id of this.timeoutSources) GLib.source_remove(id);
     this.timeoutSources.clear();
+    if (this.adjustSource !== null) {
+      GLib.source_remove(this.adjustSource);
+      this.adjustSource = null;
+    }
     this.scheduler.clearAll();
     this.windows.clear();
   }
@@ -823,11 +827,26 @@ export class WindowSession {
 
   private onFrameSignal(tracked: TrackedWindow): void {
     tracked.surface.refreshFrame();
-    // While the user is dragging, follow the frame but do not reflow (§11.3).
+
+    // A server-side grab is in flight (Super+drag): follow, do not reflow.
     if (this.dragging) {
       this.deps.onStateChanged();
       return;
     }
+    // A change we caused ourselves while following the user's resize.
+    if (this.adjustId !== null && this.adjustId !== tracked.id) {
+      this.deps.onStateChanged();
+      return;
+    }
+    // The user is adjusting this window. Client-side/CSD resizes never emit a
+    // grab op, so this is the only signal we get.
+    if (this.adjustId === tracked.id) {
+      if (this.adjustMode(tracked) === 'resize') this.followSibling(tracked);
+      this.armAdjustEnd(tracked);
+      this.deps.onStateChanged();
+      return;
+    }
+
     // Size hints usually arrive just after the first frame. Until they do, the
     // window reports max 0 and a plan built against it will be refused. This is
     // the only path that re-queries Mutter for hints (§24 item 2).
@@ -838,8 +857,114 @@ export class WindowSession {
         this.scheduleRetile(tracked.surface.workspaceId, 'size-hints');
       }
     }
+
+    if (this.isUserChange(tracked)) {
+      this.beginUserAdjust(tracked);
+      if (this.adjustMode(tracked) === 'resize') this.followSibling(tracked);
+      this.armAdjustEnd(tracked);
+      this.deps.onStateChanged();
+      return;
+    }
+
     this.deps.onStateChanged();
     this.scheduleRetile(tracked.surface.workspaceId, 'frame');
+  }
+
+  /** A geometry change that did not come from us is the user moving a window. */
+  private isUserChange(tracked: TrackedWindow): boolean {
+    const target = tracked.lastTarget;
+    if (target === null) return false;
+    if (this.deps.tiling.activeAnimations > 0) return false;
+    if (Date.now() - this.deps.tiling.lastApplyAtMs < 250) return false;
+    const frame = tracked.surface.frame;
+    return (
+      Math.abs(frame.x - target.x) > 3 ||
+      Math.abs(frame.y - target.y) > 3 ||
+      Math.abs(frame.width - target.width) > 3 ||
+      Math.abs(frame.height - target.height) > 3
+    );
+  }
+
+  private beginUserAdjust(tracked: TrackedWindow): void {
+    this.adjustId = tracked.id;
+    // Anchor to the last geometry we planned: `surface.frame` is already the
+    // user's new rect by the time this signal arrives.
+    this.dragStartRect = { ...(tracked.lastTarget ?? tracked.surface.frame) };
+    this.deps.onDragChanged(true);
+  }
+
+  private armAdjustEnd(tracked: TrackedWindow): void {
+    if (this.adjustSource !== null) {
+      GLib.source_remove(this.adjustSource);
+      this.adjustSource = null;
+    }
+    this.adjustSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ADJUST_SETTLE_MS, () => {
+      this.adjustSource = null;
+      this.endUserAdjust(tracked);
+      return GLib.SOURCE_REMOVE;
+    });
+  }
+
+  private endUserAdjust(tracked: TrackedWindow): void {
+    if (this.adjustId !== tracked.id) return;
+    const mode = this.adjustMode(tracked);
+    this.adjustId = null;
+    this.deps.onDragChanged(false);
+    this.interpretDrop(tracked, mode);
+    this.dragStartRect = null;
+    this.signatures.clearAll();
+    this.scheduleRetile(tracked.surface.workspaceId, 'user-adjust');
+  }
+
+  private adjustMode(tracked: TrackedWindow): 'move' | 'resize' {
+    const start = this.dragStartRect;
+    if (start === null) return 'move';
+    const rect = tracked.surface.frame;
+    return Math.abs(rect.width - start.width) > 3 || Math.abs(rect.height - start.height) > 3 ? 'resize' : 'move';
+  }
+
+  /** Keep the sibling in step with the user's live resize. */
+  private followSibling(tracked: TrackedWindow): void {
+    const sibling = this.pairSibling(tracked);
+    const screen = this.screenFor(tracked.surface.screenId);
+    if (sibling === null || screen === null) return;
+    const area = screenArea(screen);
+    const horizontal = area.width >= area.height;
+    const gap = this.effectiveGap(area);
+    const a = tracked.surface.frame;
+    const b = sibling.surface.frame;
+    let rect: Rect;
+    if (horizontal) {
+      if (a.x <= b.x) {
+        const x = a.x + a.width + gap;
+        rect = { x, y: area.y, width: Math.max(0, area.x + area.width - x), height: area.height };
+      } else {
+        rect = { x: area.x, y: area.y, width: Math.max(0, a.x - gap - area.x), height: area.height };
+      }
+    } else if (a.y <= b.y) {
+      const y = a.y + a.height + gap;
+      rect = { x: area.x, y, width: area.width, height: Math.max(0, area.y + area.height - y) };
+    } else {
+      rect = { x: area.x, y: area.y, width: area.width, height: Math.max(0, a.y - gap - area.y) };
+    }
+    if (rect.width <= 0 || rect.height <= 0) return;
+    this.deps.tiling.applyFrame(sibling, rect, screen, false, 'follow', 0);
+  }
+
+  private effectiveGap(area: Rect): number {
+    const base = this.deps.settings.int('gaps-base', 8);
+    const override = area.height > area.width
+      ? this.deps.settings.int('gaps-portrait', -1)
+      : this.deps.settings.int('gaps-landscape', -1);
+    return override >= 0 ? override : base;
+  }
+
+  private interpretDrop(tracked: TrackedWindow, mode: 'move' | 'resize'): void {
+    const sibling = this.pairSibling(tracked);
+    const screen = this.screenFor(tracked.surface.screenId);
+    if (sibling === null || screen === null) return;
+    if (mode === 'move') this.applySwapIntent(tracked, sibling, screen);
+    else this.applyResizeIntent(tracked, sibling, screen);
   }
 
   private onMaximizeSignal(tracked: TrackedWindow): void {

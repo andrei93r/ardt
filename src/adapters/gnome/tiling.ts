@@ -45,8 +45,14 @@ export class Tiling {
   private readonly sources = new Set<number>();
   private destroyed = false;
   private verifyFailuresRemaining = 0;
+  private lastAppliedAtMs = 0;
 
   constructor(private readonly deps: TilingDeps) {}
+
+  /** When the tiler last moved a window, so callers can ignore their own frames. */
+  get lastApplyAtMs(): number {
+    return this.lastAppliedAtMs;
+  }
 
   loadRatios(ratios: Record<string, number>, swapPairs: string[]): void {
     this.ratios.clear();
@@ -192,6 +198,7 @@ export class Tiling {
 
   private performApply(tracked: TrackedWindow, target: Rect, animate: boolean, reason: string, attempt: number): void {
     if (this.destroyed || this.deps.isPaused()) return;
+    this.lastAppliedAtMs = Date.now();
     const actor = compat.compositorActor(tracked.win);
     const animationsEnabled = animate && actor !== null && this.animationsAllowed(tracked);
 

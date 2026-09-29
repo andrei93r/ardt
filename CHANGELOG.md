@@ -38,6 +38,9 @@ code changes, MINOR for features, PATCH for fixes.
 - Dragging a window freezes reflow and hides the border; releasing interprets
   the gesture: an inner-edge resize saves the split ratio (§12), dragging a
   window past its sibling swaps the pair (§13), and anything else reflows.
+- Resizing a tile is detected from frame changes, not just compositor grabs,
+  so client-side (CSD) resizes work: the sibling follows live and the ratio
+  persists instead of snapping back.
 - The border hides during any workspace transition — keyboard or touchpad —
   by watching the focused actor's stage-space position (so a sliding workspace
   parent is detected), returning once it settles.
