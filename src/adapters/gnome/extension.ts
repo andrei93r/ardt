@@ -41,6 +41,9 @@ const EXTENSION_VERSION = 1;
  * stable samples end a transition. */
 const MOTION_POLL_MS = 50;
 const MOTION_STABLE_SAMPLES = 3;
+/** §35: every N motion ticks (~500 ms) re-run the tiling plan as a safety net,
+ * so a layout that drifted without a usable signal heals on its own. */
+const MOTION_RETILE_TICKS = 10;
 /** Ignore movement for this long after we applied a plan ourselves. */
 const MOTION_SELF_MS = 200;
 
@@ -64,6 +67,7 @@ interface ExtraHandlers {
   UnmaximizeWindow(id: number): boolean;
   ResetLayoutState(): boolean;
   SimulateOverview(visible: boolean): boolean;
+  SimulateWorkspaceSwitch(holdMs: number): boolean;
 }
 
 type Handlers = DbusHandlers & ExtraHandlers;
@@ -86,6 +90,7 @@ export default class AdrtExtension extends Extension {
 
   private sessionModeId = 0;
   private overviewSignals: number[] = [];
+  private swipeSignalIds: number[] = [];
   private workspaceActorSignals: { actor: any; id: number }[] = [];
   private layoutSignals: number[] = [];
   private motionSource: number | null = null;
@@ -93,6 +98,9 @@ export default class AdrtExtension extends Extension {
   private motionLastX = Number.NaN;
   private motionLastY = Number.NaN;
   private motionStable = 0;
+  private motionTicks = 0;
+  private motionRetiles = 0;
+  private motionSkip = '';
   private wsSwitchEvents = 0;
   private motionSuppressions = 0;
   private settingWatchers: (() => void)[] = [];
@@ -182,6 +190,7 @@ export default class AdrtExtension extends Extension {
     this.overviewSignals.push(overview.connect('showing', () => this.onOverviewChanged(true)));
     this.overviewSignals.push(overview.connect('hidden', () => this.onOverviewChanged(false)));
     this.refreshWorkspaceActors();
+    this.connectWorkspaceAnimation();
     this.layoutSignals.push(global.workspace_manager.connect('workspace-added', () => this.refreshWorkspaceActors()));
     this.layoutSignals.push(global.workspace_manager.connect('workspace-removed', () => this.refreshWorkspaceActors()));
     this.applySessionMode(this.currentMode(), true);
@@ -204,6 +213,7 @@ export default class AdrtExtension extends Extension {
     this.overviewSignals = [];
     for (const entry of this.workspaceActorSignals) entry.actor.disconnect(entry.id);
     this.workspaceActorSignals = [];
+    this.disconnectWorkspaceAnimation();
     for (const id of this.layoutSignals) global.workspace_manager.disconnect(id);
     this.layoutSignals = [];
     this.unregisterKeybindings();
@@ -285,10 +295,51 @@ export default class AdrtExtension extends Extension {
 
   private onWorkspaceSwitched(payload: { from: number; to: number }): void {
     this.wsSwitchEvents += 1;
-    this.border.suppress('workspace-switch');
-    this.startMotionWatch();
-    this.syncIndicator();
+    this.suppressForWorkspaceSwitch();
     this.history.log('ws_switch_empty', { from: payload.from, to: payload.to, reason: 'switch' });
+  }
+
+  /**
+   * §23.2: GNOME's WorkspaceAnimationController slides clones of the windows
+   * while a switch runs (keyboard animation or touchpad gesture), so the real
+   * window actors — and therefore the position watcher — never move. The
+   * controller emits no signal, but its swipe tracker does; attach to it so the
+   * border hides the instant a gesture starts.
+   */
+  private connectWorkspaceAnimation(): void {
+    const tracker = (wm as any)?._workspaceAnimation?._swipeTracker;
+    if (tracker === null || tracker === undefined || typeof tracker.connect !== 'function') return;
+    this.swipeSignalIds.push(tracker.connect('begin', () => this.onWorkspaceAnimation()));
+    this.swipeSignalIds.push(tracker.connect('update', () => this.onWorkspaceAnimation()));
+  }
+
+  private disconnectWorkspaceAnimation(): void {
+    const tracker = (wm as any)?._workspaceAnimation?._swipeTracker;
+    for (const id of this.swipeSignalIds) {
+      if (tracker !== null && tracker !== undefined) tracker.disconnect(id);
+    }
+    this.swipeSignalIds = [];
+  }
+
+  private onWorkspaceAnimation(): void {
+    if (this.isPaused()) return;
+    this.suppressForWorkspaceSwitch();
+  }
+
+  /** True while GNOME is sliding workspaces (animation or live gesture). */
+  private workspaceAnimationActive(): boolean {
+    const controller = (wm as any)?._workspaceAnimation;
+    return controller !== null && controller !== undefined && controller._switchData != null;
+  }
+
+  /** Hide the border for the duration of a workspace switch. */
+  private suppressForWorkspaceSwitch(): void {
+    // 'update' fires every frame during a gesture; keep this cheap.
+    this.startMotionWatch();
+    if (this.border.isSuppressed('workspace-switch')) return;
+    this.motionSuppressions += 1;
+    this.border.suppress('workspace-switch');
+    this.syncIndicator();
   }
 
   /** §23.1: the user is dragging; hide the border and stop reflowing. */
@@ -314,6 +365,7 @@ export default class AdrtExtension extends Extension {
     this.motionLastX = Number.NaN;
     this.motionLastY = Number.NaN;
     this.motionStable = 0;
+    this.motionTicks = 0;
     this.motionSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, MOTION_POLL_MS, () => this.onMotionTick());
   }
 
@@ -343,11 +395,25 @@ export default class AdrtExtension extends Extension {
 
     // Stage-space, so a sliding workspace (moving parent actor) is detected.
     const [x, y] = compat.actorStagePosition(actor);
+    // A running workspace animation slides clones, not the real actor, so the
+    // position check below cannot see it. Keep the border hidden until the
+    // controller tears the animation down.
+    if (this.workspaceAnimationActive()) {
+      this.motionLastX = x;
+      this.motionLastY = y;
+      this.motionStable = 0;
+      this.motionTicks = 0;
+      this.suppressForWorkspaceSwitch();
+      return GLib.SOURCE_CONTINUE;
+    }
     // Movement we caused ourselves is not a transition.
     if (this.animator.activeCount > 0 || Date.now() - this.session.perf().lastApplyAtMs < MOTION_SELF_MS) {
       this.motionLastX = x;
       this.motionLastY = y;
       this.motionStable = 0;
+      // A tile just happened: restart the periodic-pass countdown so we never
+      // re-run the tiling logic right on top of a fresh apply.
+      this.motionTicks = 0;
       return GLib.SOURCE_CONTINUE;
     }
     if (Number.isNaN(this.motionLastX)) {
@@ -361,11 +427,7 @@ export default class AdrtExtension extends Extension {
     this.motionLastY = y;
     if (moved) {
       this.motionStable = 0;
-      if (!this.border.isSuppressed('workspace-switch')) {
-        this.border.suppress('workspace-switch');
-        this.motionSuppressions += 1;
-        this.syncIndicator();
-      }
+      this.suppressForWorkspaceSwitch();
     } else {
       this.motionStable += 1;
       if (this.motionStable >= MOTION_STABLE_SAMPLES && this.border.isSuppressed('workspace-switch')) {
@@ -373,7 +435,41 @@ export default class AdrtExtension extends Extension {
         this.syncIndicator();
       }
     }
+    this.motionTicks += 1;
+    if (this.motionTicks >= MOTION_RETILE_TICKS) {
+      this.motionTicks = 0;
+      this.periodicRetile();
+    }
     return GLib.SOURCE_CONTINUE;
+  }
+
+  /**
+   * §35: re-run the tiling plan for the focused workspace on a slow cadence.
+   * Signals cover most changes; this is the backstop for a layout that drifted
+   * without one. `retile` is idempotent — when the windows already match the
+   * plan it applies nothing.
+   */
+  private periodicRetile(): void {
+    if (this.isPaused()) {
+      this.motionSkip = 'paused';
+      return;
+    }
+    if (this.session.isDragging) {
+      this.motionSkip = 'dragging';
+      return;
+    }
+    if (this.workspaceAnimationActive()) {
+      this.motionSkip = 'switch';
+      return;
+    }
+    const focused = this.session.focused();
+    if (focused === null || !this.session.classify(focused).tileable) {
+      this.motionSkip = `focused=${focused === null ? 'null' : focused.id}`;
+      return;
+    }
+    this.motionSkip = '';
+    this.motionRetiles += 1;
+    this.session.retile(focused.surface.workspaceId, 'motion-tick');
   }
 
   private syncIndicator(): void {
@@ -404,10 +500,7 @@ export default class AdrtExtension extends Extension {
 
   private onWorkspaceActorMoved(): void {
     if (this.isPaused()) return;
-    this.motionSuppressions += 1;
-    this.border.suppress('workspace-switch');
-    this.startMotionWatch();
-    this.syncIndicator();
+    this.suppressForWorkspaceSwitch();
   }
 
   /** §23: chrome must not show over the overview or the app grid. */
@@ -658,6 +751,7 @@ export default class AdrtExtension extends Extension {
         this.onOverviewChanged(visible);
         return true;
       },
+      SimulateWorkspaceSwitch: (holdMs) => this.simulateWorkspaceSwitch(holdMs),
       ActivateWindow: (id) => {
         this.session.focus(id);
         return true;
@@ -787,6 +881,9 @@ export default class AdrtExtension extends Extension {
       workspaceActors: this.workspaceActorSignals.length / 2,
       wsSwitchEvents: this.wsSwitchEvents,
       motionSuppressions: this.motionSuppressions,
+      motionRetiles: this.motionRetiles,
+      motionTicks: this.motionTicks,
+      motionSkip: this.motionSkip,
       adaptations: this.adaptation.size,
       perf: this.session.perf(),
       bounds: this.session.memoryBounds(),
@@ -944,6 +1041,27 @@ export default class AdrtExtension extends Extension {
   private simulateSessionMode(mode: string): boolean {
     if (mode !== 'user' && mode !== 'unlock-dialog' && mode !== 'screen-sharing') return false;
     this.applySessionMode(mode);
+    return true;
+  }
+
+  /**
+   * Test hook: hold GNOME's workspace-switch state open for `holdMs`. This is
+   * the exact path a touchpad gesture takes at its start
+   * (`WorkspaceAnimationController._switchWorkspaceBegin`), so the border must
+   * hide for the whole time, then come back.
+   */
+  private simulateWorkspaceSwitch(holdMs: number): boolean {
+    const controller = (wm as any)?._workspaceAnimation;
+    if (controller === null || controller === undefined || typeof controller._prepareWorkspaceSwitch !== 'function') return false;
+    const hold = holdMs > 0 ? Math.min(holdMs, 5000) : 600;
+    controller._prepareWorkspaceSwitch();
+    GLib.timeout_add(GLib.PRIORITY_DEFAULT, hold, () => {
+      const current = (wm as any)?._workspaceAnimation;
+      if (current !== null && current !== undefined && current._switchData != null) {
+        current._finishWorkspaceSwitch(current._switchData);
+      }
+      return GLib.SOURCE_REMOVE;
+    });
     return true;
   }
 }

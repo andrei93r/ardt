@@ -83,9 +83,17 @@ code changes, MINOR for features, PATCH for fixes.
 - `DumpState` reports `workspaceActors`, `wsSwitchEvents` and
   `motionSuppressions` to diagnose border suppression on real hardware.- Tiling is suspended while the overview is open and resumed with a single
   pass on close, which removes the reconcile churn that could stall the Shell.
-- The border's workspace-switch suppression is driven by the workspace actors'
-  positions (they move only during a switch), so it is focus-independent and
-  fires for touchpad gestures as well as keyboard switches.
+- The border's workspace-switch suppression is driven by GNOME's
+  `WorkspaceAnimationController`: the swipe tracker's `begin`/`update` hide it
+  the instant a touchpad gesture starts, and the motion watcher polls
+  `_switchData` for keyboard animations. GNOME slides window *clones* during a
+  switch, so the old position-based watcher never saw a gesture and left the
+  active-window border stuck on screen for the whole swipe. Scenario A47.
+- The tiling plan is re-run on a slow cadence — every ~10 samples of the
+  focused-window watcher, about 500 ms — as a backstop for a layout that
+  drifted without a usable signal. The countdown restarts after any tile has
+  landed, so the periodic pass never stacks on top of a fresh apply. A
+  `motionRetiles` counter is exposed in `DumpState`. Scenario A48.
 - The close ghost only animates for windows that were actually tiled, and
   override-redirect surfaces (popups, context menus, tooltips) are no longer
   tracked at all, so closing a right-click menu no longer flashes a border.

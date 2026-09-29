@@ -93,11 +93,14 @@ those shortcuts.
 | A43 | Close last window | switch away and remove the workspace |
 | A44 | Focus direction fallback | no window that way focuses the other side |
 | A45 | Workspace model | maximize → right, finish → left, reap |
+| A46 | Finish focus target | nearest left workspace with windows, else right |
+| A47 | Border vs workspace switch | hidden for the whole gesture/animation, returns after |
+| A48 | Periodic retile | plan re-runs on its own cadence; drift heals |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,
 `UnmaximizeWindow`, `ResetLayoutState`, `ActivateWindow`, `ActivateWorkspace`,
-`FocusDirection`, `FocusCycle`.
+`FocusDirection`, `FocusCycle`, `SimulateWorkspaceSwitch`.
 
 ## Manual scenarios (§31.3)
 

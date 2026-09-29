@@ -912,17 +912,39 @@ export class WindowSession {
     if (remaining.length > 0) return;
 
     if (manager.get_active_workspace_index() === workspaceId) {
-      // "Done" takes you back to the left; only the leftmost workspace falls
-      // forward to the right.
-      const previous = workspaceId - 1;
-      const next = workspaceId + 1 < manager.get_n_workspaces() ? workspaceId + 1 : -1;
-      const target = previous >= 0 ? previous : next;
-      if (target >= 0) {
+      // "Done" takes you back to the left — the nearest left workspace that
+      // still exists and holds windows. If the left one was removed (or is
+      // empty), fall forward to the right instead.
+      let target = this.nearestWorkspaceWithWindows(workspaceId, -1);
+      if (target < 0) target = this.nearestWorkspaceWithWindows(workspaceId, 1);
+      if (target < 0) target = this.nearestExistingWorkspace(workspaceId, -1);
+      if (target < 0) target = this.nearestExistingWorkspace(workspaceId, 1);
+      if (target >= 0 && target !== workspaceId) {
         this.deps.history.log('ws_switch_empty', { from: workspaceId, to: target });
         this.activateWorkspace(target);
       }
     }
     this.schedulePrune();
+  }
+
+  /** Nearest workspace in `step` direction that holds one of our windows. */
+  private nearestWorkspaceWithWindows(from: number, step: number): number {
+    const manager = global.workspace_manager;
+    for (let index = from + step; index >= 0 && index < manager.get_n_workspaces(); index += step) {
+      const workspace = manager.get_workspace_by_index(index);
+      if (workspace === null) continue;
+      if (workspace.list_windows().some((win: any) => this.windows.has(win.get_id()))) return index;
+    }
+    return -1;
+  }
+
+  /** Nearest workspace in `step` direction that exists at all. */
+  private nearestExistingWorkspace(from: number, step: number): number {
+    const manager = global.workspace_manager;
+    for (let index = from + step; index >= 0 && index < manager.get_n_workspaces(); index += step) {
+      if (manager.get_workspace_by_index(index) !== null) return index;
+    }
+    return -1;
   }
 
   /** §14 move to an adjacent monitor when there is no sibling in that direction. */

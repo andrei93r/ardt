@@ -208,6 +208,14 @@ open_pair() {
   spawn_window >/dev/null
   wait_count 2 15 || true
   wait_pair_tiled 25 || true
+  # Both windows must actually share a workspace. A spawn race can otherwise
+  # leave one on its own workspace (maximized), which is "non-overlapping" but
+  # not a pair, and makes tiling assertions flaky under load.
+  wait_python 15 '
+import json, sys
+d = json.load(sys.stdin)
+ws = [w["workspace"] for w in d["windows"] if w["tileable"]]
+sys.exit(0 if len(ws) >= 2 and len(set(ws)) == 1 else 1)' || true
 }
 
 ext_dir() {
