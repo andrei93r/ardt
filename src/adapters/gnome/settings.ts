@@ -1,0 +1,105 @@
+// Generated with AI for personal use.
+// Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+// and can maintain this code.
+
+/**
+ * GSettings bridge (§19.1). Implements `SettingsStore` and exposes typed
+ * accessors plus the config builders the core engines consume.
+ */
+
+import GLib from 'gi://GLib';
+
+import type { ClassifyConfig } from '../../core/classify.js';
+import { parseRulesJson } from '../../core/rules.js';
+import type { Rule } from '../../core/rules.js';
+import type { TilerConfig } from '../../core/tiler.js';
+import type { MinSizePolicy } from '../../core/tiler.js';
+import type { SettingValue, SettingsStore } from '../../platform/settings.js';
+
+function readVariant(settings: any, key: string): SettingValue | undefined {
+  const value = settings.get_value(key);
+  if (value === null) return undefined;
+  const unpacked = value.unpack();
+  if (typeof unpacked === 'number' || typeof unpacked === 'boolean' || typeof unpacked === 'string') return unpacked;
+  if (Array.isArray(unpacked)) return unpacked.map((v) => String(v));
+  return undefined;
+}
+
+function writeVariant(settings: any, key: string, value: unknown): boolean {
+  const typeString = settings.get_default_value(key).get_type_string();
+  settings.set_value(key, new GLib.Variant(typeString, value));
+  return true;
+}
+
+export class GnomeSettings implements SettingsStore {
+  constructor(private readonly settings: any) {}
+
+  keys(): string[] {
+    return this.settings.list_keys();
+  }
+
+  read(key: string): SettingValue | undefined {
+    return readVariant(this.settings, key);
+  }
+
+  write(key: string, value: unknown): boolean {
+    return writeVariant(this.settings, key, value);
+  }
+
+  onChanged(key: string, cb: (value: SettingValue) => void): () => void {
+    const id = this.settings.connect(`changed::${key}`, () => {
+      const value = this.read(key);
+      if (value !== undefined) cb(value);
+    });
+    return () => this.settings.disconnect(id);
+  }
+
+  int(key: string, fallback: number): number {
+    const value = this.read(key);
+    return typeof value === 'number' ? value : fallback;
+  }
+
+  boolean(key: string, fallback: boolean): boolean {
+    const value = this.read(key);
+    return typeof value === 'boolean' ? value : fallback;
+  }
+
+  string(key: string, fallback: string): string {
+    const value = this.read(key);
+    return typeof value === 'string' ? value : fallback;
+  }
+
+  strv(key: string): string[] {
+    const value = this.read(key);
+    return Array.isArray(value) ? value : [];
+  }
+
+  rules(): { rules: Rule[]; errors: string[] } {
+    return parseRulesJson(this.string('rules-json', '[]'));
+  }
+
+  classifierConfig(): ClassifyConfig {
+    return {
+      exceptionApps: this.strv('exception-apps'),
+      heuristicModalDetect: this.boolean('heuristic-modal-detect', true),
+      rules: this.boolean('rules-enabled', true) ? this.rules().rules : [],
+    };
+  }
+
+  tilerConfig(ratios: Readonly<Record<string, number>>, swapPairs: ReadonlySet<string>): TilerConfig {
+    const policy = this.string('min-size-policy', 'respect');
+    const minSizePolicy: MinSizePolicy =
+      policy === 'ignore' || policy === 'stack' ? policy : 'respect';
+    return {
+      gapBase: this.int('gaps-base', 8),
+      gapPortrait: this.int('gaps-portrait', -1),
+      gapLandscape: this.int('gaps-landscape', -1),
+      minSizePolicy,
+      primaryApps: this.strv('primary-apps'),
+      primaryAppRatio: this.int('primary-app-ratio', 50) / 100,
+      ratios,
+      swapPairs,
+      rules: this.boolean('rules-enabled', true) ? this.rules().rules : [],
+    };
+  }
+}

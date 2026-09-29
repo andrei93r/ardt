@@ -1,0 +1,10 @@
+{
+  "uuid": "adrt@adrt.dev",
+  "name": "Adrt",
+  "description": "Tiles windows into pairs per monitor with learned split ratios.",
+  "shell-version": ["48", "49", "50"],
+  "settings-schema": "org.gnome.shell.extensions.adrt",
+  "version-name": "0.1.0",
+  "gettext-domain": "adrt",
+  "url": "https://github.com/adrt-dev/adrt"
+}

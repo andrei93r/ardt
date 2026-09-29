@@ -3,6 +3,7 @@ dist/
 build/
 *.zip
 *.gschema.valid
+gschemas.compiled
 coverage/
 .tmp/
 __pycache__/

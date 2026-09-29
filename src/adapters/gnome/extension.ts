@@ -1,0 +1,755 @@
+// Generated with AI for personal use.
+// Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+// and can maintain this code.
+
+/**
+ * Extension entry point (§2.1). Constructs nothing in the constructor; every
+ * object is created in `enable()` and destroyed in `disable()` (§4.1).
+ */
+
+import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
+import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
+import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
+import { notify, overview, sessionMode, wm } from 'resource:///org/gnome/shell/ui/main.js';
+
+import type { AdaptationRecord, Bundle, ImportMode } from '../../core/config.js';
+import { BUNDLE_FORMAT, BUNDLE_VERSION, mergeAdaptations, normalizeBundle, serializeBundle } from '../../core/config.js';
+import { BorderState } from '../../core/border.js';
+import { SessionMachine } from '../../core/session.js';
+import type { SessionMode } from '../../core/session.js';
+import type { SplitAxis } from '../../core/tiler.js';
+import { clamp } from '../../core/types.js';
+import type { GestureKind } from '../../core/gestures.js';
+import type { DbusHandlers } from '../../platform/dbus.js';
+import { AdaptationStore, dataDir, readText, writeAtomic } from './adapt.js';
+import { GnomeDbus } from './dbus.js';
+import { FrameClockAnimator } from './frame-clock.js';
+import { GestureInput } from './gesture-input.js';
+import { GnomeHost } from './host.js';
+import { History, UndoStack } from './history.js';
+import { GnomeIndicator } from './indicator.js';
+import { WindowSession } from './session.js';
+import { GnomeSettings } from './settings.js';
+import { Tiling } from './tiling.js';
+
+const EXTENSION_VERSION = 1;
+const WORKSPACE_SWITCH_POLL_MS = 32;
+const WORKSPACE_SWITCH_MAX_MS = 2000;
+
+interface ExtraHandlers {
+  ActivateWindow(id: number): boolean;
+  ActivateWorkspace(index: number): boolean;
+  ToggleFloat(id: number): boolean;
+  SimulateResize(a: number, b: number, ratio: number): boolean;
+  SwapPair(a: number, b: number): boolean;
+  InjectVerifyFailure(id: number, count: number): boolean;
+  FocusDirection(direction: string): boolean;
+  FocusCycle(): boolean;
+  SpawnWindow(command: string): number;
+  CloseWindow(id: number): boolean;
+  MaximizeWindow(id: number): boolean;
+  UnmaximizeWindow(id: number): boolean;
+  ResetLayoutState(): boolean;
+}
+
+type Handlers = DbusHandlers & ExtraHandlers;
+
+export default class AdrtExtension extends Extension {
+  private settings!: GnomeSettings;
+  private host!: GnomeHost;
+  private adaptation!: AdaptationStore;
+  private history!: History;
+  private undo!: UndoStack;
+  private indicator!: GnomeIndicator;
+  private animator!: FrameClockAnimator;
+  private tiling!: Tiling;
+  private session!: WindowSession;
+  private gestures!: GestureInput;
+  private dbus!: GnomeDbus;
+  private border!: BorderState;
+  private sessionMachine = new SessionMachine();
+
+  private sessionModeId = 0;
+  private switchPollId: number | null = null;
+  private switchPollStartedMs = 0;
+  private settingWatchers: (() => void)[] = [];
+  private keybindings: string[] = [];
+  private hostUnsubscribers: (() => void)[] = [];
+  private frameSamples = 0;
+
+  enable(): void {
+    const started = GLib.get_monotonic_time();
+    this.settings = new GnomeSettings(this.getSettings());
+
+    this.history = new History(
+      this.settings.boolean('history-enabled', true),
+      this.settings.int('history-retention-days', 30),
+      this.settings.boolean('history-daily-folders', false),
+    );
+    this.migrate();
+    this.adaptation = new AdaptationStore(this.settings.boolean('adaptation-enabled', true));
+    this.adaptation.load();
+    this.undo = new UndoStack(this.settings.int('undo-stack-size', 20));
+    this.border = new BorderState();
+
+    this.host = new GnomeHost();
+    this.host.enable();
+
+    this.indicator = new GnomeIndicator(this.settings);
+    this.animator = new FrameClockAnimator({
+      isAlive: (id) => this.session.windows.has(id),
+      apply: (id, rect) => this.host.applyFrame(id, rect),
+      onFrame: () => this.onFrameSample(),
+    });
+
+    this.tiling = new Tiling({
+      host: this.host,
+      settings: this.settings,
+      history: this.history,
+      adaptation: this.adaptation,
+      animator: this.animator,
+      undo: this.undo,
+      windows: () => this.session.windows,
+      isPaused: () => this.isPaused(),
+      onRatiosChanged: () => this.saveState(),
+      onStubborn: (appId) => this.onStubborn(appId),
+    });
+
+    this.session = new WindowSession({
+      host: this.host,
+      settings: this.settings,
+      tiling: this.tiling,
+      history: this.history,
+      adaptation: this.adaptation,
+      undo: this.undo,
+      isPaused: () => this.isPaused(),
+      onStateChanged: () => this.onStateChanged(),
+      onStubborn: (appId) => this.onStubborn(appId),
+    });
+
+    this.gestures = new GestureInput(this.settings, this.history, {
+      switchWorkspace: (direction) => this.switchWorkspace(direction),
+      toggleOverview: () => overview.toggle(),
+      showDesktop: () => overview.toggle(),
+      swapPair: (direction) => this.session.moveToward(direction),
+      custom: (action) => this.history.log('gesture', { custom: action }),
+    });
+
+    this.restoreState();
+    this.subscribeHost();
+    this.watchSettings();
+
+    for (const win of global.display.list_all_windows()) this.session.register(win);
+
+    this.gestures.configure();
+    if (this.settings.boolean('dbus-enabled', true)) {
+      this.dbus = new GnomeDbus();
+      this.dbus.expose(this.handlers());
+    }
+
+    this.sessionModeId = sessionMode.connect('notify::current-mode', () => this.applySessionMode(this.currentMode()));
+    this.applySessionMode(this.currentMode(), true);
+    this.registerKeybindings();
+    this.session.setScanning(true);
+
+    this.onStateChanged();
+    this.firstRun();
+    this.history.log('tile', { event: 'enable', ms: Math.round((GLib.get_monotonic_time() - started) / 1000) });
+  }
+
+  disable(): void {
+    this.history.log('disable', {});
+    this.stopSwitchPoll();
+    if (this.sessionModeId !== 0) {
+      sessionMode.disconnect(this.sessionModeId);
+      this.sessionModeId = 0;
+    }
+    this.unregisterKeybindings();
+    for (const unsubscribe of this.settingWatchers) unsubscribe();
+    this.settingWatchers = [];
+    for (const unsubscribe of this.hostUnsubscribers) unsubscribe();
+    this.hostUnsubscribers = [];
+    if (this.dbus !== undefined) this.dbus.unexpose();
+    this.gestures.disable();
+    this.session.destroy();
+    this.tiling.destroy();
+    this.animator.destroy();
+    this.indicator.destroy();
+    this.host.disable();
+    this.adaptation.flush();
+    this.history.destroy();
+    this.saveState();
+  }
+
+  // ---------------------------------------------------------------- session
+
+  private currentMode(): SessionMode {
+    return sessionMode.currentMode as SessionMode;
+  }
+
+  private isPaused(): boolean {
+    return this.sessionMachine.isPaused;
+  }
+
+  private applySessionMode(mode: SessionMode, initial = false): void {
+    const effects = this.sessionMachine.setMode(mode);
+    if (effects.indicatorSuppression !== null) this.border.suppress(effects.indicatorSuppression);
+    else this.border.unsuppress('pause');
+    this.session.setScanning(effects.scanTickRunning);
+    this.syncIndicator();
+    if (!initial && effects.retileOnResume) this.session.retileAll('session-resume');
+    this.history.log('session_mode', { mode, paused: effects.paused });
+  }
+
+  private subscribeHost(): void {
+    this.hostUnsubscribers.push(
+      this.host.on('surface-created', (payload) => {
+        const surfaceId = (payload as { surface: { id: number } }).surface.id;
+        const win = this.host.windowFor(surfaceId);
+        if (win !== null) this.session.register(win);
+      }),
+      this.host.on('focus-changed', (payload) => this.onFocusChanged((payload as { id: number | null }).id)),
+      this.host.on('workspace-switched', (payload) => this.onWorkspaceSwitched(payload as { from: number; to: number })),
+      this.host.on('screens-changed', () => {
+        this.session.clearSignatures();
+        this.session.retileAll('screens-changed');
+      }),
+    );
+  }
+
+  private onFocusChanged(id: number | null): void {
+    if (id === null) {
+      this.border.clearFocus();
+      this.syncIndicator();
+      return;
+    }
+    const tracked = this.session.windows.get(id);
+    if (tracked === undefined || !this.session.classify(tracked).tileable) {
+      this.border.clearFocus();
+      this.syncIndicator();
+      return;
+    }
+    this.border.setFocus(id, tracked.surface.frame);
+    this.syncIndicator();
+  }
+
+  private onWorkspaceSwitched(payload: { from: number; to: number }): void {
+    this.border.suppress('workspace-switch');
+    this.syncIndicator();
+    this.history.log('ws_switch_empty', { from: payload.from, to: payload.to, reason: 'switch' });
+    this.beginSwitchPoll();
+  }
+
+  /** §23.2: release suppression when the focused actor settles, ceiling 2s. */
+  private beginSwitchPoll(): void {
+    this.stopSwitchPoll();
+    this.switchPollStartedMs = GLib.get_monotonic_time();
+    let lastX = Number.NaN;
+    let lastY = Number.NaN;
+    let stableFrames = 0;
+    this.switchPollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, WORKSPACE_SWITCH_POLL_MS, () => {
+      const elapsedMs = (GLib.get_monotonic_time() - this.switchPollStartedMs) / 1000;
+      const win = global.display.get_focus_window();
+      if (win === null) {
+        this.endSwitchPoll();
+        return GLib.SOURCE_REMOVE;
+      }
+      const actor = win.get_compositor_private();
+      if (actor === null) {
+        this.endSwitchPoll();
+        return GLib.SOURCE_REMOVE;
+      }
+      const [x, y] = [actor.x, actor.y];
+      if (x === lastX && y === lastY) stableFrames += 1;
+      else stableFrames = 0;
+      lastX = x;
+      lastY = y;
+      if (stableFrames >= 3 || elapsedMs >= WORKSPACE_SWITCH_MAX_MS) {
+        this.endSwitchPoll();
+        return GLib.SOURCE_REMOVE;
+      }
+      return GLib.SOURCE_CONTINUE;
+    });
+  }
+
+  private stopSwitchPoll(): void {
+    if (this.switchPollId === null) return;
+    GLib.source_remove(this.switchPollId);
+    this.switchPollId = null;
+  }
+
+  private endSwitchPoll(): void {
+    this.switchPollId = null;
+    this.border.unsuppress('workspace-switch');
+    this.syncIndicator();
+  }
+
+  private syncIndicator(): void {
+    const snapshot = this.border.snapshot();
+    if (snapshot.visible && snapshot.rect !== null && !this.isPaused()) {
+      this.indicator.show(snapshot.rect);
+    } else {
+      this.indicator.hide();
+    }
+  }
+
+  private onStateChanged(): void {
+    const focused = this.session.focused();
+    if (focused !== null) {
+      this.border.setFocus(focused.id, focused.surface.frame);
+    }
+    this.syncIndicator();
+  }
+
+  private onStubborn(_appId: string): void {
+    this.history.log('stubborn', { cooldownMs: this.adaptation.cooldownRemainingMs() });
+  }
+
+  private onFrameSample(): void {
+    if (!this.settings.boolean('trace-enabled', false)) return;
+    this.frameSamples += 1;
+    if (this.frameSamples % 60 !== 0) return;
+    this.history.log('frame_timing', { samples: this.frameSamples, budgetMs: 0 });
+  }
+
+  // ------------------------------------------------------------- workspace
+
+  private switchWorkspace(direction: 'left' | 'right' | 'up' | 'down'): void {
+    const manager = global.workspace_manager;
+    const current = manager.get_active_workspace_index();
+    const delta = direction === 'left' || direction === 'up' ? -1 : 1;
+    const target = clamp(current + delta, 0, manager.get_n_workspaces() - 1);
+    if (target !== current) manager.get_workspace_by_index(target).activate(global.get_current_time());
+  }
+
+  // ------------------------------------------------------------- settings
+
+  private watchSettings(): void {
+    const reactive: [string, () => void][] = [
+      ['exception-apps', () => this.session.invalidateAll()],
+      ['rules-json', () => this.session.invalidateAll()],
+      ['rules-enabled', () => this.session.invalidateAll()],
+      ['heuristic-modal-detect', () => this.session.invalidateAll()],
+      ['min-size-policy', () => this.session.invalidateAll()],
+      ['primary-apps', () => this.session.invalidateAll()],
+      ['primary-app-ratio', () => this.session.invalidateAll()],
+      ['gaps-base', () => this.session.invalidateAll()],
+      ['gesture-enabled', () => this.gestures.configure()],
+      ['gesture-sensitivity', () => this.gestures.configure()],
+      ['gesture-3-swipe-action', () => this.gestures.configure()],
+      ['gesture-3-vertical-action', () => this.gestures.configure()],
+      ['gesture-4-swipe-action', () => this.gestures.configure()],
+      ['gesture-4-vertical-action', () => this.gestures.configure()],
+      ['gesture-pinch-action', () => this.gestures.configure()],
+      ['adaptation-enabled', () => this.adaptation.setEnabled(this.settings.boolean('adaptation-enabled', true))],
+      ['history-enabled', () => this.history.setEnabled(this.settings.boolean('history-enabled', true))],
+      ['undo-stack-size', () => this.undo.setMaxSize(this.settings.int('undo-stack-size', 20))],
+    ];
+    for (const [key, cb] of reactive) this.settingWatchers.push(this.settings.onChanged(key, cb));
+  }
+
+  private registerKeybindings(): void {
+    const names = [
+      'kb-undo',
+      'kb-focus-next',
+      'kb-focus-left',
+      'kb-focus-right',
+      'kb-focus-up',
+      'kb-focus-down',
+      'kb-toggle-float',
+      'kb-nudge-left',
+      'kb-nudge-right',
+      'kb-move-left',
+      'kb-move-right',
+    ];
+    for (const name of names) {
+      wm.addKeybinding(name, this.getSettings(), Meta.KeyBindingFlags.NONE, Shell.ActionMode.NORMAL, () =>
+        this.dispatchKeybinding(name),
+      );
+      this.keybindings.push(name);
+    }
+  }
+
+  private dispatchKeybinding(name: string): void {
+    switch (name) {
+      case 'kb-undo':
+        this.session.undo();
+        break;
+      case 'kb-focus-next':
+        this.session.focusCycle();
+        break;
+      case 'kb-focus-left':
+      case 'kb-focus-right':
+      case 'kb-focus-up':
+      case 'kb-focus-down':
+        this.session.focusDirection(name.slice('kb-focus-'.length));
+        break;
+      case 'kb-toggle-float':
+        this.toggleFocusedFloat();
+        break;
+      case 'kb-nudge-left':
+        this.nudgeFocused('left', -1);
+        break;
+      case 'kb-nudge-right':
+        this.nudgeFocused('right', 1);
+        break;
+      case 'kb-move-left':
+        this.session.moveToward('left');
+        break;
+      case 'kb-move-right':
+        this.session.moveToward('right');
+        break;
+      default:
+        break;
+    }
+  }
+
+  private unregisterKeybindings(): void {
+    for (const name of this.keybindings) wm.removeKeybinding(name);
+    this.keybindings = [];
+  }
+
+  private toggleFocusedFloat(): void {
+    const focused = this.session.focused();
+    if (focused !== null) this.session.toggleFloat(focused.id);
+  }
+
+  private nudgeFocused(direction: string, sign: number): void {
+    const focused = this.session.focused();
+    if (focused === null) return;
+    const step = this.settings.int('nudge-step', 5) * sign;
+    this.tiling.nudgeSplit(focused.id, direction, Math.abs(step));
+    this.session.clearSignatures();
+    this.session.retile(focused.surface.workspaceId, 'nudge');
+  }
+
+  // ------------------------------------------------------------ persistence
+
+  private stateFile(): string {
+    return `${dataDir()}/state.json`;
+  }
+
+  private restoreState(): void {
+    const text = readText(this.stateFile());
+    if (text === null) return;
+    let raw: any;
+    try {
+      raw = JSON.parse(text);
+    } catch (e) {
+      console.error(`[adrt] state.json is corrupt: ${(e as Error).message}`);
+      return;
+    }
+    if (raw.ratios !== undefined) this.tiling.loadRatios(raw.ratios, raw.swapPairs ?? []);
+    if (Array.isArray(raw.undo)) this.undo.restore(raw.undo);
+  }
+
+  private saveState(): void {
+    if (this.tiling === undefined) return;
+    const payload = {
+      version: 1,
+      ratios: this.tiling.getRatios(),
+      swapPairs: this.tiling.getSwapPairs(),
+      undo: this.undo.toJSON(),
+    };
+    writeAtomic(this.stateFile(), JSON.stringify(payload));
+  }
+
+  private migrate(): void {
+    const current = this.settings.int('settings-version', 0);
+    if (current >= EXTENSION_VERSION) return;
+    this.settings.write('settings-version', EXTENSION_VERSION);
+    this.history.log('config_imported', { migratedFrom: current, to: EXTENSION_VERSION });
+  }
+
+  private firstRun(): void {
+    if (this.settings.boolean('first-run-complete', false)) return;
+    this.settings.write('first-run-complete', true);
+    notify('Adrt', 'Adrt tiles windows into pairs per monitor. Press Super+Z to undo a retile.');
+  }
+
+  // --------------------------------------------------------------- D-Bus
+
+  private handlers(): Handlers {
+    return {
+      DumpState: () => this.dumpState(),
+      LookupWindow: (id) => this.lookupWindow(id),
+      ListWindows: () => JSON.stringify(this.listWindows()),
+      ListMonitors: () => JSON.stringify(this.host.screens().map((screen) => screen.connector)),
+      GetSplitRatio: (workspace, monitor, axis) => this.tiling.getSplitRatioFor(workspace, monitor, axis as SplitAxis),
+      SetSplitRatio: (workspace, monitor, axis, ratio) => this.tiling.setSplitRatioFor(workspace, monitor, axis as SplitAxis, ratio),
+      Undo: () => this.session.undo(),
+      NudgeSplit: (direction, step) => {
+        const focused = this.session.focused();
+        if (focused === null) return false;
+        return this.tiling.nudgeSplit(focused.id, direction, step);
+      },
+      ReloadRules: () => {
+        this.session.invalidateAll();
+        return true;
+      },
+      ResetPerApp: (appId) => this.adaptation.forget(appId),
+      GetAdaptations: () => JSON.stringify(this.adaptation.list()),
+      ForgetAdaptation: (appId) => this.adaptation.forget(appId),
+      GetFloats: () => JSON.stringify(this.floats()),
+      ForgetFloat: (appId) => this.forgetFloat(appId),
+      ExportConfig: () => this.exportConfig(),
+      ImportConfig: (json, merge) => this.importConfig(json, merge ? 'merge' : 'replace'),
+      ListHistoryDays: () => JSON.stringify(this.history.days()),
+      SimulateGesture: (kind, dx, dy, points) => this.gestures.simulate(kind as GestureKind, dx, dy, points),
+      InjectSignal: (type, payload) => this.injectSignal(type, payload),
+      SimulateSessionMode: (mode) => this.simulateSessionMode(mode),
+      ActivateWindow: (id) => {
+        this.session.focus(id);
+        return true;
+      },
+      ActivateWorkspace: (index) => {
+        this.session.activateWorkspace(index);
+        return true;
+      },
+      ToggleFloat: (id) => this.session.toggleFloat(id),
+      SimulateResize: (a, b, ratio) => this.simulateResize(a, b, ratio),
+      SwapPair: (a, b) => {
+        this.tiling.toggleSwap(a, b);
+        this.session.clearSignatures();
+        this.session.retile(this.session.windows.get(a)?.surface.workspaceId ?? 0, 'swap');
+        return true;
+      },
+      InjectVerifyFailure: (id, count) => this.injectVerifyFailure(id, count),
+      FocusDirection: (direction) => {
+        this.session.focusDirection(direction);
+        return true;
+      },
+      FocusCycle: () => {
+        this.session.focusCycle();
+        return true;
+      },
+      SpawnWindow: (command) => this.spawnWindow(command),
+      CloseWindow: (id) => this.closeWindow(id),
+      MaximizeWindow: (id) => {
+        if (!this.session.windows.has(id)) return false;
+        this.host.maximize(id);
+        return true;
+      },
+      UnmaximizeWindow: (id) => {
+        if (!this.session.windows.has(id)) return false;
+        this.host.unmaximize(id);
+        return true;
+      },
+      ResetLayoutState: () => {
+        this.tiling.loadRatios({}, []);
+        this.saveState();
+        this.session.clearSignatures();
+        this.session.retileAll('reset-layout');
+        return true;
+      },
+    };
+  }
+
+  /** Test trigger (§40.4): open a client window from inside the shell. */
+  private spawnWindow(command: string): number {
+    const parts = command.split(' ').filter((part) => part.length > 0);
+    if (parts.length === 0) return 0;
+    try {
+      const process = Gio.Subprocess.new(parts, Gio.SubprocessFlags.NONE);
+      const identifier = process.get_identifier();
+      return identifier === null ? 0 : Number.parseInt(identifier, 10);
+    } catch (e) {
+      console.error(`[adrt] SpawnWindow failed: ${(e as Error).message}`);
+      return 0;
+    }
+  }
+
+  /** Test trigger (§40.4): close one window without killing its process. */
+  private closeWindow(id: number): boolean {
+    const tracked = this.session.windows.get(id);
+    if (tracked === undefined) return false;
+    tracked.win.delete(global.get_current_time());
+    return true;
+  }
+
+  private dumpState(): string {
+    const monitors = this.host.screens().map((screen) => ({ ...screen }));
+    const windows = [...this.session.windows.values()].map((tracked) => {
+      tracked.surface.refresh();
+      tracked.surface.captureZ();
+      return {
+        id: tracked.id,
+        cls: tracked.surface.appId,
+        title: tracked.surface.title,
+        version: tracked.surface.appVersion,
+        workspace: tracked.surface.workspaceId,
+        monitor: tracked.surface.screenId,
+        rect: tracked.surface.frame,
+        layer: tracked.surface.layer,
+        z: tracked.surface.zPosition,
+        maximized: tracked.surface.flags.maximized,
+        minimized: tracked.surface.flags.minimized,
+        tileable: this.session.classify(tracked).tileable,
+        reason: this.session.classify(tracked).reason,
+        profile: tracked.profile.name,
+        stubborn: tracked.stubborn,
+      };
+    });
+    return JSON.stringify({
+      format: 'adrt.state',
+      version: EXTENSION_VERSION,
+      platform: 'gnome',
+      paused: this.isPaused(),
+      mode: this.sessionMachine.state.mode,
+      activeWorkspace: this.host.activeWorkspaceId(),
+      workspaces: this.session.countWorkspaces(),
+      monitors,
+      windows,
+      ratios: this.tiling.getRatios(),
+      swapPairs: this.tiling.getSwapPairs(),
+      border: this.border.snapshot(),
+      overview: overview.visible,
+      adaptations: this.adaptation.size,
+      bounds: this.session.memoryBounds(),
+    });
+  }
+
+  private lookupWindow(id: number): string {
+    const tracked = this.session.windows.get(id);
+    if (tracked === undefined) return 'null';
+    return JSON.stringify({
+      id,
+      cls: tracked.surface.appId,
+      title: tracked.surface.title,
+      rect: tracked.surface.frame,
+      workspace: tracked.surface.workspaceId,
+      tileable: this.session.classify(tracked).tileable,
+    });
+  }
+
+  private listWindows(): { id: number; cls: string; title: string }[] {
+    return [...this.session.windows.values()].map((tracked) => ({
+      id: tracked.id,
+      cls: tracked.surface.appId,
+      title: tracked.surface.title,
+    }));
+  }
+
+  private floats(): Record<string, number[]> {
+    const out: Record<string, number[]> = {};
+    for (const tracked of this.session.windows.values()) {
+      if (!tracked.surface.flags.floating) continue;
+      const list = out[tracked.surface.appId] ?? [];
+      list.push(tracked.id);
+      out[tracked.surface.appId] = list;
+    }
+    return out;
+  }
+
+  private forgetFloat(appId: string): boolean {
+    let found = false;
+    for (const tracked of this.session.windows.values()) {
+      if (tracked.surface.appId !== appId || !tracked.surface.flags.floating) continue;
+      this.session.toggleFloat(tracked.id);
+      found = true;
+    }
+    return found;
+  }
+
+  private exportConfig(): string {
+    const settings: Record<string, unknown> = {};
+    for (const key of this.settings.keys()) settings[key] = this.settings.read(key);
+    const adaptations: Record<string, AdaptationRecord> = {};
+    for (const record of this.adaptation.list()) adaptations[record.appId] = record;
+    const bundle: Bundle = {
+      format: BUNDLE_FORMAT,
+      version: BUNDLE_VERSION,
+      exportedAt: new Date().toISOString(),
+      settings: settings as Bundle['settings'],
+      tracked: { adaptations, behavior: { floats: this.floats() } },
+    };
+    return serializeBundle(bundle);
+  }
+
+  private importConfig(json: string, mode: ImportMode): string {
+    const errors: string[] = [];
+    let incoming;
+    try {
+      incoming = normalizeBundle(JSON.parse(json), errors);
+    } catch (e) {
+      return JSON.stringify({ ok: false, errors: [(e as Error).message] });
+    }
+    if (incoming === null) return JSON.stringify({ ok: false, errors });
+    for (const [key, value] of Object.entries(incoming.settings)) {
+      if (this.settings.keys().includes(key)) this.settings.write(key, value);
+    }
+    const merged = mergeAdaptations(
+      Object.fromEntries(this.adaptation.list().map((record) => [record.appId, record])),
+      incoming.tracked.adaptations,
+      mode,
+    );
+    this.adaptation.replaceAll(Object.values(merged.record));
+    this.session.invalidateAll();
+    this.history.log('config_imported', { mode, applied: merged.report.applied.length, skipped: merged.report.skipped.length });
+    return JSON.stringify({ ok: true, applied: merged.report.applied, skipped: merged.report.skipped });
+  }
+
+  private simulateResize(a: number, b: number, ratio: number): boolean {
+    const first = this.session.windows.get(a);
+    const second = this.session.windows.get(b);
+    if (first === undefined || second === undefined) return false;
+    const screen = this.host.screens().find((s) => s.index === first.surface.screenId);
+    if (screen === undefined) return false;
+    const axis = screen.geometry.width >= screen.geometry.height ? 'horizontal' : 'vertical';
+    const key = [first.surface.appId, second.surface.appId].sort();
+    this.tiling.setRatio(`${key[0]}|${key[1]}|${axis}`, ratio);
+    this.session.clearSignatures();
+    this.session.retile(first.surface.workspaceId, 'simulate-resize');
+    if (this.settings.boolean('dry-run-mode', false)) this.history.log('dry_run', { ratio });
+    return true;
+  }
+
+  private injectVerifyFailure(id: number, count: number): boolean {
+    if (!this.session.windows.has(id)) return false;
+    this.tiling.injectVerifyFailures(count);
+    return true;
+  }
+
+  private injectSignal(type: string, payload: string): boolean {
+    let data: Record<string, unknown> = {};
+    if (payload.length > 0) {
+      try {
+        data = JSON.parse(payload) as Record<string, unknown>;
+      } catch (e) {
+        console.error(`[adrt] InjectSignal payload is not JSON: ${(e as Error).message}`);
+        return false;
+      }
+    }
+    switch (type) {
+      case 'screens-changed':
+        this.host.emit({ type: 'screens-changed' });
+        break;
+      case 'focus-changed':
+        this.onFocusChanged(typeof data.id === 'number' ? data.id : null);
+        break;
+      case 'workspace-switched':
+        this.onWorkspaceSwitched({ from: Number(data.from ?? 0), to: Number(data.to ?? 0) });
+        break;
+      case 'surface-frame-changed': {
+        const tracked = this.session.windows.get(Number(data.id));
+        if (tracked !== undefined) {
+          tracked.surface.refreshFrame();
+          this.onStateChanged();
+        }
+        break;
+      }
+      default:
+        return false;
+    }
+    this.history.log('lookup', { injected: type });
+    return true;
+  }
+  private simulateSessionMode(mode: string): boolean {
+    if (mode !== 'user' && mode !== 'unlock-dialog' && mode !== 'screen-sharing') return false;
+    this.applySessionMode(mode);
+    return true;
+  }
+}
+

@@ -1,0 +1,123 @@
+// Generated with AI for personal use.
+// Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+// and can maintain this code.
+
+/**
+ * Border rendering (§23). A thin view: `BorderState` decides visibility and
+ * position, this file only draws.
+ */
+
+import Clutter from 'gi://Clutter';
+import St from 'gi://St';
+import { layoutManager } from 'resource:///org/gnome/shell/ui/main.js';
+
+import type { Rect } from '../../core/types.js';
+import type { IndicatorBackend } from '../../platform/indicator.js';
+import type { GnomeSettings } from './settings.js';
+
+const CSS_CLASS = 'adrt-indicator';
+const PREVIEW_CLASS = 'adrt-indicator-preview';
+
+export class GnomeIndicator implements IndicatorBackend {
+  private readonly widget: any;
+  private readonly preview: any;
+  private pulseActive = false;
+
+  constructor(private readonly settings: GnomeSettings) {
+    this.widget = new St.Widget({ style_class: CSS_CLASS, reactive: false, visible: false });
+    this.preview = new St.Widget({ style_class: PREVIEW_CLASS, reactive: false, visible: false, opacity: 120 });
+    this.applyStyle();
+    layoutManager.addChrome(this.widget, { affectsStruts: false, trackFullscreen: false });
+    layoutManager.addChrome(this.preview, { affectsStruts: false, trackFullscreen: false });
+  }
+
+  show(rect: Rect): void {
+    if (!this.settings.boolean('active-window-indicator', true)) {
+      this.widget.hide();
+      return;
+    }
+    this.applyStyle();
+    this.widget.set_position(rect.x, rect.y);
+    this.widget.set_size(rect.width, rect.height);
+    this.widget.show();
+    if (this.settings.boolean('indicator-animated-pulse', false)) this.startPulse();
+  }
+
+  hide(): void {
+    this.stopPulse();
+    this.widget.hide();
+  }
+
+  showPreview(rect: Rect): void {
+    this.preview.set_position(rect.x, rect.y);
+    this.preview.set_size(rect.width, rect.height);
+    this.preview.show();
+  }
+
+  hidePreview(): void {
+    this.preview.hide();
+  }
+
+  ghostClose(rect: Rect, durationMs: number): void {
+    if (!this.settings.boolean('close-animation-enabled', true)) return;
+    const ghost = new St.Widget({ style_class: CSS_CLASS, reactive: false });
+    ghost.set_position(rect.x, rect.y);
+    ghost.set_size(rect.width, rect.height);
+    ghost.set_style(this.styleString());
+    layoutManager.addChrome(ghost, { affectsStruts: false, trackFullscreen: false });
+    ghost.ease({
+      opacity: 0,
+      duration: durationMs,
+      mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+      onComplete: () => {
+        layoutManager.removeChrome(ghost);
+        ghost.destroy();
+      },
+    });
+  }
+
+  destroy(): void {
+    this.stopPulse();
+    layoutManager.removeChrome(this.widget);
+    layoutManager.removeChrome(this.preview);
+    this.widget.destroy();
+    this.preview.destroy();
+  }
+
+  private startPulse(): void {
+    if (this.pulseActive) return;
+    this.pulseActive = true;
+    this.widget.ease({
+      opacity: 160,
+      duration: 900,
+      mode: Clutter.AnimationMode.EASE_IN_OUT_SINE,
+      repeatCount: -1,
+      autoReverse: true,
+    });
+  }
+
+  private stopPulse(): void {
+    if (!this.pulseActive) return;
+    this.pulseActive = false;
+    this.widget.remove_all_transitions();
+    this.widget.opacity = 255;
+  }
+
+  private applyStyle(): void {
+    this.widget.set_style(this.styleString());
+  }
+
+  private styleString(): string {
+    const color = this.colour();
+    const width = this.settings.int('indicator-width', 2);
+    const opacity = this.settings.int('indicator-opacity', 100);
+    const radius = this.settings.int('indicator-corner-radius', 8);
+    return `border: ${width}px solid ${color}; border-radius: ${radius}px; opacity: ${opacity / 100};`;
+  }
+
+  private colour(): string {
+    const configured = this.settings.string('indicator-color', 'accent');
+    // 'accent' follows the shell's default accent blue; hex values pass through.
+    return configured === 'accent' ? '#3584e4' : configured;
+  }
+}

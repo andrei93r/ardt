@@ -185,8 +185,10 @@ function stackLayout(avail: Rect, gap: number, w0: TilerWindow, w1: TilerWindow,
   return splitAt(avail, gap, prefer, 0.5);
 }
 
-function place(id: number, rect: Rect, screen: Screen, order: number) {
-  return { surfaceId: id, rect: snapRect(rect, screen.scale), layer: Layer.TILED, order };
+function place(id: number, rect: Rect, screen: Screen, order: number, max?: Size) {
+  const width = max !== undefined && max.width > 0 ? Math.min(rect.width, max.width) : rect.width;
+  const height = max !== undefined && max.height > 0 ? Math.min(rect.height, max.height) : rect.height;
+  return { surfaceId: id, rect: snapRect({ x: rect.x, y: rect.y, width, height }, screen.scale), layer: Layer.TILED, order };
 }
 
 interface RuleOverride {
@@ -207,14 +209,14 @@ function findRuleOverride(windows: readonly TilerWindow[], rules: readonly Rule[
 function applyRuleOverride(override: RuleOverride, w0: TilerWindow, w1: TilerWindow, avail: Rect, gap: number, screen: Screen): TilePlan {
   const win = override.window;
   if (override.mode === 'full') {
-    return { placements: [place(win.id, fillRect(avail, win.min, screen), screen, 0)] };
+    return { placements: [place(win.id, fillRect(avail, win.min, screen), screen, 0, win.max)] };
   }
   const other = win.id === w0.id ? w1 : w0;
   const left = override.mode === 'left-half' ? win : other;
   const right = override.mode === 'left-half' ? other : win;
   const split = splitAt(avail, gap, 'horizontal', 0.5);
   return {
-    placements: [place(left.id, split.rect0, screen, 0), place(right.id, split.rect1, screen, 1)],
+    placements: [place(left.id, split.rect0, screen, 0, left.max), place(right.id, split.rect1, screen, 1, right.max)],
   };
 }
 
@@ -231,7 +233,7 @@ export function computePlans(windows: readonly TilerWindow[], screen: Screen, co
 
   if (sorted.length === 1) {
     const only = sorted[0];
-    return { placements: [place(only.id, fillRect(avail, only.min, screen), screen, 0)] };
+    return { placements: [place(only.id, fillRect(avail, only.min, screen), screen, 0, only.max)] };
   }
 
   const w0 = sorted[0];
@@ -265,7 +267,7 @@ export function computePlans(windows: readonly TilerWindow[], screen: Screen, co
   const rect1 = swapped ? split.rect0 : split.rect1;
 
   return {
-    placements: [place(w0.id, rect0, screen, 0), place(w1.id, rect1, screen, 1)],
+    placements: [place(w0.id, rect0, screen, 0, w0.max), place(w1.id, rect1, screen, 1, w1.max)],
   };
 }
 

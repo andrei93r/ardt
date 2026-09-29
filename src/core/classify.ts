@@ -113,7 +113,12 @@ export function classify(
   }
   if (f.floating) return fail('floating');
   if (NON_TILEABLE_KINDS.has(surface.kind)) return fail('non-tileable-kind');
-  if (surface.min.width === surface.max.width || surface.min.height === surface.max.height) {
+  // A window without size hints reports min == max == 0 on both axes; that is
+  // not a fixed size, so only a non-zero equal value fails this check (§5).
+  if (
+    (surface.min.width === surface.max.width && surface.min.width > 0) ||
+    (surface.min.height === surface.max.height && surface.min.height > 0)
+  ) {
     return fail('min-equals-max');
   }
   if (f.transient) return fail('transient');

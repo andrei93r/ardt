@@ -1618,3 +1618,73 @@ Complete when §36 acceptance criteria pass **and** `TEST_RESULTS.md` shows gree
 This is a specification, not a starting point. No features added or removed. Ask before filling gaps. Runs inside the GNOME Shell on the main thread, on Wayland laptops. Less is better. Cached is better. Deferred is better. Cleanup is not optional.
 
 The project is **Adrt**. GNOME today. The `platform/` interfaces are the only thing that keeps the door open for KDE later, and they earn their place today by making `core/` runnable in plain Node.
+
+---
+
+# Adrt
+
+GNOME 50+ tiling window manager extension for Wayland laptops. Windows tile
+into pairs per monitor with learned split ratios. See `spec.md` for the
+authoritative specification.
+
+## Install
+
+```bash
+# From a checkout
+make install          # or: npm run install:local
+
+# Verify
+gnome-extensions info adrt@adrt.dev
+# State: ENABLED
+```
+
+On Wayland the Shell cannot be restarted in place. Log out and back in, or use
+the nested development Shell (`npm run dev`).
+
+## Development
+
+```bash
+npm install
+npm run build           # tsc -> dist/
+npm run test:core       # Vitest, plain Node, no compositor
+npm run dev             # nested GNOME Shell with the extension enabled
+npm run logs            # (inside dev) stream the [adrt] journal
+```
+
+The core decision logic in `src/core/` is pure TypeScript: no `gi://`, no
+Mutter, no Shell imports. It runs in plain Node in milliseconds. The GNOME
+adapter lives in `src/adapters/gnome/`; the interfaces a future KDE adapter
+would implement live in `src/platform/`.
+
+## Testing
+
+```bash
+npm run lint            # eslint src tests
+npm run test:core       # core unit tests
+npm run test:agent      # 30 scenarios in a nested GNOME Shell
+npm run test:all        # lint + build + core + agent
+```
+
+The agent harness (`scripts/agent-test.sh`) starts a headless nested GNOME
+Shell (`gnome-shell --devkit --wayland --headless`), installs the extension,
+drives it over D-Bus and reports a per-scenario pass/fail table. It never
+requires a human at the machine.
+
+## Uninstall
+
+```bash
+make uninstall          # keeps $XDG_DATA_HOME/adrt
+bash scripts/uninstall.sh --purge   # also removes user data
+```
+
+## Layout
+
+```
+src/core/         pure decision logic (testable in Node)
+src/platform/     compositor-agnostic interfaces
+src/adapters/gnome/ GNOME Shell 50+ adapter (GJS, St, Meta)
+tests/core/       Vitest unit tests
+tests/agent/      30 autonomous scenarios
+scripts/          build, install, dev, nested-shell, agent-test, package
+packages/gnome/   metadata.json, gschema, stylesheet
+```

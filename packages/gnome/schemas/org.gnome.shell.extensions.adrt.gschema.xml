@@ -1,0 +1,338 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Generated with AI for personal use. -->
+<!-- Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+     and can maintain this code. -->
+<schemalist>
+  <schema id="org.gnome.shell.extensions.adrt" path="/org/gnome/shell/extensions/adrt/">
+
+    <!-- Layout (§6) -->
+    <key name="gaps-base" type="i">
+      <default>8</default>
+      <summary>Base gap</summary>
+      <description>Pixels between tiles and the monitor edge.</description>
+    </key>
+    <key name="gaps-portrait" type="i">
+      <default>-1</default>
+      <summary>Portrait gap override</summary>
+      <description>Negative inherits the base gap.</description>
+    </key>
+    <key name="gaps-landscape" type="i">
+      <default>-1</default>
+      <summary>Landscape gap override</summary>
+      <description>Negative inherits the base gap.</description>
+    </key>
+    <key name="min-size-policy" type="s">
+      <default>'respect'</default>
+      <summary>Minimum-size policy</summary>
+      <description>One of respect, ignore, stack.</description>
+    </key>
+    <key name="reflow-keeps-edges" type="b">
+      <default>true</default>
+      <summary>Keep outer edges fixed on reflow</summary>
+      <description>Outer monitor edges stay fixed when a pair reflows.</description>
+    </key>
+    <key name="primary-apps" type="as">
+      <default>[]</default>
+      <summary>Primary apps</summary>
+      <description>App ids that receive the configured primary ratio.</description>
+    </key>
+    <key name="primary-app-ratio" type="i">
+      <default>50</default>
+      <summary>Primary app ratio</summary>
+      <description>Percentage of the split for the primary app, clamped 20-80.</description>
+    </key>
+    <key name="nudge-step" type="i">
+      <default>5</default>
+      <summary>Keyboard nudge step</summary>
+      <description>Percentage moved per nudge.</description>
+    </key>
+    <key name="undo-stack-size" type="i">
+      <default>20</default>
+      <summary>Undo stack size</summary>
+      <description>Number of retiles remembered for undo.</description>
+    </key>
+    <key name="workspace-auto-name" type="b">
+      <default>false</default>
+      <summary>Name spawned workspaces</summary>
+      <description>Name workspaces created by the third-window policy.</description>
+    </key>
+    <key name="respect-user-workspace-move" type="b">
+      <default>true</default>
+      <summary>Respect user workspace moves</summary>
+      <description>Do not fight a user dragging a window between workspaces.</description>
+    </key>
+    <key name="workspace-move-grace-seconds" type="i">
+      <default>3</default>
+      <summary>Workspace move grace</summary>
+      <description>Seconds to leave a user-moved window alone.</description>
+    </key>
+    <key name="log-workspace-reorder" type="b">
+      <default>false</default>
+      <summary>Log workspace reorders</summary>
+      <description>Record workspace reorder events in the history.</description>
+    </key>
+
+    <!-- Classification (§5) -->
+    <key name="heuristic-modal-detect" type="b">
+      <default>true</default>
+      <summary>Heuristic modal detection</summary>
+      <description>Treat 'title - parent' windows as modals.</description>
+    </key>
+    <key name="exception-apps" type="as">
+      <default>[]</default>
+      <summary>Exception apps</summary>
+      <description>App id globs that are never tiled.</description>
+    </key>
+
+    <!-- Rules (§19.1) -->
+    <key name="rules-enabled" type="b">
+      <default>true</default>
+      <summary>Enable rules</summary>
+      <description>Apply the user-authored rules.</description>
+    </key>
+    <key name="rules-json" type="s">
+      <default>'[]'</default>
+      <summary>Rules JSON</summary>
+      <description>JSON array of rules.</description>
+    </key>
+
+    <!-- Animation (§11) -->
+    <key name="disable-animations" type="b">
+      <default>false</default>
+      <summary>Disable tiling animations</summary>
+      <description>Move windows instantly.</description>
+    </key>
+    <key name="animation-duration" type="i">
+      <default>180</default>
+      <summary>Animation duration</summary>
+      <description>Milliseconds for a retile animation.</description>
+    </key>
+    <key name="gnome-animation-delay" type="i">
+      <default>0</default>
+      <summary>GNOME animation delay</summary>
+      <description>Extra delay to account for shell animations.</description>
+    </key>
+    <key name="max-frame-interval-ms" type="i">
+      <default>16</default>
+      <summary>Max frame interval</summary>
+      <description>Expected frame interval for timing checks.</description>
+    </key>
+
+    <!-- Indicator (§23) -->
+    <key name="active-window-indicator" type="b">
+      <default>true</default>
+      <summary>Active window indicator</summary>
+      <description>Draw a border around the focused tileable window.</description>
+    </key>
+    <key name="indicator-color" type="s">
+      <default>'accent'</default>
+      <summary>Indicator colour</summary>
+      <description>'accent' or a CSS hex colour.</description>
+    </key>
+    <key name="indicator-opacity" type="i">
+      <default>100</default>
+      <summary>Indicator opacity</summary>
+      <description>0-100.</description>
+    </key>
+    <key name="indicator-width" type="i">
+      <default>2</default>
+      <summary>Indicator width</summary>
+      <description>Pixels, 1-20.</description>
+    </key>
+    <key name="indicator-corner-radius" type="i">
+      <default>8</default>
+      <summary>Indicator corner radius</summary>
+      <description>Pixels, 0-32.</description>
+    </key>
+    <key name="indicator-animated-pulse" type="b">
+      <default>false</default>
+      <summary>Indicator pulse</summary>
+      <description>Pulse the border while focused.</description>
+    </key>
+    <key name="close-animation-enabled" type="b">
+      <default>true</default>
+      <summary>Close ghost animation</summary>
+      <description>Fade a ghost at the closing window rect.</description>
+    </key>
+    <key name="close-animation-duration" type="i">
+      <default>150</default>
+      <summary>Close animation duration</summary>
+      <description>Milliseconds.</description>
+    </key>
+
+    <!-- Problem windows (§9) -->
+    <key name="adaptation-enabled" type="b">
+      <default>true</default>
+      <summary>Adapt to problem windows</summary>
+      <description>Learn delays from windows that refuse geometry.</description>
+    </key>
+    <key name="float-persistence" type="b">
+      <default>false</default>
+      <summary>Persist floats</summary>
+      <description>Remember floating windows per app.</description>
+    </key>
+
+    <!-- Diagnostics (§21) -->
+    <key name="scan-interval" type="i">
+      <default>5000</default>
+      <summary>Scan interval</summary>
+      <description>Base milliseconds between safety-net scans.</description>
+    </key>
+    <key name="debug-enabled" type="b">
+      <default>false</default>
+      <summary>Debug logging</summary>
+      <description>Log per-operation detail.</description>
+    </key>
+    <key name="trace-enabled" type="b">
+      <default>false</default>
+      <summary>Trace logging</summary>
+      <description>Log per-frame detail.</description>
+    </key>
+    <key name="history-enabled" type="b">
+      <default>true</default>
+      <summary>Event history</summary>
+      <description>Write JSONL history files.</description>
+    </key>
+    <key name="history-retention-days" type="i">
+      <default>30</default>
+      <summary>History retention</summary>
+      <description>Days of history to keep.</description>
+    </key>
+    <key name="history-daily-folders" type="b">
+      <default>false</default>
+      <summary>Daily history folders</summary>
+      <description>Store each day in its own folder.</description>
+    </key>
+    <key name="dbus-enabled" type="b">
+      <default>true</default>
+      <summary>D-Bus interface</summary>
+      <description>Expose org.adrt.Adrt on the session bus.</description>
+    </key>
+    <key name="dry-run-mode" type="b">
+      <default>false</default>
+      <summary>Dry run</summary>
+      <description>Compute plans without applying them.</description>
+    </key>
+    <key name="escape-fullscreen-only-fullscreen" type="b">
+      <default>false</default>
+      <summary>Escape fullscreen only when fullscreen</summary>
+      <description>Restrict Escape handling to fullscreen windows.</description>
+    </key>
+
+    <!-- Gestures (§41.3) -->
+    <key name="gesture-enabled" type="b">
+      <default>true</default>
+      <summary>Enable gestures</summary>
+      <description>Master toggle for touchpad gestures.</description>
+    </key>
+    <key name="gesture-3-swipe-action" type="s">
+      <default>'switch-workspace'</default>
+      <summary>Three-finger horizontal action</summary>
+      <description>See GestureActionType.</description>
+    </key>
+    <key name="gesture-3-vertical-action" type="s">
+      <default>'toggle-overview'</default>
+      <summary>Three-finger vertical action</summary>
+      <description>See GestureActionType.</description>
+    </key>
+    <key name="gesture-4-swipe-action" type="s">
+      <default>'switch-workspace'</default>
+      <summary>Four-finger horizontal action</summary>
+      <description>See GestureActionType.</description>
+    </key>
+    <key name="gesture-4-vertical-action" type="s">
+      <default>'none'</default>
+      <summary>Four-finger vertical action</summary>
+      <description>See GestureActionType.</description>
+    </key>
+    <key name="gesture-pinch-action" type="s">
+      <default>'show-desktop'</default>
+      <summary>Pinch action</summary>
+      <description>See GestureActionType.</description>
+    </key>
+    <key name="gesture-sensitivity" type="i">
+      <default>50</default>
+      <summary>Gesture sensitivity</summary>
+      <description>0-100; higher triggers sooner.</description>
+    </key>
+
+    <!-- Keybindings -->
+    <key name="keybindings" type="as">
+      <default>[]</default>
+      <summary>Keybinding overrides</summary>
+      <description>Optional 'action=accelerator' overrides.</description>
+    </key>
+    <key name="kb-undo" type="s">
+      <default>'&lt;Super&gt;z'</default>
+      <summary>Undo</summary>
+      <description>Undo the last retile.</description>
+    </key>
+    <key name="kb-focus-next" type="s">
+      <default>'&lt;Super&gt;grave'</default>
+      <summary>Focus next</summary>
+      <description>Cycle focus between tiles.</description>
+    </key>
+    <key name="kb-focus-left" type="s">
+      <default>'&lt;Super&gt;Left'</default>
+      <summary>Focus left</summary>
+      <description>Focus the tile to the left.</description>
+    </key>
+    <key name="kb-focus-right" type="s">
+      <default>'&lt;Super&gt;Right'</default>
+      <summary>Focus right</summary>
+      <description>Focus the tile to the right.</description>
+    </key>
+    <key name="kb-focus-up" type="s">
+      <default>'&lt;Super&gt;Up'</default>
+      <summary>Focus up</summary>
+      <description>Focus the tile above.</description>
+    </key>
+    <key name="kb-focus-down" type="s">
+      <default>'&lt;Super&gt;Down'</default>
+      <summary>Focus down</summary>
+      <description>Focus the tile below.</description>
+    </key>
+    <key name="kb-toggle-float" type="s">
+      <default>'&lt;Super&gt;f'</default>
+      <summary>Toggle float</summary>
+      <description>Float or re-tile the focused window.</description>
+    </key>
+    <key name="kb-nudge-left" type="s">
+      <default>'&lt;Super&gt;shift+h'</default>
+      <summary>Nudge split left</summary>
+      <description>Move the shared edge left.</description>
+    </key>
+    <key name="kb-nudge-right" type="s">
+      <default>'&lt;Super&gt;shift+l'</default>
+      <summary>Nudge split right</summary>
+      <description>Move the shared edge right.</description>
+    </key>
+    <key name="kb-move-left" type="s">
+      <default>'&lt;Super&gt;shift+Left'</default>
+      <summary>Move tile left</summary>
+      <description>Swap with the sibling or move to the left monitor.</description>
+    </key>
+    <key name="kb-move-right" type="s">
+      <default>'&lt;Super&gt;shift+Right'</default>
+      <summary>Move tile right</summary>
+      <description>Swap with the sibling or move to the right monitor.</description>
+    </key>
+
+    <!-- Internal state -->
+    <key name="settings-version" type="i">
+      <default>0</default>
+      <summary>Settings schema version</summary>
+      <description>Used to run one-shot migrations.</description>
+    </key>
+    <key name="first-run-complete" type="b">
+      <default>false</default>
+      <summary>First run complete</summary>
+      <description>Set after the first-run notification.</description>
+    </key>
+    <key name="debug-inject-verify-failure" type="i">
+      <default>0</default>
+      <summary>Inject verify failures</summary>
+      <description>Debug-only; makes verification fail N times.</description>
+    </key>
+  </schema>
+</schemalist>
