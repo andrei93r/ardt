@@ -45,6 +45,21 @@ code changes, MINOR for features, PATCH for fixes.
   plan changes. Previously a window moved outside the drag path (or by the
   user after a missed signal) was never put back, leaving tiles overlapping
   and half the screen empty.
+- Every window on every screen and workspace is re-checked after any create,
+  close, move, resize, workspace or screen event, and corrected when it does
+  not match its plan. Window creation/destruction, mapping, focus, monitor
+  changes, workspace add/remove/count/switch and screen/work-area changes all
+  funnel into the same debounced reconcile pass.
+- Keybinding defaults no longer collide with GNOME's own bindings: focus is
+  `Super+Alt+{h,j,k,l}`, swap is `Super+Shift+{h,l}`, nudge split is
+  `Super+Ctrl+{h,l}`. The previous `Super+Shift+Left/Right` was shadowed by
+  GNOME's move-to-monitor action, so keyboard swap never fired.
+- User geometry changes are recognised by the mouse button being held, so the
+  tiler never mistakes its own applies (retiles, undo, follow) for user input.
+- Plan validation is work-area-relative, so a monitor with a top panel no
+  longer reports false out-of-bounds placements.
+- Agent suite gains A31 (keyboard swap), A32 (drag swap) and A33 (global
+  reconcile); 33 scenarios total.
 - The border hides during any workspace transition — keyboard or touchpad —
   by watching the focused actor's stage-space position (so a sliding workspace
   parent is detected), returning once it settles.

@@ -53,6 +53,7 @@ interface ExtraHandlers {
   InjectVerifyFailure(id: number, count: number): boolean;
   FocusDirection(direction: string): boolean;
   FocusCycle(): boolean;
+  MoveToward(direction: string): boolean;
   SpawnWindow(command: string): number;
   CloseWindow(id: number): boolean;
   BeginDrag(id: number): boolean;
@@ -629,6 +630,10 @@ export default class AdrtExtension extends Extension {
       },
       FocusCycle: () => {
         this.session.focusCycle();
+        return true;
+      },
+      MoveToward: (direction) => {
+        this.session.moveToward(direction);
         return true;
       },
       SpawnWindow: (command) => this.spawnWindow(command),

@@ -106,3 +106,13 @@ export function actorStagePosition(actor: any): [number, number] {
   const [x, y] = actor.get_transformed_position();
   return [x, y];
 }
+
+/**
+ * Whether the primary mouse button is currently held. A user move or resize
+ * always drags with the button down; our own applies never do, so this cleanly
+ * separates user geometry changes from compositor/extension ones.
+ */
+export function button1Pressed(): boolean {
+  const [, , modifiers] = global.get_pointer();
+  return (modifiers & Clutter.ModifierType.BUTTON1_MASK) !== 0;
+}

@@ -22,6 +22,8 @@ function intersect(a: { x: number; y: number; width: number; height: number }, b
 }
 
 export interface Bounds {
+  x?: number;
+  y?: number;
   width: number;
   height: number;
 }
@@ -37,6 +39,10 @@ export function checkPlan(
 ): InvariantViolation[] {
   const violations: InvariantViolation[] = [];
   const seen = new Set<number>();
+  const originX = bounds.x ?? 0;
+  const originY = bounds.y ?? 0;
+  const right = originX + bounds.width;
+  const bottom = originY + bounds.height;
 
   for (const placement of plan.placements) {
     const { surfaceId, rect } = placement;
@@ -50,10 +56,10 @@ export function checkPlan(
     }
 
     if (
-      rect.x < -TOLERANCE ||
-      rect.y < -TOLERANCE ||
-      rect.x + rect.width > bounds.width + TOLERANCE ||
-      rect.y + rect.height > bounds.height + TOLERANCE
+      rect.x < originX - TOLERANCE ||
+      rect.y < originY - TOLERANCE ||
+      rect.x + rect.width > right + TOLERANCE ||
+      rect.y + rect.height > bottom + TOLERANCE
     ) {
       violations.push({ kind: 'out-of-bounds', surfaceId, detail: `surface ${surfaceId} is outside the monitor` });
     }

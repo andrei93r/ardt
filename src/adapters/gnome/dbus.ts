@@ -68,6 +68,7 @@ const INTERFACE_XML = `
     <method name="InjectVerifyFailure"><arg type="u" direction="in"/><arg type="i" direction="in"/><arg type="b" direction="out"/></method>
     <method name="FocusDirection"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
     <method name="FocusCycle"><arg type="b" direction="out"/></method>
+    <method name="MoveToward"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
     <method name="MaximizeWindow"><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
     <method name="UnmaximizeWindow"><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
     <method name="ResetLayoutState"><arg type="b" direction="out"/></method>

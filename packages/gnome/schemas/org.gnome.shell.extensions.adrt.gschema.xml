@@ -273,22 +273,22 @@
       <description>Cycle focus between tiles.</description>
     </key>
     <key name="kb-focus-left" type="as">
-      <default>['&lt;Super&gt;Left']</default>
+      <default>['&lt;Super&gt;&lt;Alt&gt;h']</default>
       <summary>Focus left</summary>
       <description>Focus the tile to the left.</description>
     </key>
     <key name="kb-focus-right" type="as">
-      <default>['&lt;Super&gt;Right']</default>
+      <default>['&lt;Super&gt;&lt;Alt&gt;l']</default>
       <summary>Focus right</summary>
       <description>Focus the tile to the right.</description>
     </key>
     <key name="kb-focus-up" type="as">
-      <default>['&lt;Super&gt;Up']</default>
+      <default>['&lt;Super&gt;&lt;Alt&gt;k']</default>
       <summary>Focus up</summary>
       <description>Focus the tile above.</description>
     </key>
     <key name="kb-focus-down" type="as">
-      <default>['&lt;Super&gt;Down']</default>
+      <default>['&lt;Super&gt;&lt;Alt&gt;j']</default>
       <summary>Focus down</summary>
       <description>Focus the tile below.</description>
     </key>
@@ -298,22 +298,22 @@
       <description>Float or re-tile the focused window.</description>
     </key>
     <key name="kb-nudge-left" type="as">
-      <default>['&lt;Super&gt;shift+h']</default>
+      <default>['&lt;Super&gt;&lt;Control&gt;h']</default>
       <summary>Nudge split left</summary>
       <description>Move the shared edge left.</description>
     </key>
     <key name="kb-nudge-right" type="as">
-      <default>['&lt;Super&gt;shift+l']</default>
+      <default>['&lt;Super&gt;&lt;Control&gt;l']</default>
       <summary>Nudge split right</summary>
       <description>Move the shared edge right.</description>
     </key>
     <key name="kb-move-left" type="as">
-      <default>['&lt;Super&gt;shift+Left']</default>
+      <default>['&lt;Super&gt;&lt;Shift&gt;h']</default>
       <summary>Move tile left</summary>
       <description>Swap with the sibling or move to the left monitor.</description>
     </key>
     <key name="kb-move-right" type="as">
-      <default>['&lt;Super&gt;shift+Right']</default>
+      <default>['&lt;Super&gt;&lt;Shift&gt;l']</default>
       <summary>Move tile right</summary>
       <description>Swap with the sibling or move to the right monitor.</description>
     </key>

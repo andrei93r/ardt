@@ -51,6 +51,13 @@ describe('checkPlan', () => {
     expect(violations.some((v) => v.kind === 'below-min')).toBe(true);
   });
 
+  it('honours a non-zero bounds origin (work area offset)', () => {
+    const plan = { placements: [{ surfaceId: 1, rect: rect(8, 40, 1264, 752), layer: Layer.TILED, order: 0 }] };
+    expect(checkPlan(plan, { x: 0, y: 32, width: 1280, height: 768 })).toEqual([]);
+    const bad = { placements: [{ surfaceId: 1, rect: rect(8, 8, 1264, 752), layer: Layer.TILED, order: 0 }] };
+    expect(checkPlan(bad, { x: 0, y: 32, width: 1280, height: 768 }).some((v) => v.kind === 'out-of-bounds')).toBe(true);
+  });
+
   it('planIsValid mirrors checkPlan', () => {
     const plan = { placements: [{ surfaceId: 1, rect: rect(0, 0, 100, 100), layer: Layer.TILED, order: 0 }] };
     expect(planIsValid(plan, size(1920, 1080))).toBe(true);

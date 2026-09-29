@@ -9,7 +9,7 @@
 # the input seat. This script injects real key events with ydotool, so it must
 # run where Adrt is enabled and focused.
 #
-#   WARNING: it injects Super+Z, Super+Right and Super+f into your session.
+#   WARNING: it injects Super+Z, Super+Alt+l and Super+f into your session.
 #
 # Requirements:
 #   - Adrt enabled and running:  gnome-extensions info adrt@adrt.dev
@@ -69,7 +69,7 @@ if ! command -v ydotool >/dev/null 2>&1 || ! pgrep -x ydotoold >/dev/null 2>&1; 
   exit 2
 fi
 
-echo "This will inject Super+Z, Super+Right and Super+f into your session."
+echo "This will inject Super+Z, Super+Alt+l and Super+f into your session."
 echo
 
 # --- fixtures --------------------------------------------------------------
@@ -97,10 +97,10 @@ if [ "$before" = "$after" ]; then pass "A22 Super+Z restored the previous rects"
 adrt ActivateWindow "$A" >/dev/null
 sleep 1
 border_before="$(dump | python3 -c 'import json,sys; print(json.load(sys.stdin)["border"]["rect"])')"
-ydotool key 125:1 106:1 106:0 125:0
+ydotool key 125:1 56:1 38:1 38:0 56:0 125:0
 sleep 2
 border_after="$(dump | python3 -c 'import json,sys; print(json.load(sys.stdin)["border"]["rect"])')"
-if [ "$border_before" != "$border_after" ]; then pass "A23 Super+Right moved focus"; else fail "A23 Super+Right did not move focus"; fi
+if [ "$border_before" != "$border_after" ]; then pass "A23 Super+Alt+l moved focus"; else fail "A23 Super+Alt+l did not move focus"; fi
 
 # --- A24 float -------------------------------------------------------------
 adrt ActivateWindow "$A" >/dev/null

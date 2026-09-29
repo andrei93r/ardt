@@ -12,7 +12,7 @@ import Gio from 'gi://Gio';
 
 import type { HeuristicContext } from '../../core/classify.js';
 import { checkPlan } from '../../core/invariants.js';
-import { RetileScheduler, SignatureCache, planSignature } from '../../core/scheduler.js';
+import { SignatureCache, planSignature } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
 import { computePlans, pairKey, ratioKey, screenArea } from '../../core/tiler.js';
 import { Layer } from '../../core/types.js';
@@ -46,18 +46,21 @@ interface WindowSignal {
 
 /** Quiet period after the last user frame change before a drop is interpreted. */
 const ADJUST_SETTLE_MS = 180;
+/** Debounce before a global reconcile pass. */
+const RECONCILE_DEBOUNCE_MS = 60;
 
 export class WindowSession {
   readonly windows = new Map<number, TrackedWindow>();
   private readonly signals = new Map<number, WindowSignal[]>();
-  private readonly scheduler = new RetileScheduler();
   private readonly signatures = new SignatureCache();
   private readonly suppress = new Set<number>();
-  private retileSource: number | null = null;
+  private reconcileSource: number | null = null;
   private readonly timeoutSources = new Set<number>();
   /** Workspaces this extension created; empty ones are removed again (§16). */
   private readonly dynamicWorkspaces = new Set<number>();
   private reorderSignal = 0;
+  private displaySignals: number[] = [];
+  private managerSignals: number[] = [];
   private grabBeginSignal = 0;
   private grabEndSignal = 0;
   private dragging = false;
@@ -92,6 +95,19 @@ export class WindowSession {
     this.grabEndSignal = global.display.connect('grab-op-end', (_display: any, win: any, op: number) =>
       this.onGrabEnd(win, op),
     );
+    // Anything that can move, restack or re-parent a window triggers a
+    // debounced global reconcile pass.
+    this.displaySignals.push(
+      global.display.connect('window-entered-monitor', () => this.scheduleReconcile('window-monitor')),
+      global.display.connect('window-left-monitor', () => this.scheduleReconcile('window-monitor')),
+      global.display.connect('notify::focus-window', () => this.scheduleReconcile('focus')),
+    );
+    this.managerSignals.push(
+      global.workspace_manager.connect('active-workspace-changed', () => this.scheduleReconcile('workspace-active')),
+      global.workspace_manager.connect('workspace-added', () => this.scheduleReconcile('workspace-added')),
+      global.workspace_manager.connect('workspace-removed', () => this.scheduleReconcile('workspace-removed')),
+      global.workspace_manager.connect('notify::n-workspaces', () => this.scheduleReconcile('workspace-count')),
+    );
   }
 
   private scanBaseMs(): number {
@@ -115,6 +131,10 @@ export class WindowSession {
       global.display.disconnect(this.grabEndSignal);
       this.grabEndSignal = 0;
     }
+    for (const id of this.displaySignals) global.display.disconnect(id);
+    this.displaySignals = [];
+    for (const id of this.managerSignals) global.workspace_manager.disconnect(id);
+    this.managerSignals = [];
   }
 
   get isDragging(): boolean {
@@ -326,27 +346,44 @@ export class WindowSession {
     this.retileAll('settings');
   }
 
-  scheduleRetile(workspaceId: number, reason: string): void {
+  /**
+   * Every lifecycle, frame, workspace and screen event funnels through here:
+   * a debounced pass that re-checks *all* windows on *all* workspaces and
+   * screens against their plans and corrects any that drifted.
+   */
+  scheduleRetile(_workspaceId: number, reason: string): void {
+    this.scheduleReconcile(reason);
+  }
+
+  scheduleReconcile(reason: string): void {
     if (this.deps.isPaused()) return;
-    // Never reflow under the user's finger; grab-op-end re-tiles instead.
-    if (this.dragging) return;
-    if (!this.scheduler.schedule(`ws:${workspaceId}`)) return;
-    if (this.retileSource !== null) return;
-    this.retileSource = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-      this.retileSource = null;
-      for (const key of this.scheduler.take()) {
-        this.retile(Number(key.slice(3)), reason);
-      }
+    if (this.dragging || this.adjustId !== null) return;
+    if (this.reconcileSource !== null) return;
+    this.reconcileSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, RECONCILE_DEBOUNCE_MS, () => {
+      this.reconcileSource = null;
+      this.reconcileAll(reason);
       return GLib.SOURCE_REMOVE;
     });
   }
 
+  /** Check every workspace on every screen and correct anything out of place. */
+  reconcileAll(reason: string): void {
+    if (this.deps.isPaused() || this.dragging || this.adjustId !== null) return;
+    const count = global.workspace_manager.get_n_workspaces();
+    const seen = new Set<number>();
+    for (let index = 0; index < count; index++) {
+      seen.add(index);
+      this.retile(index, reason);
+    }
+    // A window can briefly report a workspace beyond the current count.
+    for (const tracked of this.windows.values()) {
+      if (!seen.has(tracked.surface.workspaceId)) this.retile(tracked.surface.workspaceId, reason);
+    }
+    this.deps.onStateChanged();
+  }
+
   retileAll(reason: string): void {
-    if (this.deps.isPaused()) return;
-    const workspaces = new Set<number>();
-    for (const tracked of this.windows.values()) workspaces.add(tracked.surface.workspaceId);
-    workspaces.add(this.deps.host.activeWorkspaceId());
-    for (const workspaceId of workspaces) this.retile(workspaceId, reason);
+    this.reconcileAll(reason);
   }
 
   /** §7.6: the user reordered workspaces; every index moved. */
@@ -399,7 +436,8 @@ export class WindowSession {
       if (violations.length > 0) {
         this.deps.history.log('error', { reason, workspaceId, violations });
       }
-      const key = `ws:${workspaceId}:${screen.index}`;
+      if (Date.now() < this.ignoreMismatchUntilMs) continue;
+    const key = `ws:${workspaceId}:${screen.index}`;
       const mismatch = this.planMismatch(plan);
       const changed = this.signatures.changed(key, planSignature(plan.placements));
       if (!mismatch && !changed) continue;
@@ -579,9 +617,9 @@ export class WindowSession {
     for (const id of this.signals.keys()) this.disconnectWindow(id);
     this.signals.clear();
     this.stopScan();
-    if (this.retileSource !== null) {
-      GLib.source_remove(this.retileSource);
-      this.retileSource = null;
+    if (this.reconcileSource !== null) {
+      GLib.source_remove(this.reconcileSource);
+      this.reconcileSource = null;
     }
     for (const id of this.timeoutSources) GLib.source_remove(id);
     this.timeoutSources.clear();
@@ -589,7 +627,6 @@ export class WindowSession {
       GLib.source_remove(this.adjustSource);
       this.adjustSource = null;
     }
-    this.scheduler.clearAll();
     this.windows.clear();
   }
 
@@ -780,7 +817,6 @@ export class WindowSession {
     for (const index of this.dynamicWorkspaces) shifted.add(index > workspaceId ? index - 1 : index);
     this.dynamicWorkspaces.clear();
     for (const index of shifted) this.dynamicWorkspaces.add(index);
-    this.scheduler.clear(`ws:${workspaceId}`);
     manager.remove_workspace(workspace, global.get_current_time());
     this.realignWorkspaces();
     this.signatures.clearAll();
@@ -835,6 +871,7 @@ export class WindowSession {
       tracked.surface.refresh();
       this.onMinimized(tracked);
     });
+    on('notify::mapped', () => this.onFlagSignal(tracked, true));
     on('notify::maximized-vertically', () => this.onMaximizeSignal(tracked));
     on('notify::maximized-horizontally', () => this.onMaximizeSignal(tracked));
     on('position-changed', () => this.onFrameSignal(tracked));
@@ -910,6 +947,8 @@ export class WindowSession {
   private isUserChange(tracked: TrackedWindow): boolean {
     const target = tracked.lastTarget;
     if (target === null) return false;
+    // A user move/resize drags with the button held; our own applies do not.
+    if (!compat.button1Pressed()) return false;
     if (this.deps.tiling.activeAnimations > 0) return false;
     if (Date.now() - this.deps.tiling.lastApplyAtMs < 250) return false;
     const frame = tracked.surface.frame;
@@ -1095,7 +1134,7 @@ export class WindowSession {
   memoryBounds(): { windows: number; sources: number; signals: number } {
     let signalCount = 0;
     for (const handlers of this.signals.values()) signalCount += handlers.length;
-    return { windows: this.windows.size, sources: this.scheduler.size + (this.retileSource !== null ? 1 : 0), signals: signalCount };
+    return { windows: this.windows.size, sources: this.reconcileSource !== null ? 1 : 0, signals: signalCount };
   }
 
   /** §21: retile timings for the perf event. */

@@ -10,14 +10,13 @@ scenarios in a nested GNOME Shell, and manual scenarios that need hardware
 npm run lint          # eslint src tests
 npm run build         # tsc
 npm run test:core     # Vitest, plain Node
-npm run test:agent    # 30 scenarios in a nested GNOME Shell
+npm run test:agent    # 33 scenarios in a nested GNOME Shell
 npm run test:all      # all of the above
 ```
 
 `scripts/agent-test.sh` starts `gnome-shell --devkit --wayland --headless`,
 installs the extension into an isolated `XDG_DATA_HOME`, enables it, and drives
 it through D-Bus. It requires no display, no touchpad and no human.
-
 ### Keybindings need the interactive session
 
 A22–A24 inject real key events with `ydotool`. A nested **headless** Shell does
@@ -65,6 +64,9 @@ those shortcuts.
 | A28 | Screen sharing   | `SimulateSessionMode('screen-sharing')`   |
 | A29 | Frame timing     | `trace-enabled`, assert history events    |
 | A30 | Memory bounds    | open/close repeatedly, assert bounds      |
+| A31 | Swap (keyboard)  | `MoveToward('right')`                     |
+| A32 | Swap (drag)      | `BeginDrag`, `MoveWindow`, `EndDrag`      |
+| A33 | Reconcile all    | move a window, assert every workspace coherent |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,
