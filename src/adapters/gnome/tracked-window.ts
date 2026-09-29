@@ -32,6 +32,8 @@ export class TrackedWindow {
   stubborn = false;
   cooldownUntilMs = 0;
   previousWorkspaceIdx: number | null = null;
+  /** Set once the first frame has been processed; signals before that are not user actions. */
+  ready = false;
   /** Set when the user moves this window; policies leave it alone for a while. */
   userMovedAtMs = 0;
   lastWorkspaceIdx = 0;

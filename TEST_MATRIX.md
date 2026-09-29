@@ -29,7 +29,7 @@ are covered. Coverage references the harnesses:
 | D13 | `reflow-keeps-edges` | true (fill), false (keep rect) | `tiler.computePlans` single |
 | D14 | New window at registration | plain, fully maximized (app default), third+ tileable | `session.onReady` |
 | D15 | User maximize | with sibling, alone | `session.onMaximizeSignal` |
-| D16 | User unmaximize | has previous workspace, no previous / lone, no previous / with pair (float) | `session.returnFromMaximize` |
+| D16 | User unmaximize | has previous workspace; no previous / lone (re-maximize); no previous / with pair (float over the pair, centred with a margin so the pair stays visible) | `session.returnFromMaximize` |
 | D17 | Minimize | only tileable on ws>0, otherwise | `session.onMinimized` |
 | D18 | Close | workspace empties, pair remains | `session.unregister`, `switchAwayIfEmpty` |
 | D19 | Workspace lifecycle | spawn (right of current), empty-dynamic reap, reorder, user-move grace | `moveToNewWorkspace`, `pruneEmptyDynamicWorkspaces`, `onWorkspacesReordered` |
@@ -37,7 +37,7 @@ are covered. Coverage references the harnesses:
 | D21 | Overview | closed, open | `onOverviewChanged` |
 | D22 | User gesture on a tile | inner-edge resize, outer-edge resize, move within half, move onto sibling (swap), move to other monitor | `session.beginDrag/adjustMode/interpretDrop` |
 | D23 | Suppression set (§23.1) | workspace-switch, drag, fullscreen, pause, sharing, overview — any subset × focus present/absent | `core/border.ts` |
-| D24 | Focus | none, tileable, non-tileable/modal; next/prev by direction/cycle | `onFocusChanged`, `focusDirection` |
+| D24 | Focus | none, tileable, non-tileable/modal; next/prev by direction/cycle; no window in the requested direction falls back to the other side, else nothing | `onFocusChanged`, `focusDirection` |
 | D25 | Float | toggle on, toggle off, persisted (opt-in), restored on launch | `toggleFloat`, `FloatStore` |
 | D26 | Adaptation | disabled; refusal 1/2/3; trusted ≥2; stubborn 3-consecutive → cooldown; skipAnimation at 3 | `adapt.ts` |
 | D27 | Gesture | enabled/disabled × kind (3-h/3-v/4-h/4-v/pinch-in/pinch-out) × (begin/update/end/cancel) × above/below threshold × overlap | `core/gestures.ts` |
@@ -134,7 +134,7 @@ Rows × columns = the combination to test; reference = coverage.
 | **D10 swap** | A08 | — | — | — | A32 | — | — | — | A32 | — |
 | **D11 rule** | C | C | — | — | — | — | — | — | — | — |
 | **D14 register** | A02/A34 | — | — | — | — | A34 | — | — | — | — |
-| **D16 unmaximize** | A05 | — | — | — | — | A05 | — | — | — | — |
+| **D16 unmaximize** | A05/A40/S13 | — | — | — | — | A05 | — | — | A40 | — |
 | **D17 minimize** | A35/S09 | — | — | — | — | — | — | — | — | — |
 | **D19 workspace** | A02/S03 | — | — | — | — | A04 | — | — | — | — |
 | **D22 drag** | A07/S04 | — | — | A32 | — | — | — | — | — | — |
@@ -171,6 +171,7 @@ Rows × columns = the combination to test; reference = coverage.
 | G22 | `heuristic-modal-detect` on/off at integration level | `C` covered; add `A` |
 | G23 | Close ghost for an override-redirect popup (no ghost) | `A36` covers dialog; add a popup |
 | G24 | `max-frame-interval-ms` / frame-timing budget | `A29` partial |
+| G25 | Unmaximize onto a **full pair**: float rect must be strictly smaller than the work area and must not fully cover every tiled window | covered by `A40` / `S13` |
 
 ---
 

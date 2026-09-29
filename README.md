@@ -1661,7 +1661,7 @@ would implement live in `src/platform/`.
 ```bash
 npm run lint            # eslint src tests
 npm run test:core       # core unit tests
-npm run test:agent      # 39 scenarios in a nested GNOME Shell
+npm run test:agent      # 44 scenarios in a nested GNOME Shell
 npm run test:all        # lint + build + core + agent
 ```
 
@@ -1690,7 +1690,7 @@ src/core/         pure decision logic (testable in Node)
 src/platform/     compositor-agnostic interfaces
 src/adapters/gnome/ GNOME Shell 50+ adapter (GJS, St, Meta)
 tests/core/       Vitest unit tests
-tests/agent/      39 autonomous scenarios
+tests/agent/      44 autonomous scenarios
 scripts/          build, install, dev, nested-shell, agent-test, package
 packages/gnome/   metadata.json, gschema, stylesheet
 ```

@@ -10,7 +10,7 @@ scenarios in a nested GNOME Shell, and manual scenarios that need hardware
 npm run lint          # eslint src tests
 npm run build         # tsc
 npm run test:core     # Vitest, plain Node
-npm run test:agent    # 39 scenarios in a nested GNOME Shell
+npm run test:agent    # 44 scenarios in a nested GNOME Shell
 npm run test:all      # all of the above
 ```
 
@@ -87,6 +87,11 @@ those shortcuts.
 | A37 | Overview suspend | tiling frozen while the overview is open, resumes on close |
 | A38 | Indicator style  | border uses the system accent and configured width |
 | A39 | Keybinding conflicts | no Adrt accelerator collides with a GNOME binding |
+| A40 | Unmaximize onto a pair | floats on top, centred, pair still visible |
+| A41 | Same-app second window | two Files windows split, not stacked |
+| A42 | Dialog does not disturb pair | transient stays non-tiled, pair intact |
+| A43 | Close last window | switch away and remove the workspace |
+| A44 | Focus direction fallback | no window that way focuses the other side |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

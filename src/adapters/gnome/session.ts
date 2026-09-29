@@ -311,6 +311,7 @@ export class WindowSession {
       this.deferReady(tracked, attempt + 1);
       return;
     }
+    tracked.ready = true;
     // §9.3 / §19.1: an app the user opted to keep floating stays floating.
     if (this.deps.floats.has(tracked.surface.appId)) {
       tracked.surface.setFloating(true);
@@ -535,18 +536,18 @@ export class WindowSession {
   }
 
   /**
-   * §7.2: when a second window joins a workspace whose window was maximized by
-   * the lone-maximize policy (never moved to its own workspace), unmaximize it
-   * so the pair can tile.
+   * §7.2: with two or more tileable windows on a workspace, a maximized one
+   * must be unmaximized so the pair can tile. This covers apps that open
+   * maximized (Files) and windows left maximized side by side.
    */
   private unmaximizeStaleLone(workspaceId: number): boolean {
     const tileables = this.tileables(workspaceId);
     if (tileables.length < 2) return false;
-    const stale = tileables.filter((t) => compat.isMaximized(t.win) && t.previousWorkspaceIdx === null);
-    if (stale.length === 0) return false;
+    const maximized = tileables.filter((t) => compat.isMaximized(t.win));
+    if (maximized.length === 0) return false;
     this.deps.tiling.noteSelfApply();
-    for (const tracked of stale) this.deps.host.unmaximize(tracked.id);
-    this.deps.history.log('tile', { reason: 'lone-unmaximize', workspaceId });
+    for (const tracked of maximized) this.deps.host.unmaximize(tracked.id);
+    this.deps.history.log('tile', { reason: 'lone-unmaximize', workspaceId, count: maximized.length });
     return true;
   }
 
@@ -813,11 +814,29 @@ export class WindowSession {
     // The incoming window is excluded: only two *others* make it a pair.
     if (this.tileables(previous).filter((t) => t.id !== tracked.id).length >= 2) {
       tracked.surface.setFloating(true);
+      this.deps.tiling.noteSelfApply();
       this.deps.host.applyLayer(tracked.id, Layer.FLOATING, 0);
+      // Keep it on top but do not hide the pair behind it: centre it with a
+      // margin so the tiled windows stay visible.
+      const screen = this.screenFor(tracked.surface.screenId);
+      if (screen !== null) {
+        const area = screenArea(screen);
+        const margin = Math.max(24, Math.round(Math.min(area.width, area.height) * 0.12));
+        const width = Math.max(1, area.width - 2 * margin);
+        const height = Math.max(1, area.height - 2 * margin);
+        this.deps.tiling.applyFrame(
+          tracked,
+          { x: area.x + Math.round((area.width - width) / 2), y: area.y + Math.round((area.height - height) / 2), width, height },
+          screen,
+          false,
+          'float-over-pair',
+          0,
+        );
+      }
     }
     this.deps.history.log('ws_removed', { id: tracked.id, from: current, to: previous, reason: 'unmaximize' });
     this.signatures.clearAll();
-    this.removeIfEmptyDynamic(current);
+    this.schedulePrune();
     this.scheduleRetile(previous, 'unmaximize-return');
   }
 
@@ -839,41 +858,51 @@ export class WindowSession {
       this.deps.history.log('new_ws', { id: tracked.id, workspaceId: workspaceId - 1, reason: 'minimize' });
       // Follow the window. The empty workspace it left is pruned safely later.
       this.activateWorkspace(workspaceId - 1);
+      this.schedulePrune();
     }
     this.scheduleRetile(workspaceId, 'minimize');
   }
 
   /**
-   * §16: reap empty dynamic workspaces we created. Runs on the scan tick, when
-   * no user action is in flight, and never removes the active workspace.
+   * §16: reap empty workspaces. Any workspace (ours or the user's) that has no
+   * tracked windows is removed once the user is not on it, keeping at least
+   * one. Runs on the scan tick and shortly after a close/minimize/move.
    */
-  private pruneEmptyDynamicWorkspaces(): void {
+  private pruneEmptyWorkspaces(): void {
     const manager = global.workspace_manager;
-    const active = manager.get_active_workspace_index();
     if (manager.get_n_workspaces() <= 1) return;
-    for (const workspaceId of [...this.dynamicWorkspaces]) {
-      if (workspaceId === active) continue;
-      const workspace = manager.get_workspace_by_index(workspaceId);
-      if (workspace === null) {
-        this.dynamicWorkspaces.delete(workspaceId);
-        continue;
-      }
+    let active = manager.get_active_workspace_index();
+    let changed = false;
+    for (let index = manager.get_n_workspaces() - 1; index >= 0; index--) {
+      if (manager.get_n_workspaces() <= 1) break;
+      if (index === active) continue;
+      const workspace = manager.get_workspace_by_index(index);
+      if (workspace === null) continue;
       const remaining = workspace.list_windows().filter((win: any) => this.windows.has(win.get_id()));
       if (remaining.length > 0) continue;
-      this.dynamicWorkspaces.delete(workspaceId);
+
+      this.dynamicWorkspaces.delete(index);
       const shifted = new Set<number>();
-      for (const index of this.dynamicWorkspaces) shifted.add(index > workspaceId ? index - 1 : index);
+      for (const i of this.dynamicWorkspaces) shifted.add(i > index ? i - 1 : i);
       this.dynamicWorkspaces.clear();
-      for (const index of shifted) this.dynamicWorkspaces.add(index);
+      for (const i of shifted) this.dynamicWorkspaces.add(i);
       manager.remove_workspace(workspace, global.get_current_time());
+      if (index < active) active -= 1;
+      changed = true;
+      this.deps.history.log('ws_removed', { workspaceId: index, reason: 'pruned' });
+    }
+    if (changed) {
       this.realignWorkspaces();
       this.signatures.clearAll();
-      this.deps.history.log('ws_removed', { workspaceId, reason: 'pruned' });
-      return;
     }
   }
 
-  /** §7.5 close: leave an empty workspace, removing dynamic ones (§16). */
+  /** Reap empty workspaces shortly after an action, once state has settled. */
+  private schedulePrune(): void {
+    this.addTimeout(300, () => this.pruneEmptyWorkspaces());
+  }
+
+  /** §7.5 close: leave an empty workspace, then reap it (§16). */
   private switchAwayIfEmpty(workspaceId: number): void {
     const manager = global.workspace_manager;
     if (manager.get_n_workspaces() <= 1) return;
@@ -882,37 +911,12 @@ export class WindowSession {
     const remaining = workspace.list_windows().filter((win: any) => this.windows.has(win.get_id()));
     if (remaining.length > 0) return;
 
-    if (this.removeIfEmptyDynamic(workspaceId)) return;
-
-    if (manager.get_active_workspace_index() !== workspaceId) return;
-    const next = workspaceId + 1 < manager.get_n_workspaces() ? workspaceId + 1 : Math.max(0, workspaceId - 1);
-    this.deps.history.log('ws_switch_empty', { from: workspaceId, to: next });
-    this.activateWorkspace(next);
-  }
-
-  /** §16: an empty workspace we created is removed again. */
-  private removeIfEmptyDynamic(workspaceId: number): boolean {
-    if (!this.dynamicWorkspaces.has(workspaceId)) return false;
-    const manager = global.workspace_manager;
-    if (manager.get_n_workspaces() <= 1) return false;
-    // Never remove the workspace the user is on; a periodic prune handles it
-    // once they have moved away (removing it live can bounce into the overview).
-    if (manager.get_active_workspace_index() === workspaceId) return false;
-    const workspace = manager.get_workspace_by_index(workspaceId);
-    if (workspace === null) return false;
-    const remaining = workspace.list_windows().filter((win: any) => this.windows.has(win.get_id()));
-    if (remaining.length > 0) return false;
-
-    this.dynamicWorkspaces.delete(workspaceId);
-    const shifted = new Set<number>();
-    for (const index of this.dynamicWorkspaces) shifted.add(index > workspaceId ? index - 1 : index);
-    this.dynamicWorkspaces.clear();
-    for (const index of shifted) this.dynamicWorkspaces.add(index);
-    manager.remove_workspace(workspace, global.get_current_time());
-    this.realignWorkspaces();
-    this.signatures.clearAll();
-    this.deps.history.log('ws_removed', { workspaceId, reason: 'dynamic-empty' });
-    return true;
+    if (manager.get_active_workspace_index() === workspaceId) {
+      const next = workspaceId + 1 < manager.get_n_workspaces() ? workspaceId + 1 : Math.max(0, workspaceId - 1);
+      this.deps.history.log('ws_switch_empty', { from: workspaceId, to: next });
+      this.activateWorkspace(next);
+    }
+    this.schedulePrune();
   }
 
   /** §14 move to an adjacent monitor when there is no sibling in that direction. */
@@ -1158,6 +1162,7 @@ export class WindowSession {
   }
 
   private onMaximizeSignal(tracked: TrackedWindow): void {
+    if (!tracked.ready) return;
     if (this.suppress.has(tracked.id)) return;
     tracked.surface.refresh();
     const maximized = compat.isMaximized(tracked.win);
@@ -1172,6 +1177,7 @@ export class WindowSession {
   }
 
   private onWorkspaceSignal(tracked: TrackedWindow): void {
+    if (!tracked.ready) return;
     if (this.suppress.has(tracked.id)) return;
     const workspace = tracked.win.get_workspace();
     if (workspace === null) return;
@@ -1229,7 +1235,7 @@ export class WindowSession {
     }
     this.deps.adaptation.prune();
     this.deps.adaptation.save();
-    this.pruneEmptyDynamicWorkspaces();
+    this.pruneEmptyWorkspaces();
     this.retileAll('scan');
     this.lastReconcileMs = (GLib.get_monotonic_time() - startedUs) / 1000;
     this.scanPerfCounter += 1;
@@ -1266,10 +1272,18 @@ export class WindowSession {
     return pairKey(a, b);
   }
 
-  /** §14 focus by direction, closest by centre. */
+  /** §14 focus by direction, closest by centre; falls back to the other axis side. */
   focusDirection(direction: string): void {
     const current = this.focused();
     if (current === null) return;
+    if (this.focusClosest(current, direction)) return;
+    // Nothing in that direction: try the opposite one, otherwise do nothing.
+    const opposite = direction === 'left' ? 'right' : direction === 'right' ? 'left' : direction === 'up' ? 'down' : 'up';
+    this.focusClosest(current, opposite);
+  }
+
+  /** Focus the closest tile in `direction`; returns whether one was found. */
+  private focusClosest(current: TrackedWindow, direction: string): boolean {
     const peers = this.tileables(current.surface.workspaceId).filter((t) => t.id !== current.id);
     const originX = current.surface.frame.x + current.surface.frame.width / 2;
     const originY = current.surface.frame.y + current.surface.frame.height / 2;
@@ -1290,7 +1304,9 @@ export class WindowSession {
         best = peer;
       }
     }
-    if (best !== null) this.focus(best.id);
+    if (best === null) return false;
+    this.focus(best.id);
+    return true;
   }
 }
 
