@@ -12,7 +12,7 @@ import Gio from 'gi://Gio';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
-import { notify, overview, sessionMode, wm } from 'resource:///org/gnome/shell/ui/main.js';
+import { layoutManager, notify, overview, sessionMode, wm } from 'resource:///org/gnome/shell/ui/main.js';
 
 import type { AdaptationRecord, Bundle, ImportMode } from '../../core/config.js';
 import { BUNDLE_FORMAT, BUNDLE_VERSION, mergeAdaptations, normalizeBundle, serializeBundle } from '../../core/config.js';
@@ -85,7 +85,10 @@ export default class AdrtExtension extends Extension {
 
   private sessionModeId = 0;
   private overviewSignals: number[] = [];
+  private workspaceActorSignals: { actor: any; id: number }[] = [];
+  private layoutSignals: number[] = [];
   private motionSource: number | null = null;
+  private motionActor: any = null;
   private motionLastX = Number.NaN;
   private motionLastY = Number.NaN;
   private motionStable = 0;
@@ -175,6 +178,9 @@ export default class AdrtExtension extends Extension {
     this.sessionModeId = sessionMode.connect('notify::current-mode', () => this.applySessionMode(this.currentMode()));
     this.overviewSignals.push(overview.connect('showing', () => this.onOverviewChanged(true)));
     this.overviewSignals.push(overview.connect('hidden', () => this.onOverviewChanged(false)));
+    this.refreshWorkspaceActors();
+    this.layoutSignals.push(global.workspace_manager.connect('workspace-added', () => this.refreshWorkspaceActors()));
+    this.layoutSignals.push(global.workspace_manager.connect('workspace-removed', () => this.refreshWorkspaceActors()));
     this.applySessionMode(this.currentMode(), true);
     this.registerKeybindings();
     this.session.setScanning(true);
@@ -193,6 +199,10 @@ export default class AdrtExtension extends Extension {
     }
     for (const id of this.overviewSignals) overview.disconnect(id);
     this.overviewSignals = [];
+    for (const entry of this.workspaceActorSignals) entry.actor.disconnect(entry.id);
+    this.workspaceActorSignals = [];
+    for (const id of this.layoutSignals) global.workspace_manager.disconnect(id);
+    this.layoutSignals = [];
     this.unregisterKeybindings();
     for (const unsubscribe of this.settingWatchers) unsubscribe();
     this.settingWatchers = [];
@@ -310,25 +320,24 @@ export default class AdrtExtension extends Extension {
   }
 
   private onMotionTick(): boolean {
-    // No transition can be in flight while paused, in the overview or dragging;
-    // release any stale suppression so the border is not stuck hidden.
-    if (this.isPaused() || overview.visible || this.session.isDragging) {
+    if (this.isPaused()) {
       this.stopMotionWatch();
-      if (this.border.isSuppressed('workspace-switch')) {
-        this.border.unsuppress('workspace-switch');
-        this.syncIndicator();
-      }
       return GLib.SOURCE_REMOVE;
     }
+    // Remember the last window actor so a transient focus loss (mid-switch)
+    // does not blind the watcher.
     const focused = this.session.focused();
-    if (focused === null) {
+    if (focused !== null) {
+      const actor = compat.compositorActor(focused.win);
+      if (actor !== null) this.motionActor = actor;
+    }
+    const actor = this.motionActor;
+    if (actor === null || actor === undefined) {
       this.stopMotionWatch();
       return GLib.SOURCE_REMOVE;
     }
-    const actor = focused.win.get_compositor_private();
-    if (actor === null) return GLib.SOURCE_CONTINUE;
 
-    // Stage-space, so a sliding workspace (moving parent actor) is detected too.
+    // Stage-space, so a sliding workspace (moving parent actor) is detected.
     const [x, y] = compat.actorStagePosition(actor);
     // Movement we caused ourselves is not a transition.
     if (this.animator.activeCount > 0 || Date.now() - this.session.perf().lastApplyAtMs < MOTION_SELF_MS) {
@@ -369,6 +378,30 @@ export default class AdrtExtension extends Extension {
     } else {
       this.indicator.hide();
     }
+  }
+
+  /**
+   * Workspace actors translate during a workspace switch — keyboard or
+   * touchpad gesture — and never move when we tile a window. Watching their
+   * position is therefore a precise, focus-independent transition signal.
+   */
+  private refreshWorkspaceActors(): void {
+    for (const entry of this.workspaceActorSignals) entry.actor.disconnect(entry.id);
+    this.workspaceActorSignals = [];
+    const workspaces = (layoutManager as any)._workspaces;
+    if (!Array.isArray(workspaces)) return;
+    for (const actor of workspaces) {
+      if (actor === null || actor === undefined) continue;
+      this.workspaceActorSignals.push({ actor, id: actor.connect('notify::x', () => this.onWorkspaceActorMoved()) });
+      this.workspaceActorSignals.push({ actor, id: actor.connect('notify::y', () => this.onWorkspaceActorMoved()) });
+    }
+  }
+
+  private onWorkspaceActorMoved(): void {
+    if (this.isPaused()) return;
+    this.border.suppress('workspace-switch');
+    this.startMotionWatch();
+    this.syncIndicator();
   }
 
   /** §23: chrome must not show over the overview or the app grid. */

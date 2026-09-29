@@ -61,6 +61,9 @@ code changes, MINOR for features, PATCH for fixes.
   view to follow it, and removes the workspace it left.
 - Tiling is suspended while the overview is open and resumed with a single
   pass on close, which removes the reconcile churn that could stall the Shell.
+- The border's workspace-switch suppression is driven by the workspace actors'
+  positions (they move only during a switch), so it is focus-independent and
+  fires for touchpad gestures as well as keyboard switches.
 - Keybinding defaults no longer collide with GNOME's own bindings: focus is
   `Super+Alt+{h,j,k,l}`, swap is `Super+Shift+{h,l}`, nudge split is
   `Super+Ctrl+{h,l}`. The previous `Super+Shift+Left/Right` was shadowed by
