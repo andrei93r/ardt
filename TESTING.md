@@ -10,7 +10,7 @@ scenarios in a nested GNOME Shell, and manual scenarios that need hardware
 npm run lint          # eslint src tests
 npm run build         # tsc
 npm run test:core     # Vitest, plain Node
-npm run test:agent    # 44 scenarios in a nested GNOME Shell
+npm run test:agent    # 46 scenarios in a nested GNOME Shell
 npm run test:all      # all of the above
 ```
 
@@ -92,6 +92,7 @@ those shortcuts.
 | A42 | Dialog does not disturb pair | transient stays non-tiled, pair intact |
 | A43 | Close last window | switch away and remove the workspace |
 | A44 | Focus direction fallback | no window that way focuses the other side |
+| A45 | Workspace model | maximize → right, finish → left, reap |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

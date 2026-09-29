@@ -29,10 +29,10 @@ adrt CloseWindow "$third" >/dev/null
 deadline=$((SECONDS + 12))
 switched=0
 while [ "$SECONDS" -lt "$deadline" ]; do
-  [ "$(state_expr 'd["activeWorkspace"]')" != "$third_ws" ] && { switched=1; break; }
+  [ "$(state_expr 'd["activeWorkspace"]')" = "$((third_ws - 1))" ] && { switched=1; break; }
   sleep 0.5
 done
-if [ "$switched" = "1" ]; then pass "the view switched away from the emptied workspace"; else fail "the view stayed on the emptied workspace"; fi
+if [ "$switched" = "1" ]; then pass "the view switched to the left of the emptied workspace"; else fail "the view did not move left (active $(state_expr 'd["activeWorkspace"]'))"; fi
 
 deadline=$((SECONDS + 20))
 while [ "$SECONDS" -lt "$deadline" ]; do

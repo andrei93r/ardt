@@ -32,7 +32,7 @@ are covered. Coverage references the harnesses:
 | D16 | User unmaximize | has previous workspace; no previous / lone (re-maximize); no previous / with pair (float over the pair, centred with a margin so the pair stays visible) | `session.returnFromMaximize` |
 | D17 | Minimize | only tileable on ws>0, otherwise | `session.onMinimized` |
 | D18 | Close | workspace empties, pair remains | `session.unregister`, `switchAwayIfEmpty` |
-| D19 | Workspace lifecycle | spawn (right of current), empty-dynamic reap, reorder, user-move grace | `moveToNewWorkspace`, `pruneEmptyDynamicWorkspaces`, `onWorkspacesReordered` |
+| D19 | Workspace lifecycle | spawn (right of current), any-empty reap, reorder, user-move grace; "done" returns the view left | `moveToNewWorkspace`, `pruneEmptyDynamicWorkspaces`, `onWorkspacesReordered` |
 | D20 | Session mode | user, unlock-dialog, screen-sharing | `core/session.ts` |
 | D21 | Overview | closed, open | `onOverviewChanged` |
 | D22 | User gesture on a tile | inner-edge resize, outer-edge resize, move within half, move onto sibling (swap), move to other monitor | `session.beginDrag/adjustMode/interpretDrop` |

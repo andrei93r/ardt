@@ -25,14 +25,14 @@ echo "closing $third on ws$third_ws (workspaces=$before)"
 
 close_window "$third"
 
-# The user must be switched away from the emptied workspace...
+# The user must be switched to the left of the emptied workspace...
 if wait_for 12 bash -c "
-  d=\$(bash '$NESTED' dbus DumpState | python3 '$PARSE' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[\"activeWorkspace\"])')
-  [ \"\$d\" != '$third_ws' ]
+  d=\$(bash '$NESTED' dbus DumpState | python3 '$PARSE' | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"activeWorkspace\"])')
+  [ \"\$d\" = '$((third_ws - 1))' ]
 "; then
-  pass "the view switched away from the emptied workspace"
+  pass "the view switched to the left of the emptied workspace"
 else
-  fail "the view stayed on the emptied workspace"
+  fail "the view did not move left (active $(state_expr 'd["activeWorkspace"]'))"
 fi
 
 # ...and the empty workspace must be removed.

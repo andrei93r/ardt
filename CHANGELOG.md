@@ -57,6 +57,9 @@ code changes, MINOR for features, PATCH for fixes.
 - An app that opens maximized (e.g. Files/Nautilus) is tiled with its siblings
   instead of being exiled; only a user-initiated maximize gets its own
   workspace.
+- Workspace model: new space is created to the right and a maximized window
+  gets its own workspace there; finishing (close/unmaximize/minimize) returns
+  the view to the left.
 - Focus by direction falls back to the opposite side when there is no window
   in the requested direction (and does nothing with no neighbour at all).
 - Every empty workspace is reaped (not only ones Adrt created), never while

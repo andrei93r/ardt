@@ -912,9 +912,15 @@ export class WindowSession {
     if (remaining.length > 0) return;
 
     if (manager.get_active_workspace_index() === workspaceId) {
-      const next = workspaceId + 1 < manager.get_n_workspaces() ? workspaceId + 1 : Math.max(0, workspaceId - 1);
-      this.deps.history.log('ws_switch_empty', { from: workspaceId, to: next });
-      this.activateWorkspace(next);
+      // "Done" takes you back to the left; only the leftmost workspace falls
+      // forward to the right.
+      const previous = workspaceId - 1;
+      const next = workspaceId + 1 < manager.get_n_workspaces() ? workspaceId + 1 : -1;
+      const target = previous >= 0 ? previous : next;
+      if (target >= 0) {
+        this.deps.history.log('ws_switch_empty', { from: workspaceId, to: target });
+        this.activateWorkspace(target);
+      }
     }
     this.schedulePrune();
   }
