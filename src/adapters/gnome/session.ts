@@ -16,7 +16,7 @@ import { RetileScheduler, SignatureCache, planSignature } from '../../core/sched
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
 import { computePlans, pairKey, ratioKey, screenArea } from '../../core/tiler.js';
 import { Layer } from '../../core/types.js';
-import type { Rect, Screen } from '../../core/types.js';
+import type { Rect, Screen, TilePlan } from '../../core/types.js';
 import type { AdaptationStore, FloatStore } from './adapt.js';
 import * as compat from './compat.js';
 import type { GnomeHost } from './host.js';
@@ -65,6 +65,8 @@ export class WindowSession {
   private dragStartRect: Rect | null = null;
   private adjustId: number | null = null;
   private adjustSource: number | null = null;
+  /** While set, plan-mismatch re-applies are suppressed (e.g. right after Undo). */
+  private ignoreMismatchUntilMs = 0;
   private scanPerfCounter = 0;
   private lastReconcileMs = 0;
   private lastApplyMs = 0;
@@ -398,7 +400,9 @@ export class WindowSession {
         this.deps.history.log('error', { reason, workspaceId, violations });
       }
       const key = `ws:${workspaceId}:${screen.index}`;
-      if (!this.signatures.changed(key, planSignature(plan.placements))) continue;
+      const mismatch = this.planMismatch(plan);
+      const changed = this.signatures.changed(key, planSignature(plan.placements));
+      if (!mismatch && !changed) continue;
       this.deps.history.log('tile', {
         reason,
         workspaceId,
@@ -415,6 +419,36 @@ export class WindowSession {
       }
     }
     this.deps.onStateChanged();
+  }
+
+  /**
+   * The plan is stale when a window no longer sits where the plan puts it,
+   * even if the plan's signature is unchanged. Without this, a window moved by
+   * the user (or anything outside our drag handling) is never put back.
+   */
+  private planMismatch(plan: TilePlan): boolean {
+    // An explicit Undo restores rects that deliberately are not the plan.
+    if (Date.now() < this.ignoreMismatchUntilMs) return false;
+    // Our own applies are still landing: give them a moment.
+    if (this.deps.tiling.activeAnimations > 0) return false;
+    if (Date.now() - this.deps.tiling.lastApplyAtMs < 300) return false;
+    for (const placement of plan.placements) {
+      const tracked = this.windows.get(placement.surfaceId);
+      if (tracked === undefined) return true;
+      // A window that demonstrably refuses geometry is not "stale".
+      if (tracked.stubborn) continue;
+      tracked.surface.refreshFrame();
+      const rect = tracked.surface.frame;
+      if (
+        Math.abs(rect.x - placement.rect.x) > 2 ||
+        Math.abs(rect.y - placement.rect.y) > 2 ||
+        Math.abs(rect.width - placement.rect.width) > 2 ||
+        Math.abs(rect.height - placement.rect.height) > 2
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   tileables(workspaceId: number): TrackedWindow[] {
@@ -523,6 +557,8 @@ export class WindowSession {
       this.deps.tiling.applyFrame(tracked, item.rect, this.screenFor(tracked.surface.screenId) ?? fallbackScreen(), false, 'undo', 0);
     }
     this.deps.history.log('undo', { workspaceId: entry.workspaceId, windows: entry.rects.length });
+    // Do not immediately re-tile over the restored rects.
+    this.ignoreMismatchUntilMs = Date.now() + 4000;
     return true;
   }
 

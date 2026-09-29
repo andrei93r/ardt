@@ -41,6 +41,10 @@ code changes, MINOR for features, PATCH for fixes.
 - Resizing a tile is detected from frame changes, not just compositor grabs,
   so client-side (CSD) resizes work: the sibling follows live and the ratio
   persists instead of snapping back.
+- A plan is re-applied when a window no longer matches it, not only when the
+  plan changes. Previously a window moved outside the drag path (or by the
+  user after a missed signal) was never put back, leaving tiles overlapping
+  and half the screen empty.
 - The border hides during any workspace transition — keyboard or touchpad —
   by watching the focused actor's stage-space position (so a sliding workspace
   parent is detected), returning once it settles.
