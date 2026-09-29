@@ -16,6 +16,7 @@ EXT_DIR="$STATE/data/gnome-shell/extensions/$UUID"
 BUS_FILE="$STATE/bus"
 PID_FILE="$STATE/shell.pid"
 LOG_FILE="$STATE/shell.log"
+WAYLAND_DISPLAY_NAME="${ADRT_WAYLAND_DISPLAY:-wayland-adrt}"
 
 nested_env() {
   export XDG_DATA_HOME="$STATE/data"
@@ -84,6 +85,7 @@ cmd_start() {
   rm -f "$BUS_FILE" "$PID_FILE"
 
   STATE="$STATE" BUS_FILE="$BUS_FILE" PID_FILE="$PID_FILE" LOG_FILE="$LOG_FILE" \
+    WAYLAND_DISPLAY_NAME="$WAYLAND_DISPLAY_NAME" \
     dbus-run-session -- bash -c '
       set -u
       cd "'"$ROOT"'"
@@ -97,9 +99,9 @@ cmd_start() {
       export XDG_SESSION_TYPE=wayland
       export XDG_CURRENT_DESKTOP=GNOME
       export XDG_SESSION_ID=adrt-agent
-      export WAYLAND_DISPLAY=wayland-adrt
+      export WAYLAND_DISPLAY="$WAYLAND_DISPLAY_NAME"
       exec gnome-shell --devkit --wayland --headless --no-x11 \
-        --wayland-display=wayland-adrt \
+        --wayland-display="$WAYLAND_DISPLAY_NAME" \
         --virtual-monitor 1280x800 > "$LOG_FILE" 2>&1
     ' >/dev/null 2>&1 &
   disown || true
