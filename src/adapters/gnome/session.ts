@@ -247,7 +247,7 @@ export class WindowSession {
       if (tileables.some((t) => compat.isMaximized(t.win))) continue;
       const startedUs = GLib.get_monotonic_time();
       const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, this.tilerConfig());
-      const violations = checkPlan(plan, screen.geometry);
+      const violations = checkPlan(plan, screen.workArea ?? screen.geometry);
       if (violations.length > 0) {
         this.deps.history.log('error', { reason, workspaceId, violations });
       }

@@ -74,6 +74,7 @@ export default class AdrtExtension extends Extension {
   private sessionMachine = new SessionMachine();
 
   private sessionModeId = 0;
+  private overviewSignals: number[] = [];
   private switchPollId: number | null = null;
   private switchPollStartedMs = 0;
   private settingWatchers: (() => void)[] = [];
@@ -159,6 +160,8 @@ export default class AdrtExtension extends Extension {
     }
 
     this.sessionModeId = sessionMode.connect('notify::current-mode', () => this.applySessionMode(this.currentMode()));
+    this.overviewSignals.push(overview.connect('showing', () => this.onOverviewChanged(true)));
+    this.overviewSignals.push(overview.connect('hidden', () => this.onOverviewChanged(false)));
     this.applySessionMode(this.currentMode(), true);
     this.registerKeybindings();
     this.session.setScanning(true);
@@ -175,6 +178,8 @@ export default class AdrtExtension extends Extension {
       sessionMode.disconnect(this.sessionModeId);
       this.sessionModeId = 0;
     }
+    for (const id of this.overviewSignals) overview.disconnect(id);
+    this.overviewSignals = [];
     this.unregisterKeybindings();
     for (const unsubscribe of this.settingWatchers) unsubscribe();
     this.settingWatchers = [];
@@ -302,11 +307,18 @@ export default class AdrtExtension extends Extension {
 
   private syncIndicator(): void {
     const snapshot = this.border.snapshot();
-    if (snapshot.visible && snapshot.rect !== null && !this.isPaused()) {
+    if (snapshot.visible && snapshot.rect !== null && !this.isPaused() && !overview.visible) {
       this.indicator.show(snapshot.rect);
     } else {
       this.indicator.hide();
     }
+  }
+
+  /** §23: chrome must not show over the overview or the app grid. */
+  private onOverviewChanged(visible: boolean): void {
+    if (visible) this.border.suppress('overview');
+    else this.border.unsuppress('overview');
+    this.syncIndicator();
   }
 
   private onStateChanged(): void {
@@ -366,6 +378,11 @@ export default class AdrtExtension extends Extension {
       ['float-persistence', () => this.floats.setEnabled(this.settings.boolean('float-persistence', false))],
       ['reflow-keeps-edges', () => this.session.invalidateAll()],
       ['respect-user-workspace-move', () => this.session.invalidateAll()],
+      ['indicator-color', () => this.syncIndicator()],
+      ['indicator-width', () => this.syncIndicator()],
+      ['indicator-opacity', () => this.syncIndicator()],
+      ['indicator-corner-radius', () => this.syncIndicator()],
+      ['indicator-animated-pulse', () => this.syncIndicator()],
       ['history-enabled', () => this.history.setEnabled(this.settings.boolean('history-enabled', true))],
       ['undo-stack-size', () => this.undo.setMaxSize(this.settings.int('undo-stack-size', 20))],
     ];
@@ -637,6 +654,7 @@ export default class AdrtExtension extends Extension {
       ratios: this.tiling.getRatios(),
       swapPairs: this.tiling.getSwapPairs(),
       border: this.border.snapshot(),
+      indicator: { ...this.indicator.describe(), visible: this.indicator.isVisible, suppressed: this.border.activeSuppressions },
       overview: overview.visible,
       adaptations: this.adaptation.size,
       perf: this.session.perf(),

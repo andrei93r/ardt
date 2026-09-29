@@ -135,7 +135,7 @@
       <description>0-100.</description>
     </key>
     <key name="indicator-width" type="i">
-      <default>2</default>
+      <default>3</default>
       <summary>Indicator width</summary>
       <description>Pixels, 1-20.</description>
     </key>

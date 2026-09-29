@@ -70,6 +70,11 @@ export function isPortrait(screen: Screen): boolean {
   return screen.geometry.height > screen.geometry.width;
 }
 
+/** The area tiles may occupy: the work area (struts removed) or the monitor. */
+export function screenArea(screen: Screen): Rect {
+  return screen.workArea ?? screen.geometry;
+}
+
 export function effectiveGap(config: TilerConfig, screen: Screen): number {
   const override = isPortrait(screen) ? config.gapPortrait : config.gapLandscape;
   return override >= 0 ? override : config.gapBase;
@@ -84,18 +89,18 @@ function inset(rect: Rect, gap: number): Rect {
   };
 }
 
-function fillRect(avail: Rect, min: Size, screen: Screen): Rect {
-  const width = Math.min(Math.max(avail.width, min.width), screen.geometry.width);
-  const height = Math.min(Math.max(avail.height, min.height), screen.geometry.height);
+function fillRect(avail: Rect, min: Size, area: Rect): Rect {
+  const width = Math.min(Math.max(avail.width, min.width), area.width);
+  const height = Math.min(Math.max(avail.height, min.height), area.height);
   return { x: avail.x, y: avail.y, width, height };
 }
 
-/** Keep a rect inside the monitor without expanding it. */
-function clampRect(rect: Rect, min: Size, screen: Screen): Rect {
-  const width = Math.max(min.width, Math.min(rect.width, screen.geometry.width));
-  const height = Math.max(min.height, Math.min(rect.height, screen.geometry.height));
-  const x = Math.max(screen.geometry.x, Math.min(rect.x, screen.geometry.x + screen.geometry.width - width));
-  const y = Math.max(screen.geometry.y, Math.min(rect.y, screen.geometry.y + screen.geometry.height - height));
+/** Keep a rect inside the tiling area without expanding it. */
+function clampRect(rect: Rect, min: Size, area: Rect): Rect {
+  const width = Math.max(min.width, Math.min(rect.width, area.width));
+  const height = Math.max(min.height, Math.min(rect.height, area.height));
+  const x = Math.max(area.x, Math.min(rect.x, area.x + area.width - width));
+  const y = Math.max(area.y, Math.min(rect.y, area.y + area.height - height));
   return { x, y, width, height };
 }
 
@@ -224,7 +229,7 @@ function findRuleOverride(windows: readonly TilerWindow[], rules: readonly Rule[
 function applyRuleOverride(override: RuleOverride, w0: TilerWindow, w1: TilerWindow, avail: Rect, gap: number, screen: Screen): TilePlan {
   const win = override.window;
   if (override.mode === 'full') {
-    return { placements: [place(win.id, fillRect(avail, win.min, screen), screen, 0, win.max)] };
+    return { placements: [place(win.id, fillRect(avail, win.min, screenArea(screen)), screen, 0, win.max)] };
   }
   const other = win.id === w0.id ? w1 : w0;
   const left = override.mode === 'left-half' ? win : other;
@@ -244,15 +249,15 @@ export function computePlans(windows: readonly TilerWindow[], screen: Screen, co
   if (sorted.length === 0) return { placements: [] };
 
   const gap = effectiveGap(config, screen);
-  const avail = inset(screen.geometry, gap);
+  const avail = inset(screenArea(screen), gap);
 
   if (sorted.length === 1) {
     const only = sorted[0];
     // `reflow-keeps-edges` false: keep the outer edges where the user left them.
     if (config.reflowKeepsEdges === false && only.rect.width > 0 && only.rect.height > 0) {
-      return { placements: [place(only.id, clampRect(only.rect, only.min, screen), screen, 0, only.max)] };
+      return { placements: [place(only.id, clampRect(only.rect, only.min, screenArea(screen)), screen, 0, only.max)] };
     }
-    return { placements: [place(only.id, fillRect(avail, only.min, screen), screen, 0, only.max)] };
+    return { placements: [place(only.id, fillRect(avail, only.min, screenArea(screen)), screen, 0, only.max)] };
   }
 
   const w0 = sorted[0];

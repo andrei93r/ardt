@@ -28,6 +28,31 @@ function config(overrides: Partial<TilerConfig> = {}): TilerConfig {
 const landscape = screen({ geometry: rect(0, 0, 1920, 1080) });
 const portrait = screen({ geometry: rect(0, 0, 1080, 1920) });
 
+describe('computePlans — work area', () => {
+  const withPanel = screen({
+    geometry: rect(0, 0, 1920, 1080),
+    workArea: rect(0, 32, 1920, 1048),
+  });
+
+  it('tiles inside the work area, leaving the top bar alone', () => {
+    const plan = computePlans([window({ id: 1 }), window({ id: 2, appId: 'b' })], withPanel, config({ gapBase: 8 }));
+    expect(checkPlan(plan, { width: 1920, height: 1080 })).toEqual([]);
+    for (const placement of plan.placements) {
+      expect(placement.rect.y).toBe(40);
+      expect(placement.rect.height).toBe(1048 - 16);
+    }
+  });
+
+  it("leaves a dock's right edge alone", () => {
+    const withDock = screen({
+      geometry: rect(0, 0, 1920, 1080),
+      workArea: rect(0, 0, 1840, 1080),
+    });
+    const plan = computePlans([window({ id: 1 })], withDock, config({ gapBase: 0 }));
+    expect(plan.placements[0].rect).toEqual(rect(0, 0, 1840, 1080));
+  });
+});
+
 describe('computePlans — single window', () => {
   it('fills the monitor minus the gap', () => {
     const plan = computePlans([window({ id: 1 })], landscape, config({ gapBase: 10 }));

@@ -9,6 +9,7 @@
 
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import St from 'gi://St';
 import { layoutManager } from 'resource:///org/gnome/shell/ui/main.js';
 
@@ -19,12 +20,26 @@ import type { GnomeSettings } from './settings.js';
 const CSS_CLASS = 'adrt-indicator';
 const PREVIEW_CLASS = 'adrt-indicator-preview';
 
+/** GNOME's accent palette (libadwaita). */
+const ACCENT_COLORS: Record<string, string> = {
+  blue: '#3584e4',
+  teal: '#2190a4',
+  green: '#3a944a',
+  yellow: '#c88800',
+  orange: '#ed5b00',
+  red: '#e62d42',
+  pink: '#d56199',
+  purple: '#9141ac',
+  slate: '#6f8396',
+};
+
 export class GnomeIndicator implements IndicatorBackend {
   private readonly widget: any;
   private readonly preview: any;
   private readonly ghosts = new Set<any>();
   private readonly closeSources = new Set<number>();
   private pulseActive = false;
+  private interfaceSettings: any = null;
 
   constructor(private readonly settings: GnomeSettings) {
     this.widget = new St.Widget({ style_class: CSS_CLASS, reactive: false, visible: false });
@@ -114,6 +129,20 @@ export class GnomeIndicator implements IndicatorBackend {
     this.preview.destroy();
   }
 
+  /** Resolved styling, for `DumpState` and diagnostics. */
+  describe(): { color: string; width: number; opacity: number; radius: number } {
+    return {
+      color: this.colour(),
+      width: this.settings.int('indicator-width', 3),
+      opacity: this.settings.int('indicator-opacity', 100),
+      radius: this.settings.int('indicator-corner-radius', 8),
+    };
+  }
+
+  get isVisible(): boolean {
+    return this.widget.visible === true;
+  }
+
   private startPulse(): void {
     if (this.pulseActive) return;
     this.pulseActive = true;
@@ -147,7 +176,21 @@ export class GnomeIndicator implements IndicatorBackend {
 
   private colour(): string {
     const configured = this.settings.string('indicator-color', 'accent');
-    // 'accent' follows the shell's default accent blue; hex values pass through.
-    return configured === 'accent' ? '#3584e4' : configured;
+    // 'accent' (or a palette name) follows the system accent; otherwise a hex.
+    const paletteName = configured === 'accent' ? this.systemAccentName() : configured;
+    return ACCENT_COLORS[paletteName] ?? configured;
+  }
+
+  private systemAccentName(): string {
+    try {
+      if (this.interfaceSettings === null) {
+        this.interfaceSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
+      }
+      const accent: string = this.interfaceSettings.get_string('accent-color');
+      return accent.length > 0 ? accent : 'blue';
+    } catch (e) {
+      console.error(`[adrt] could not read the system accent colour: ${(e as Error).message}`);
+      return 'blue';
+    }
   }
 }

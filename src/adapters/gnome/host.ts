@@ -49,6 +49,11 @@ export class GnomeHost implements PlatformHost {
       this.refreshScreens();
       this.emit({ type: 'screens-changed' });
     });
+    // Panels, docks and autohide change the usable area without changing monitors.
+    this.connect(global.display, 'workareas-changed', () => {
+      this.refreshScreens();
+      this.emit({ type: 'screens-changed' });
+    });
   }
 
   disable(): void {
@@ -180,14 +185,23 @@ export class GnomeHost implements PlatformHost {
   private refreshScreens(): void {
     const monitors: any[] = layoutManager.monitors;
     const connectors = this.monitorConnectors();
-    this.screensCache = monitors.map((monitor, index) => ({
-      index: monitor.index ?? index,
-      connector: connectors[index] ?? `M${index}`,
-      geometry: { x: monitor.x, y: monitor.y, width: monitor.width, height: monitor.height },
-      scale: monitor.scale ?? 1,
-      refreshRate: monitor.refreshRate ?? 60,
-      isPrimary: (monitor.index ?? index) === layoutManager.primaryIndex,
-    }));
+    const workspace = global.workspace_manager.get_active_workspace();
+    this.screensCache = monitors.map((monitor, index) => {
+      const monitorIndex = monitor.index ?? index;
+      const work = workspace === null ? null : workspace.get_work_area_for_monitor(monitorIndex);
+      return {
+        index: monitorIndex,
+        connector: connectors[index] ?? `M${index}`,
+        geometry: { x: monitor.x, y: monitor.y, width: monitor.width, height: monitor.height },
+        workArea:
+          work === null
+            ? undefined
+            : { x: work.x, y: work.y, width: work.width, height: work.height },
+        scale: monitor.scale ?? 1,
+        refreshRate: monitor.refreshRate ?? 60,
+        isPrimary: monitorIndex === layoutManager.primaryIndex,
+      };
+    });
   }
 
   private monitorConnectors(): string[] {

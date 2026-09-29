@@ -26,6 +26,11 @@ export interface Screen {
   index: number;
   connector: string;
   geometry: Rect;
+  /**
+   * Usable area of the monitor: geometry minus panels, docks and other struts.
+   * Tiling happens inside this; absent means the whole geometry is usable.
+   */
+  workArea?: Rect;
   scale: number;
   refreshRate: number;
   isPrimary: boolean;
