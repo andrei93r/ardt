@@ -181,7 +181,7 @@ cmd_wait_adrt() {
 cmd_dbus() {
   local method="$1"; shift
   run_on_bus gdbus call --session --dest org.adrt.Adrt --object-path /org/adrt/Adrt \
-    --method "org.adrt.Adrt.$method" "$@"
+    --method "org.adrt.Adrt.$method" -- "$@"
 }
 
 cmd_enable() {

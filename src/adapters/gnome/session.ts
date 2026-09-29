@@ -261,7 +261,7 @@ export class WindowSession {
     const tracked = this.windows.get(id);
     if (tracked === undefined) return false;
     const floating = !tracked.surface.flags.floating;
-    tracked.surface.flags.floating = floating;
+    tracked.surface.setFloating(floating);
     this.deps.host.applyLayer(id, floating ? Layer.FLOATING : Layer.TILED, 0);
     tracked.invalidateClassification();
     this.deps.history.log('float_toggle', { id, floating });

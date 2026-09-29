@@ -16,7 +16,7 @@ export interface SessionEffects {
   /** Whether the border may be shown (before other suppressions). */
   indicatorVisible: boolean;
   /** Suppression to add to the border while in this mode, if any. */
-  indicatorSuppression: 'pause' | null;
+  indicatorSuppression: 'pause' | 'sharing' | null;
   scanTickRunning: boolean;
   /** True exactly once when leaving the paused mode for `user`. */
   retileOnResume: boolean;
@@ -60,7 +60,7 @@ export class SessionMachine {
     return {
       paused: mode === 'unlock-dialog',
       indicatorVisible: mode === 'user',
-      indicatorSuppression: mode === 'unlock-dialog' ? 'pause' : null,
+      indicatorSuppression: mode === 'unlock-dialog' ? 'pause' : mode === 'screen-sharing' ? 'sharing' : null,
       scanTickRunning: mode !== 'unlock-dialog',
       retileOnResume,
     };

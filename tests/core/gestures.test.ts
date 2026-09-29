@@ -90,9 +90,9 @@ describe('feedGesture', () => {
   });
 
   it('respects sensitivity', () => {
-    expect(gestureThreshold(0)).toBe(300);
-    expect(gestureThreshold(100)).toBe(50);
-    expect(swipe('swipe-4-horizontal', 250, 0, config({ sensitivity: 0 }))).toEqual({ type: 'none' });
+    expect(gestureThreshold(0)).toBe(200);
+    expect(gestureThreshold(100)).toBe(40);
+    expect(swipe('swipe-4-horizontal', 150, 0, config({ sensitivity: 0 }))).toEqual({ type: 'none' });
     expect(swipe('swipe-4-horizontal', 250, 0, config({ sensitivity: 100 }))).toEqual({
       type: 'switch-workspace',
       direction: 'right',

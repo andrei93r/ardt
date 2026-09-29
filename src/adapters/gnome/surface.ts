@@ -32,6 +32,8 @@ export class GnomeSurface implements Surface {
   flags: SurfaceFlags;
   parentId: number | null;
   zPosition = 0;
+  /** Session-side float state; Mutter has no "floating" flag (§9.3). */
+  private floatingOverride = false;
 
   constructor(win: any, appVersion: string) {
     this.win = win;
@@ -77,6 +79,12 @@ export class GnomeSurface implements Surface {
     this.screenId = this.win.get_monitor();
   }
 
+  /** Toggle the session-side float state and refresh the derived flags. */
+  setFloating(value: boolean): void {
+    this.floatingOverride = value;
+    this.flags = this.readFlags();
+  }
+
   /** §3: stacking is read only for `DumpState`, never on every tick. */
   captureZ(): void {
     const sorted: any[] = global.display.sort_windows_by_stacking(
@@ -96,7 +104,7 @@ export class GnomeSurface implements Surface {
       above: win.is_above() === true,
       minimized: win.minimized === true,
       maximized: compat.isMaximized(win),
-      floating: false,
+      floating: this.floatingOverride,
       skipTaskbar: compat.isSkipTaskbar(win),
       overrideRedirect: compat.isOverrideRedirect(win),
       onAllWorkspaces: compat.isOnAllWorkspaces(win),

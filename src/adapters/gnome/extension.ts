@@ -195,8 +195,12 @@ export default class AdrtExtension extends Extension {
 
   private applySessionMode(mode: SessionMode, initial = false): void {
     const effects = this.sessionMachine.setMode(mode);
-    if (effects.indicatorSuppression !== null) this.border.suppress(effects.indicatorSuppression);
-    else this.border.unsuppress('pause');
+    if (effects.indicatorSuppression !== null) {
+      this.border.suppress(effects.indicatorSuppression);
+    } else {
+      this.border.unsuppress('pause');
+      this.border.unsuppress('sharing');
+    }
     this.session.setScanning(effects.scanTickRunning);
     this.syncIndicator();
     if (!initial && effects.retileOnResume) this.session.retileAll('session-resume');

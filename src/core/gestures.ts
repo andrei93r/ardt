@@ -85,7 +85,7 @@ export function initialGestureState(): GestureState {
 /** Travel in logical pixels required to trigger. Higher sensitivity, lower threshold. */
 export function gestureThreshold(sensitivity: number): number {
   const clamped = Math.min(100, Math.max(0, sensitivity));
-  return 300 - 2.5 * clamped;
+  return Math.max(40, 200 - 2 * clamped);
 }
 
 function isHorizontal(kind: GestureKind): boolean {

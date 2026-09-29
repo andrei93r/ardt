@@ -178,7 +178,9 @@ for ((i = 0; i < WORKERS; i++)); do
     echo "FAIL  worker-$i journal contains [adrt] ERROR"
     JOURNAL_ERRORS=$((JOURNAL_ERRORS + 1))
   fi
-  if grep -aqE '\*\* ERROR|JS ERROR' "$log"; then
+  # The nested Shell logs a benign gio error while clearing its
+  # disable-extensions marker; ignore only that one.
+  if grep -aE '\*\* ERROR|JS ERROR' "$log" | grep -qv 'gnome-shell-disable-extensions'; then
     echo "WARN  worker-$i journal contains a JS error"
   fi
 done

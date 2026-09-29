@@ -31,7 +31,7 @@ describe('SessionMachine', () => {
     expect(effects.paused).toBe(false);
     expect(effects.scanTickRunning).toBe(true);
     expect(effects.indicatorVisible).toBe(false);
-    expect(effects.indicatorSuppression).toBeNull();
+    expect(effects.indicatorSuppression).toBe('sharing');
   });
 
   it('emits a resume retile exactly once when returning to user', () => {
