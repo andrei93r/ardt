@@ -5,8 +5,8 @@
 # A24 Keybinding float via synthetic input (requires ydotool).
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-if ! command -v ydotool >/dev/null 2>&1; then
-  skip "A24 keybinding float: ydotool is not installed (would run: ydotool key super+f)"
+if ! ydotool_ready; then
+  skip "A24 keybinding float: ydotoold is not running with /dev/uinput access (would run: ydotool key super+f)"
   exit 0
 fi
 

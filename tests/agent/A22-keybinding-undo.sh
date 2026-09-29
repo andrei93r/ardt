@@ -5,8 +5,8 @@
 # A22 Keybinding undo via synthetic input (requires ydotool).
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-if ! command -v ydotool >/dev/null 2>&1; then
-  skip "A22 keybinding undo: ydotool is not installed (would run: ydotool key super+z)"
+if ! ydotool_ready; then
+  skip "A22 keybinding undo: ydotoold is not running with /dev/uinput access (would run: ydotool key super+z)"
   exit 0
 fi
 

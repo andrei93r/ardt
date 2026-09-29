@@ -230,6 +230,13 @@ history_file() {
   echo "$ADRT_STATE_DIR/data/adrt/history/$(date +%F).jsonl"
 }
 
+# ydotool is only usable when ydotoold is running with /dev/uinput access.
+ydotool_ready() {
+  command -v ydotool >/dev/null 2>&1 || return 1
+  pgrep -x ydotoold >/dev/null 2>&1 || return 1
+  return 0
+}
+
 summary() {
   echo
   echo "checks=$checks failures=$failures"
