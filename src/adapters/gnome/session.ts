@@ -275,6 +275,9 @@ export class WindowSession {
   register(win: any): void {
     const id: number = win.get_id();
     if (this.windows.has(id)) return;
+    // Popups, menus and tooltips are override-redirect; they are never tiled
+    // and tracking them only creates work and spurious signals.
+    if (compat.isOverrideRedirect(win)) return;
     const surface = this.deps.host.ensureSurface(win);
     const tracked = new TrackedWindow(win, surface);
     tracked.originalRect = { ...surface.frame };
@@ -346,10 +349,13 @@ export class WindowSession {
     if (tracked === undefined) return;
     const workspaceId = tracked.surface.workspaceId;
     const closedRect: Rect = { ...tracked.surface.frame };
+    // Only windows we actually tiled get a close ghost; popups, menus,
+    // tooltips and other transient surfaces must not flash a border.
+    const wasTiled = tracked.lastTarget !== null;
     this.disconnectWindow(id);
     this.windows.delete(id);
     this.deps.host.forgetSurface(id);
-    this.deps.onClosed(id, closedRect);
+    if (wasTiled) this.deps.onClosed(id, closedRect);
     this.signatures.clear(`ws:${workspaceId}`);
     this.deps.history.log('close', { id, workspaceId });
     this.deps.onStateChanged();
