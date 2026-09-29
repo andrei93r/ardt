@@ -199,6 +199,9 @@ export class Tiling {
   private performApply(tracked: TrackedWindow, target: Rect, animate: boolean, reason: string, attempt: number): void {
     if (this.destroyed || this.deps.isPaused()) return;
     this.lastAppliedAtMs = Date.now();
+    // Record the intended geometry immediately: a window counts as tiled from
+    // the moment we aim a plan at it, not only once verification succeeds.
+    tracked.lastTarget = { ...target };
     const actor = compat.compositorActor(tracked.win);
     const animationsEnabled = animate && actor !== null && this.animationsAllowed(tracked);
 

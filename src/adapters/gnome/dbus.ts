@@ -46,6 +46,7 @@ const INTERFACE_XML = `
     </method>
     <method name="InjectSignal"><arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
     <method name="SimulateSessionMode"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
+    <method name="SimulateOverview"><arg type="b" direction="in"/><arg type="b" direction="out"/></method>
     <method name="SpawnWindow"><arg type="s" direction="in"/><arg type="i" direction="out"/></method>
     <method name="CloseWindow"><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
     <method name="BeginDrag"><arg type="u" direction="in"/><arg type="b" direction="out"/></method>

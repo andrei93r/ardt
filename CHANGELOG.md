@@ -75,8 +75,12 @@ code changes, MINOR for features, PATCH for fixes.
   tiler never mistakes its own applies (retiles, undo, follow) for user input.
 - Plan validation is work-area-relative, so a monitor with a top panel no
   longer reports false out-of-bounds placements.
-- Agent suite gains A31 (keyboard swap), A32 (drag swap) and A33 (global
-  reconcile); 33 scenarios total.
-- The border hides during any workspace transition — keyboard or touchpad —
+- Agent suite gains a scenario per fixed bug: A31 keyboard swap, A32 drag
+  swap (landing zone), A33 global reconcile, A34 app opens maximized, A35
+  minimize, A36 close ghost, A37 overview suspend, A38 indicator style, A39
+  keybinding conflicts; 39 scenarios total.
+- A window counts as tiled (and so gets a close ghost, and is subject to
+  user-change detection) from the moment a plan is aimed at it, not only once
+  verification succeeds.- The border hides during any workspace transition — keyboard or touchpad —
   by watching the focused actor's stage-space position (so a sliding workspace
   parent is detected), returning once it settles.

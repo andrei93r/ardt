@@ -143,6 +143,11 @@ export class GnomeIndicator implements IndicatorBackend {
     return this.widget.visible === true;
   }
 
+  /** Number of close ghosts currently fading out. */
+  get ghostCount(): number {
+    return this.ghosts.size;
+  }
+
   private startPulse(): void {
     if (this.pulseActive) return;
     this.pulseActive = true;

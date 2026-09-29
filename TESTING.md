@@ -10,7 +10,7 @@ scenarios in a nested GNOME Shell, and manual scenarios that need hardware
 npm run lint          # eslint src tests
 npm run build         # tsc
 npm run test:core     # Vitest, plain Node
-npm run test:agent    # 35 scenarios in a nested GNOME Shell
+npm run test:agent    # 39 scenarios in a nested GNOME Shell
 npm run test:all      # all of the above
 ```
 
@@ -69,6 +69,10 @@ those shortcuts.
 | A33 | Reconcile all    | move a window, assert every workspace coherent |
 | A34 | App opens maximized | `SpawnWindow('nautilus')`, assert it tiles with the sibling |
 | A35 | Minimize         | `MinimizeWindow`, assert return + empty workspace removed |
+| A36 | Close ghost      | tiled close fades a ghost, dialog close does not |
+| A37 | Overview suspend | tiling frozen while the overview is open, resumes on close |
+| A38 | Indicator style  | border uses the system accent and configured width |
+| A39 | Keybinding conflicts | no Adrt accelerator collides with a GNOME binding |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

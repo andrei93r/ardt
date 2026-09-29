@@ -63,6 +63,7 @@ interface ExtraHandlers {
   MaximizeWindow(id: number): boolean;
   UnmaximizeWindow(id: number): boolean;
   ResetLayoutState(): boolean;
+  SimulateOverview(visible: boolean): boolean;
 }
 
 type Handlers = DbusHandlers & ExtraHandlers;
@@ -642,6 +643,16 @@ export default class AdrtExtension extends Extension {
       SimulateGesture: (kind, dx, dy, points) => this.gestures.simulate(kind as GestureKind, dx, dy, points),
       InjectSignal: (type, payload) => this.injectSignal(type, payload),
       SimulateSessionMode: (mode) => this.simulateSessionMode(mode),
+      SimulateOverview: (visible) => {
+        if (overview.visible !== visible) {
+          if (visible) overview.show();
+          else overview.hide();
+        }
+        // Drive the same handler the overview signals use, so the state is
+        // consistent even if the shell reports visibility inconsistently.
+        this.onOverviewChanged(visible);
+        return true;
+      },
       ActivateWindow: (id) => {
         this.session.focus(id);
         return true;
@@ -766,7 +777,7 @@ export default class AdrtExtension extends Extension {
       ratios: this.tiling.getRatios(),
       swapPairs: this.tiling.getSwapPairs(),
       border: this.border.snapshot(),
-      indicator: { ...this.indicator.describe(), visible: this.indicator.isVisible, suppressed: this.border.activeSuppressions },
+      indicator: { ...this.indicator.describe(), visible: this.indicator.isVisible, ghosts: this.indicator.ghostCount, suppressed: this.border.activeSuppressions },
       overview: overview.visible,
       adaptations: this.adaptation.size,
       perf: this.session.perf(),

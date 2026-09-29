@@ -214,6 +214,13 @@ ext_dir() {
   echo "$ADRT_STATE_DIR/data/gnome-shell/extensions/adrt@adrt.dev"
 }
 
+# Set a key on another schema (e.g. org.gnome.desktop.interface) in the same
+# isolated keyfile store the nested Shell reads.
+set_system_setting() {
+  GSETTINGS_BACKEND=keyfile XDG_CONFIG_HOME="$ADRT_STATE_DIR/config" \
+    gsettings set "$1" "$2" "$3"
+}
+
 set_setting() {
   GSETTINGS_BACKEND=keyfile XDG_CONFIG_HOME="$ADRT_STATE_DIR/config" \
     GSETTINGS_SCHEMA_DIR="$(ext_dir)/schemas" \
