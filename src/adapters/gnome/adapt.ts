@@ -30,8 +30,7 @@ export function writeAtomic(path: string, text: string): void {
   Gio.File.new_for_path(tmp).move(Gio.File.new_for_path(path), Gio.FileCopyFlags.OVERWRITE, null, null);
 }
 
-export function readText(path: string): string | null {
-  let contents: Uint8Array;
+export function readText(path: string): string | null {  let contents: Uint8Array;
   try {
     const [ok, bytes] = GLib.file_get_contents(path);
     if (!ok) return null;
@@ -56,8 +55,7 @@ function readJson(path: string): unknown {
   }
 }
 
-export class AdaptationStore {
-  private readonly records = new Map<string, AdaptationRecord>();
+export class AdaptationStore {  private readonly records = new Map<string, AdaptationRecord>();
   private readonly refusals = new Map<string, number>();
   private readonly consecutive = new Map<string, number>();
   private stubbornUntilMs = 0;
@@ -269,5 +267,90 @@ export class AdaptationStore {
   private touch(record: AdaptationRecord): void {
     record.lastSeen = Date.now();
     this.scheduleSave();
+  }
+}
+
+/**
+ * §20 `behavior.json`: the app classes the user has opted to keep floating
+ * (§9.3 — floats are user-driven and persistence is opt-in).
+ */
+export class FloatStore {
+  private readonly floats = new Set<string>();
+  private enabled: boolean;
+  private dirty = false;
+  private saveSource: number | null = null;
+
+  constructor(enabled: boolean) {
+    this.enabled = enabled;
+  }
+
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+  }
+
+  load(): void {
+    const raw = readJson(`${dataDir()}/behavior.json`);
+    if (raw === null || typeof raw !== 'object') return;
+    const floats = (raw as { floats?: unknown }).floats;
+    if (!Array.isArray(floats)) return;
+    for (const appId of floats) {
+      if (typeof appId === 'string') this.floats.add(appId);
+    }
+  }
+
+  has(appId: string): boolean {
+    return this.enabled && this.floats.has(appId);
+  }
+
+  list(): string[] {
+    return [...this.floats];
+  }
+
+  set(appId: string, floating: boolean): void {
+    if (!this.enabled) return;
+    if (floating) this.floats.add(appId);
+    else this.floats.delete(appId);
+    this.scheduleSave();
+  }
+
+  forget(appId: string): boolean {
+    const removed = this.floats.delete(appId);
+    if (removed) this.scheduleSave();
+    return removed;
+  }
+
+  /** Replace the whole set, used by config import (§19.2). */
+  replace(appIds: string[]): void {
+    this.floats.clear();
+    for (const appId of appIds) this.floats.add(appId);
+    this.scheduleSave();
+  }
+
+  scheduleSave(): void {
+    this.dirty = true;
+    if (this.saveSource !== null) return;
+    this.saveSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, SAVE_DEBOUNCE_MS, () => {
+      this.saveSource = null;
+      this.save();
+      return GLib.SOURCE_REMOVE;
+    });
+  }
+
+  save(): void {
+    if (!this.dirty) return;
+    this.dirty = false;
+    writeAtomic(`${dataDir()}/behavior.json`, JSON.stringify({ version: 1, floats: this.list() }));
+  }
+
+  flush(): void {
+    if (this.saveSource !== null) {
+      GLib.source_remove(this.saveSource);
+      this.saveSource = null;
+    }
+    this.save();
+  }
+
+  destroy(): void {
+    this.flush();
   }
 }

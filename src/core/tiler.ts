@@ -27,6 +27,12 @@ export interface TilerConfig {
   /** Pair keys (`min|max`) whose sides are swapped. */
   swapPairs: ReadonlySet<string>;
   rules: readonly Rule[];
+  /**
+   * §6/§19.1 `reflow-keeps-edges`. When false, a lone tiled window keeps the
+   * rect it already occupies instead of expanding to fill the monitor.
+   * Defaults to true (fill).
+   */
+  reflowKeepsEdges?: boolean;
 }
 
 export interface TilerWindow {
@@ -82,6 +88,15 @@ function fillRect(avail: Rect, min: Size, screen: Screen): Rect {
   const width = Math.min(Math.max(avail.width, min.width), screen.geometry.width);
   const height = Math.min(Math.max(avail.height, min.height), screen.geometry.height);
   return { x: avail.x, y: avail.y, width, height };
+}
+
+/** Keep a rect inside the monitor without expanding it. */
+function clampRect(rect: Rect, min: Size, screen: Screen): Rect {
+  const width = Math.max(min.width, Math.min(rect.width, screen.geometry.width));
+  const height = Math.max(min.height, Math.min(rect.height, screen.geometry.height));
+  const x = Math.max(screen.geometry.x, Math.min(rect.x, screen.geometry.x + screen.geometry.width - width));
+  const y = Math.max(screen.geometry.y, Math.min(rect.y, screen.geometry.y + screen.geometry.height - height));
+  return { x, y, width, height };
 }
 
 function axisExtent(rect: Rect, axis: SplitAxis): number {
@@ -233,6 +248,10 @@ export function computePlans(windows: readonly TilerWindow[], screen: Screen, co
 
   if (sorted.length === 1) {
     const only = sorted[0];
+    // `reflow-keeps-edges` false: keep the outer edges where the user left them.
+    if (config.reflowKeepsEdges === false && only.rect.width > 0 && only.rect.height > 0) {
+      return { placements: [place(only.id, clampRect(only.rect, only.min, screen), screen, 0, only.max)] };
+    }
     return { placements: [place(only.id, fillRect(avail, only.min, screen), screen, 0, only.max)] };
   }
 

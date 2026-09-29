@@ -58,6 +58,16 @@ it through D-Bus. It requires no display, no touchpad and no human.
 Run `npm run dev`, then use the nested Shell. Scenarios that need real
 hardware are marked.
 
+## Settings coverage
+
+Every key the code reads is declared in the schema (`npm run check:core`
+verifies the core boundary; the schema is the source of truth). All settings
+listed in §19.1 are wired except:
+
+- `escape-fullscreen-only-fullscreen` — Adrt never grabs `Escape`; the Shell
+  and the focused app own that key, so the flag has nothing to gate. It is
+  declared for compatibility and intentionally inert.
+
 1. **Basic pair tiling.** Two normal windows on an empty workspace tile side
    by side (stacked on portrait). Neither overlaps; the gap is correct.
 2. **Third window.** A third window moves to a new workspace; the pair is

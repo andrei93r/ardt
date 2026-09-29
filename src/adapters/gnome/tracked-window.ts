@@ -6,13 +6,17 @@
  * Per-window state owner (§34: one `TrackedWindow` per window, never a
  * 20-field struct). Classification is cached here and invalidated only by the
  * signals listed in §5.
+ *
+ * The window's minimum and maximum dimensions are queried from Mutter once,
+ * cached here, and reused for every tile calculation (§24 item 2). Mutter is
+ * only asked again when a signal that can change size hints fires.
  */
 
 import type { Classification, ClassifyConfig, HeuristicContext } from '../../core/classify.js';
 import { classify } from '../../core/classify.js';
 import type { Profile } from '../../core/profiles.js';
 import { profileFor } from '../../core/profiles.js';
-import type { Rect } from '../../core/types.js';
+import type { Rect, Size } from '../../core/types.js';
 import type { GnomeSurface } from './surface.js';
 
 export class TrackedWindow {
@@ -28,8 +32,14 @@ export class TrackedWindow {
   stubborn = false;
   cooldownUntilMs = 0;
   previousWorkspaceIdx: number | null = null;
+  /** Set when the user moves this window; policies leave it alone for a while. */
   userMovedAtMs = 0;
   lastWorkspaceIdx = 0;
+
+  /** Cached min/max dimensions; never re-queried on the tile hot path. */
+  minSize: Size;
+  maxSize: Size;
+  private hintsKnown: boolean;
 
   private cached: Classification | null = null;
 
@@ -38,6 +48,13 @@ export class TrackedWindow {
     this.surface = surface;
     this.id = surface.id;
     this.profile = profileFor(surface.appId);
+    this.minSize = { ...surface.min };
+    this.maxSize = { ...surface.max };
+    this.hintsKnown = surface.max.width > 0 && surface.max.height > 0;
+  }
+
+  get sizeHintsKnown(): boolean {
+    return this.hintsKnown;
   }
 
   /** §24 item 1: classify at most once per relevant signal. */
@@ -50,8 +67,24 @@ export class TrackedWindow {
     this.cached = null;
   }
 
+  /** Copy hints that `surface.refresh()` has already read. No Mutter query. */
+  cacheSizeHints(): void {
+    this.minSize = { ...this.surface.min };
+    this.maxSize = { ...this.surface.max };
+    if (this.maxSize.width > 0 && this.maxSize.height > 0) this.hintsKnown = true;
+  }
+
+  /** Query Mutter for min/max once; returns true when they changed. */
+  refreshSizeHints(): boolean {
+    const changed = this.surface.refreshSizeHints();
+    if (changed) this.cacheSizeHints();
+    if (this.surface.max.width > 0 && this.surface.max.height > 0) this.hintsKnown = true;
+    return changed;
+  }
+
   refresh(): void {
     this.surface.refresh();
+    this.cacheSizeHints();
     this.invalidateClassification();
   }
 }

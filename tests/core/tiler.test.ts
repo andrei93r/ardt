@@ -35,6 +35,15 @@ describe('computePlans — single window', () => {
     expect(plan.placements[0].rect).toEqual(rect(10, 10, 1900, 1060));
   });
 
+  it('keeps the current rect when reflow-keeps-edges is off', () => {
+    const plan = computePlans(
+      [window({ id: 1, rect: rect(640, 0, 640, 1080) })],
+      landscape,
+      config({ gapBase: 10, reflowKeepsEdges: false }),
+    );
+    expect(plan.placements[0].rect).toEqual(rect(640, 0, 640, 1080));
+  });
+
   it('never shrinks below the minimum size', () => {
     const plan = computePlans([window({ id: 1, min: size(2000, 2000) })], landscape, config({ gapBase: 10 }));
     expect(plan.placements[0].rect.width).toBe(1920);

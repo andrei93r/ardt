@@ -8,14 +8,16 @@
  */
 
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 
-import type { HeuristicContext } from '../../core/classify.js';import { checkPlan } from '../../core/invariants.js';
+import type { HeuristicContext } from '../../core/classify.js';
+import { checkPlan } from '../../core/invariants.js';
 import { RetileScheduler, SignatureCache, planSignature } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
 import { computePlans, pairKey } from '../../core/tiler.js';
 import { Layer } from '../../core/types.js';
 import type { Rect, Screen } from '../../core/types.js';
-import type { AdaptationStore } from './adapt.js';
+import type { AdaptationStore, FloatStore } from './adapt.js';
 import * as compat from './compat.js';
 import type { GnomeHost } from './host.js';
 import type { History, UndoStack } from './history.js';
@@ -29,6 +31,7 @@ export interface SessionDeps {
   tiling: Tiling;
   history: History;
   adaptation: AdaptationStore;
+  floats: FloatStore;
   undo: UndoStack;
   isPaused(): boolean;
   onStateChanged(): void;
@@ -48,6 +51,12 @@ export class WindowSession {
   private readonly suppress = new Set<number>();
   private retileSource: number | null = null;
   private readonly timeoutSources = new Set<number>();
+  /** Workspaces this extension created; empty ones are removed again (§16). */
+  private readonly dynamicWorkspaces = new Set<number>();
+  private reorderSignal = 0;
+  private scanPerfCounter = 0;
+  private lastReconcileMs = 0;
+  private lastApplyMs = 0;
 
   constructor(private readonly deps: SessionDeps) {}
 
@@ -60,6 +69,8 @@ export class WindowSession {
     if (this.scanSource !== null) return;
     this.scanIntervalMs = this.scanBaseMs();
     this.scheduleScan();
+    // §7.6: user reorders shift every window's workspace index.
+    this.reorderSignal = global.workspace_manager.connect('workspaces-reordered', () => this.onWorkspacesReordered());
   }
 
   private scanBaseMs(): number {
@@ -67,9 +78,14 @@ export class WindowSession {
   }
 
   stopScan(): void {
-    if (this.scanSource === null) return;
-    GLib.source_remove(this.scanSource);
-    this.scanSource = null;
+    if (this.scanSource !== null) {
+      GLib.source_remove(this.scanSource);
+      this.scanSource = null;
+    }
+    if (this.reorderSignal !== 0) {
+      global.workspace_manager.disconnect(this.reorderSignal);
+      this.reorderSignal = 0;
+    }
   }
 
   /** §18 invariant: paused means no retiles, no scan tick.**/
@@ -112,6 +128,13 @@ export class WindowSession {
     // Not mapped yet: reschedule rather than classify a half-built window.
     if (!this.isMapped(tracked) && attempt < 100) {
       this.deferReady(tracked, attempt + 1);
+      return;
+    }
+    // §9.3 / §19.1: an app the user opted to keep floating stays floating.
+    if (this.deps.floats.has(tracked.surface.appId)) {
+      tracked.surface.setFloating(true);
+      this.deps.host.applyLayer(tracked.id, Layer.FLOATING, 0);
+      tracked.invalidateClassification();
       return;
     }
     const classification = this.classify(tracked);
@@ -180,9 +203,35 @@ export class WindowSession {
     for (const workspaceId of workspaces) this.retile(workspaceId, reason);
   }
 
+  /** §7.6: the user reordered workspaces; every index moved. */
+  private onWorkspacesReordered(): void {
+    this.realignWorkspaces();
+    this.signatures.clearAll();
+    if (this.deps.settings.boolean('log-workspace-reorder', false)) {
+      this.deps.history.log('ws_removed', { reason: 'reorder' });
+    }
+    this.retileAll('workspace-reorder');
+  }
+
+  /** Re-derive every tracked window's workspace index from Mutter. */
+  private realignWorkspaces(): void {
+    for (const tracked of this.windows.values()) {
+      const workspace = tracked.win.get_workspace();
+      if (workspace === null) continue;
+      tracked.surface.workspaceId = workspace.index();
+      tracked.lastWorkspaceIdx = workspace.index();
+    }
+  }
+
   /** Compute and apply the plan for every monitor of one workspace (§6). */
   retile(workspaceId: number, reason: string, animate = true): void {
     if (this.deps.isPaused()) return;
+    // §7.2: a window maximized on its own was left maximized when a sibling
+    // arrived; unmaximize it and tile the pair.
+    if (this.unmaximizeStaleLone(workspaceId)) {
+      this.scheduleRetile(workspaceId, 'lone-unmaximize');
+      return;
+    }
     // §7.2 takes precedence over §6: a lone window stays maximized, not tiled.
     if (this.shouldLoneMaximize(workspaceId)) {
       const only = this.tileables(workspaceId)[0];
@@ -192,6 +241,11 @@ export class WindowSession {
     for (const screen of this.deps.host.screens()) {
       const tileables = this.tileables(workspaceId).filter((t) => t.surface.screenId === screen.index);
       if (tileables.length === 0) continue;
+      // A maximized tileable is mid-policy: it either lives on its own
+      // workspace or is about to move there. Tiling it now would unmaximize it
+      // behind the policy's back (§7.3), so leave it to the policy.
+      if (tileables.some((t) => compat.isMaximized(t.win))) continue;
+      const startedUs = GLib.get_monotonic_time();
       const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, this.tilerConfig());
       const violations = checkPlan(plan, screen.geometry);
       if (violations.length > 0) {
@@ -199,8 +253,19 @@ export class WindowSession {
       }
       const key = `ws:${workspaceId}:${screen.index}`;
       if (!this.signatures.changed(key, planSignature(plan.placements))) continue;
-      this.deps.history.log('tile', { reason, workspaceId, screen: screen.index, tileables: tileables.length, placements: plan.placements.length });
+      this.deps.history.log('tile', {
+        reason,
+        workspaceId,
+        screen: screen.index,
+        tileables: tileables.length,
+        placements: plan.placements.length,
+      });
       this.deps.tiling.applyPlan(plan, screen, reason, animate);
+      // §36.14: one retile must complete well under 10ms.
+      this.lastApplyMs = (GLib.get_monotonic_time() - startedUs) / 1000;
+      if (this.lastApplyMs > 5 && this.deps.settings.boolean('debug-enabled', false)) {
+        this.deps.history.log('perf', { workspaceId, screen: screen.index, apply_ms: this.lastApplyMs });
+      }
     }
     this.deps.onStateChanged();
   }
@@ -221,6 +286,21 @@ export class WindowSession {
 
   private shouldLoneMaximize(workspaceId: number): boolean {
     return this.nonTransient(workspaceId).length === 1 && this.tileables(workspaceId).length === 1;
+  }
+
+  /**
+   * §7.2: when a second window joins a workspace whose window was maximized by
+   * the lone-maximize policy (never moved to its own workspace), unmaximize it
+   * so the pair can tile.
+   */
+  private unmaximizeStaleLone(workspaceId: number): boolean {
+    const tileables = this.tileables(workspaceId);
+    if (tileables.length < 2) return false;
+    const stale = tileables.filter((t) => compat.isMaximized(t.win) && t.previousWorkspaceIdx === null);
+    if (stale.length === 0) return false;
+    for (const tracked of stale) this.deps.host.unmaximize(tracked.id);
+    this.deps.history.log('tile', { reason: 'lone-unmaximize', workspaceId });
+    return true;
   }
 
   focus(id: number | null): void {
@@ -274,6 +354,7 @@ export class WindowSession {
     const floating = !tracked.surface.flags.floating;
     tracked.surface.setFloating(floating);
     this.deps.host.applyLayer(id, floating ? Layer.FLOATING : Layer.TILED, 0);
+    this.deps.floats.set(tracked.surface.appId, floating);
     tracked.invalidateClassification();
     this.deps.history.log('float_toggle', { id, floating });
     this.signatures.clearAll();
@@ -353,14 +434,15 @@ export class WindowSession {
   private toTilerWindow(tracked: TrackedWindow): TilerWindow {
     const surface = tracked.surface;
     const effectiveMin = this.deps.adaptation.effectiveMin(surface.appId);
+    // §24 item 2: min/max come from the per-window cache, never a Mutter query.
     return {
       id: tracked.id,
       appId: surface.appId,
       title: surface.title,
       kind: surface.kind,
       rect: surface.frame,
-      min: effectiveMin ?? surface.min,
-      max: surface.max,
+      min: effectiveMin ?? tracked.minSize,
+      max: tracked.maxSize,
       screenId: surface.screenId,
       workspaceId: surface.workspaceId,
     };
@@ -393,9 +475,12 @@ export class WindowSession {
 
   /** §7.1 / §7.3: move a window to a brand-new workspace appended to the right. */
   private moveToNewWorkspace(tracked: TrackedWindow, rememberPrevious: boolean): void {
+    if (this.userMoveProtected(tracked)) return;
     const manager = global.workspace_manager;
     const index = manager.get_n_workspaces();
     manager.append_new_workspace(false, global.get_current_time());
+    this.dynamicWorkspaces.add(index);
+    this.maybeNameWorkspace(index);
     const previous = tracked.surface.workspaceId;
     this.suppress.add(tracked.id);
     this.deps.host.applyWorkspace(tracked.id, index);
@@ -405,6 +490,27 @@ export class WindowSession {
     if (rememberPrevious) tracked.previousWorkspaceIdx = previous;
     this.deps.history.log('spawn_ws', { id: tracked.id, workspaceId: index, previous });
     this.signatures.clearAll();
+  }
+
+  /** §7.6 `workspace-auto-name`: name a spawned workspace. */
+  private maybeNameWorkspace(index: number): void {
+    if (!this.deps.settings.boolean('workspace-auto-name', false)) return;
+    try {
+      const preferences = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.preferences' });
+      const names: string[] = preferences.get_strv('workspace-names');
+      while (names.length <= index) names.push('');
+      names[index] = `Adrt ${index + 1}`;
+      preferences.set_strv('workspace-names', names);
+    } catch (e) {
+      console.error(`[adrt] could not name workspace: ${(e as Error).message}`);
+    }
+  }
+
+  /** §19.1: the user moved this window; leave it where they put it. */
+  private userMoveProtected(tracked: TrackedWindow): boolean {
+    if (!this.deps.settings.boolean('respect-user-workspace-move', true)) return false;
+    const graceSec = Math.max(0, this.deps.settings.int('workspace-move-grace-seconds', 3));
+    return Date.now() - tracked.userMovedAtMs < graceSec * 1000;
   }
 
   /** §7.3: user unmaximized a window that had been sent to its own workspace. */
@@ -431,6 +537,7 @@ export class WindowSession {
     }
     this.deps.history.log('ws_removed', { id: tracked.id, from: current, to: previous, reason: 'unmaximize' });
     this.signatures.clearAll();
+    this.removeIfEmptyDynamic(current);
     this.scheduleRetile(previous, 'unmaximize-return');
   }
 
@@ -440,6 +547,7 @@ export class WindowSession {
       this.scheduleRetile(tracked.surface.workspaceId, 'unminimize');
       return;
     }
+    if (this.userMoveProtected(tracked)) return;
     const workspaceId = tracked.surface.workspaceId;
     const tileables = this.tileables(workspaceId);
     if (tileables.length === 0 && workspaceId > 0) {
@@ -448,11 +556,12 @@ export class WindowSession {
       this.suppress.delete(tracked.id);
       tracked.surface.workspaceId = workspaceId - 1;
       this.deps.history.log('new_ws', { id: tracked.id, workspaceId: workspaceId - 1, reason: 'minimize' });
+      this.removeIfEmptyDynamic(workspaceId);
     }
     this.scheduleRetile(workspaceId, 'minimize');
   }
 
-  /** §7.5 close: leave an empty workspace. */
+  /** §7.5 close: leave an empty workspace, removing dynamic ones (§16). */
   private switchAwayIfEmpty(workspaceId: number): void {
     const manager = global.workspace_manager;
     if (manager.get_n_workspaces() <= 1) return;
@@ -460,10 +569,36 @@ export class WindowSession {
     if (workspace === null) return;
     const remaining = workspace.list_windows().filter((win: any) => this.windows.has(win.get_id()));
     if (remaining.length > 0) return;
+
+    if (this.removeIfEmptyDynamic(workspaceId)) return;
+
     if (manager.get_active_workspace_index() !== workspaceId) return;
     const next = workspaceId + 1 < manager.get_n_workspaces() ? workspaceId + 1 : Math.max(0, workspaceId - 1);
     this.deps.history.log('ws_switch_empty', { from: workspaceId, to: next });
     this.activateWorkspace(next);
+  }
+
+  /** §16: an empty workspace we created is removed again. */
+  private removeIfEmptyDynamic(workspaceId: number): boolean {
+    if (!this.dynamicWorkspaces.has(workspaceId)) return false;
+    const manager = global.workspace_manager;
+    if (manager.get_n_workspaces() <= 1) return false;
+    const workspace = manager.get_workspace_by_index(workspaceId);
+    if (workspace === null) return false;
+    const remaining = workspace.list_windows().filter((win: any) => this.windows.has(win.get_id()));
+    if (remaining.length > 0) return false;
+
+    this.dynamicWorkspaces.delete(workspaceId);
+    const shifted = new Set<number>();
+    for (const index of this.dynamicWorkspaces) shifted.add(index > workspaceId ? index - 1 : index);
+    this.dynamicWorkspaces.clear();
+    for (const index of shifted) this.dynamicWorkspaces.add(index);
+    this.scheduler.clear(`ws:${workspaceId}`);
+    manager.remove_workspace(workspace, global.get_current_time());
+    this.realignWorkspaces();
+    this.signatures.clearAll();
+    this.deps.history.log('ws_removed', { workspaceId, reason: 'dynamic-empty' });
+    return true;
   }
 
   /** §14 move to an adjacent monitor when there is no sibling in that direction. */
@@ -542,17 +677,10 @@ export class WindowSession {
   private onFrameSignal(tracked: TrackedWindow): void {
     tracked.surface.refreshFrame();
     // Size hints usually arrive just after the first frame. Until they do, the
-    // window reports max 0 and a plan built against it will be refused.
-    if (tracked.surface.max.width === 0 || tracked.surface.max.height === 0) {
-      const prevMax = { ...tracked.surface.max };
-      const prevMin = { ...tracked.surface.min };
-      tracked.refresh();
-      if (
-        prevMax.width !== tracked.surface.max.width ||
-        prevMax.height !== tracked.surface.max.height ||
-        prevMin.width !== tracked.surface.min.width ||
-        prevMin.height !== tracked.surface.min.height
-      ) {
+    // window reports max 0 and a plan built against it will be refused. This is
+    // the only path that re-queries Mutter for hints (§24 item 2).
+    if (!tracked.sizeHintsKnown) {
+      if (tracked.refreshSizeHints()) {
         tracked.invalidateClassification();
         this.signatures.clear(`ws:${tracked.surface.workspaceId}`);
         this.scheduleRetile(tracked.surface.workspaceId, 'size-hints');
@@ -585,6 +713,8 @@ export class WindowSession {
     const from = tracked.surface.workspaceId;
     tracked.surface.workspaceId = index;
     tracked.lastWorkspaceIdx = index;
+    // §19.1: remember the user's move so policies leave the window alone.
+    tracked.userMovedAtMs = Date.now();
     this.deps.history.log('ws_switch_empty', { id: tracked.id, from, to: index, byUser: true });
     this.signatures.clearAll();
     this.scheduleRetile(from, 'workspace-changed');
@@ -620,6 +750,7 @@ export class WindowSession {
 
   /** Safety net (§35): reconcile state that signals may have missed. */
   scanTick(): void {
+    const startedUs = GLib.get_monotonic_time();
     const live = new Set<number>();
     for (const win of global.display.list_all_windows()) {
       const id: number = win.get_id();
@@ -632,6 +763,19 @@ export class WindowSession {
     this.deps.adaptation.prune();
     this.deps.adaptation.save();
     this.retileAll('scan');
+    this.lastReconcileMs = (GLib.get_monotonic_time() - startedUs) / 1000;
+    this.scanPerfCounter += 1;
+    // §21: one perf event every 60 scans, gated on debug-enabled.
+    if (this.scanPerfCounter >= 60) {
+      this.scanPerfCounter = 0;
+      if (this.deps.settings.boolean('debug-enabled', false)) {
+        this.deps.history.log('perf', {
+          last_reconcile_ms: this.lastReconcileMs,
+          last_apply_ms: this.lastApplyMs,
+          windows: this.windows.size,
+        });
+      }
+    }
   }
 
   /** §21: bounded state assertion. */
@@ -639,6 +783,11 @@ export class WindowSession {
     let signalCount = 0;
     for (const handlers of this.signals.values()) signalCount += handlers.length;
     return { windows: this.windows.size, sources: this.scheduler.size + (this.retileSource !== null ? 1 : 0), signals: signalCount };
+  }
+
+  /** §21: retile timings for the perf event. */
+  perf(): { lastReconcileMs: number; lastApplyMs: number } {
+    return { lastReconcileMs: this.lastReconcileMs, lastApplyMs: this.lastApplyMs };
   }
 
   layerOf(id: number): Layer | null {

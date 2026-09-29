@@ -101,6 +101,7 @@ export class GnomeSettings implements SettingsStore {
       ratios,
       swapPairs,
       rules: this.boolean('rules-enabled', true) ? this.rules().rules : [],
+      reflowKeepsEdges: this.boolean('reflow-keeps-edges', true),
     };
   }
 }

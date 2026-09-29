@@ -24,7 +24,7 @@ import { clamp } from '../../core/types.js';
 import type { Rect } from '../../core/types.js';
 import type { GestureKind } from '../../core/gestures.js';
 import type { DbusHandlers } from '../../platform/dbus.js';
-import { AdaptationStore, dataDir, readText, writeAtomic } from './adapt.js';
+import { AdaptationStore, FloatStore, dataDir, readText, writeAtomic } from './adapt.js';
 import { GnomeDbus } from './dbus.js';
 import { FrameClockAnimator } from './frame-clock.js';
 import { GestureInput } from './gesture-input.js';
@@ -61,6 +61,7 @@ export default class AdrtExtension extends Extension {
   private settings!: GnomeSettings;
   private host!: GnomeHost;
   private adaptation!: AdaptationStore;
+  private floats!: FloatStore;
   private history!: History;
   private undo!: UndoStack;
   private indicator!: GnomeIndicator;
@@ -92,6 +93,8 @@ export default class AdrtExtension extends Extension {
     this.migrate();
     this.adaptation = new AdaptationStore(this.settings.boolean('adaptation-enabled', true));
     this.adaptation.load();
+    this.floats = new FloatStore(this.settings.boolean('float-persistence', false));
+    this.floats.load();
     this.undo = new UndoStack(this.settings.int('undo-stack-size', 20));
     this.border = new BorderState();
 
@@ -124,6 +127,7 @@ export default class AdrtExtension extends Extension {
       tiling: this.tiling,
       history: this.history,
       adaptation: this.adaptation,
+      floats: this.floats,
       undo: this.undo,
       isPaused: () => this.isPaused(),
       onStateChanged: () => this.onStateChanged(),
@@ -184,6 +188,7 @@ export default class AdrtExtension extends Extension {
     this.indicator.destroy();
     this.host.disable();
     this.adaptation.flush();
+    this.floats.flush();
     this.history.destroy();
     this.saveState();
   }
@@ -358,6 +363,9 @@ export default class AdrtExtension extends Extension {
       ['gesture-4-vertical-action', () => this.gestures.configure()],
       ['gesture-pinch-action', () => this.gestures.configure()],
       ['adaptation-enabled', () => this.adaptation.setEnabled(this.settings.boolean('adaptation-enabled', true))],
+      ['float-persistence', () => this.floats.setEnabled(this.settings.boolean('float-persistence', false))],
+      ['reflow-keeps-edges', () => this.session.invalidateAll()],
+      ['respect-user-workspace-move', () => this.session.invalidateAll()],
       ['history-enabled', () => this.history.setEnabled(this.settings.boolean('history-enabled', true))],
       ['undo-stack-size', () => this.undo.setMaxSize(this.settings.int('undo-stack-size', 20))],
     ];
@@ -378,6 +386,16 @@ export default class AdrtExtension extends Extension {
       'kb-move-left',
       'kb-move-right',
     ];
+    // §19.1 `keybindings`: "name=accelerator" entries override the defaults.
+    for (const entry of this.settings.strv('keybindings')) {
+      const eq = entry.indexOf('=');
+      if (eq <= 0) continue;
+      const name = entry.slice(0, eq).trim();
+      const accelerator = entry.slice(eq + 1).trim();
+      if (accelerator.length > 0 && names.includes(name) && this.settings.keys().includes(name)) {
+        this.settings.write(name, [accelerator]);
+      }
+    }
     for (const name of names) {
       wm.addKeybinding(name, this.getSettings(), Meta.KeyBindingFlags.NONE, Shell.ActionMode.NORMAL, () =>
         this.dispatchKeybinding(name),
@@ -506,7 +524,7 @@ export default class AdrtExtension extends Extension {
       ResetPerApp: (appId) => this.adaptation.forget(appId),
       GetAdaptations: () => JSON.stringify(this.adaptation.list()),
       ForgetAdaptation: (appId) => this.adaptation.forget(appId),
-      GetFloats: () => JSON.stringify(this.floats()),
+      GetFloats: () => JSON.stringify(this.floatState()),
       ForgetFloat: (appId) => this.forgetFloat(appId),
       ExportConfig: () => this.exportConfig(),
       ImportConfig: (json, merge) => this.importConfig(json, merge ? 'merge' : 'replace'),
@@ -621,6 +639,7 @@ export default class AdrtExtension extends Extension {
       border: this.border.snapshot(),
       overview: overview.visible,
       adaptations: this.adaptation.size,
+      perf: this.session.perf(),
       bounds: this.session.memoryBounds(),
     });
   }
@@ -646,7 +665,8 @@ export default class AdrtExtension extends Extension {
     }));
   }
 
-  private floats(): Record<string, number[]> {
+  /** Current floating windows keyed by app class. */
+  private floatingWindows(): Record<string, number[]> {
     const out: Record<string, number[]> = {};
     for (const tracked of this.session.windows.values()) {
       if (!tracked.surface.flags.floating) continue;
@@ -657,8 +677,14 @@ export default class AdrtExtension extends Extension {
     return out;
   }
 
+  /** Current floating windows plus any persisted app classes. */
+  private floatState(): { windows: Record<string, number[]>; persisted: string[] } {
+    return { windows: this.floatingWindows(), persisted: this.floats.list() };
+  }
+
   private forgetFloat(appId: string): boolean {
-    let found = false;
+    const removed = this.floats.forget(appId);
+    let found = removed;
     for (const tracked of this.session.windows.values()) {
       if (tracked.surface.appId !== appId || !tracked.surface.flags.floating) continue;
       this.session.toggleFloat(tracked.id);
@@ -677,7 +703,7 @@ export default class AdrtExtension extends Extension {
       version: BUNDLE_VERSION,
       exportedAt: new Date().toISOString(),
       settings: settings as Bundle['settings'],
-      tracked: { adaptations, behavior: { floats: this.floats() } },
+      tracked: { adaptations, behavior: { floats: this.floatingWindows() } },
     };
     return serializeBundle(bundle);
   }
@@ -700,6 +726,12 @@ export default class AdrtExtension extends Extension {
       mode,
     );
     this.adaptation.replaceAll(Object.values(merged.record));
+    const importedFloats = incoming.tracked.behavior.floats;
+    if (importedFloats !== null && typeof importedFloats === 'object') {
+      const appIds = Object.keys(importedFloats as Record<string, unknown>);
+      if (mode === 'replace') this.floats.replace(appIds);
+      else for (const appId of appIds) this.floats.set(appId, true);
+    }
     this.session.invalidateAll();
     this.history.log('config_imported', { mode, applied: merged.report.applied.length, skipped: merged.report.skipped.length });
     return JSON.stringify({ ok: true, applied: merged.report.applied, skipped: merged.report.skipped });

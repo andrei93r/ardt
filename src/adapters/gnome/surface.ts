@@ -85,6 +85,21 @@ export class GnomeSurface implements Surface {
     this.flags = this.readFlags();
   }
 
+  /**
+   * Re-query Mutter for the window's min/max dimensions and report whether
+   * they changed. This is the only place that reads size hints after the
+   * initial capture (§24 item 2).
+   */
+  refreshSizeHints(): boolean {
+    const min = this.win.get_min_size();
+    const max = this.win.get_max_size();
+    const changed =
+      min[0] !== this.min.width || min[1] !== this.min.height || max[0] !== this.max.width || max[1] !== this.max.height;
+    this.min = { width: min[0], height: min[1] };
+    this.max = { width: max[0], height: max[1] };
+    return changed;
+  }
+
   /** §3: stacking is read only for `DumpState`, never on every tick. */
   captureZ(): void {
     const sorted: any[] = global.display.sort_windows_by_stacking(
