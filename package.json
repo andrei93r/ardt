@@ -1,0 +1,36 @@
+{
+  "name": "adrt",
+  "version": "0.1.0",
+  "description": "Adrt — a GNOME 50+ tiling window manager extension for Wayland laptops.",
+  "private": true,
+  "type": "module",
+  "main": "dist/extension.js",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src tests",
+    "test:core": "vitest run tests/core",
+    "test:core:watch": "vitest tests/core",
+    "check:core": "bash scripts/check-core-purity.sh",
+    "test:agent": "bash scripts/agent-test.sh",
+    "test:all": "npm run lint && npm run build && npm run test:core && npm run test:agent",
+    "install:local": "bash scripts/install.sh",
+    "uninstall:local": "bash scripts/uninstall.sh",
+    "dev": "bash scripts/dev.sh",
+    "pack": "bash scripts/package.sh"
+  },
+  "keywords": [
+    "gnome-shell",
+    "extension",
+    "tiling",
+    "wayland"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^9.14.0",
+    "eslint": "^9.14.0",
+    "globals": "^15.12.0",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.13.0",
+    "vitest": "^2.1.4"
+  }
+}

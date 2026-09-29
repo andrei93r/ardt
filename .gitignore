@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build/
+*.zip
+*.gschema.valid
+coverage/
+.tmp/
+__pycache__/
+*.log
