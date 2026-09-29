@@ -15,11 +15,12 @@ import type { Rule } from '../../core/rules.js';
 import type { TilerConfig } from '../../core/tiler.js';
 import type { MinSizePolicy } from '../../core/tiler.js';
 import type { SettingValue, SettingsStore } from '../../platform/settings.js';
+import { unpackVariant } from './compat.js';
 
 function readVariant(settings: any, key: string): SettingValue | undefined {
   const value = settings.get_value(key);
   if (value === null) return undefined;
-  const unpacked = value.unpack();
+  const unpacked = unpackVariant(value);
   if (typeof unpacked === 'number' || typeof unpacked === 'boolean' || typeof unpacked === 'string') return unpacked;
   if (Array.isArray(unpacked)) return unpacked.map((v) => String(v));
   return undefined;

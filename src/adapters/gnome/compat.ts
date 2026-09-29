@@ -78,3 +78,12 @@ export function hasClutterGestureAction(): boolean {
 export function hasDevkit(): boolean {
   return SHELL_MAJOR >= 49;
 }
+
+/**
+ * Fully convert a GVariant to JS. `unpack()` leaves nested arrays as Variant
+ * objects (so an `as` key would stringify to "[object variant of type s]").
+ */
+export function unpackVariant(value: any): any {
+  if (value === null || value === undefined) return undefined;
+  return typeof value.recursiveUnpack === 'function' ? value.recursiveUnpack() : value.unpack();
+}

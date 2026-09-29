@@ -424,9 +424,10 @@ export class WindowSession {
     tracked.surface.workspaceId = previous;
     tracked.previousWorkspaceIdx = null;
     // §7.3: a workspace that already holds a pair makes the newcomer float.
-    if (this.tileables(previous).length >= 2) {
-      tracked.surface.flags.floating = true;
-      this.deps.host.applyLayer(tracked.id, 2, 0);
+    // The incoming window is excluded: only two *others* make it a pair.
+    if (this.tileables(previous).filter((t) => t.id !== tracked.id).length >= 2) {
+      tracked.surface.setFloating(true);
+      this.deps.host.applyLayer(tracked.id, Layer.FLOATING, 0);
     }
     this.deps.history.log('ws_removed', { id: tracked.id, from: current, to: previous, reason: 'unmaximize' });
     this.signatures.clearAll();
@@ -540,6 +541,23 @@ export class WindowSession {
 
   private onFrameSignal(tracked: TrackedWindow): void {
     tracked.surface.refreshFrame();
+    // Size hints usually arrive just after the first frame. Until they do, the
+    // window reports max 0 and a plan built against it will be refused.
+    if (tracked.surface.max.width === 0 || tracked.surface.max.height === 0) {
+      const prevMax = { ...tracked.surface.max };
+      const prevMin = { ...tracked.surface.min };
+      tracked.refresh();
+      if (
+        prevMax.width !== tracked.surface.max.width ||
+        prevMax.height !== tracked.surface.max.height ||
+        prevMin.width !== tracked.surface.min.width ||
+        prevMin.height !== tracked.surface.min.height
+      ) {
+        tracked.invalidateClassification();
+        this.signatures.clear(`ws:${tracked.surface.workspaceId}`);
+        this.scheduleRetile(tracked.surface.workspaceId, 'size-hints');
+      }
+    }
     this.deps.onStateChanged();
     this.scheduleRetile(tracked.surface.workspaceId, 'frame');
   }
