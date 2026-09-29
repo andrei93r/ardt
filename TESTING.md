@@ -10,7 +10,7 @@ scenarios in a nested GNOME Shell, and manual scenarios that need hardware
 npm run lint          # eslint src tests
 npm run build         # tsc
 npm run test:core     # Vitest, plain Node
-npm run test:agent    # 46 scenarios in a nested GNOME Shell
+npm run test:agent    # 45 scenarios in a nested GNOME Shell
 npm run test:all      # all of the above
 ```
 
