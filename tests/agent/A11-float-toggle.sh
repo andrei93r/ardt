@@ -9,7 +9,7 @@ ensure_clean
 open_pair
 ids=($(list_ids))
 adrt ToggleFloat "${ids[0]}" >/dev/null
-wait_settled 25
+wait_settled 12
 
 assert_eq "window layer is FLOATING" "2" "$(window_field "${ids[0]}" layer)"
 floats="$(adrt_json GetFloats)"

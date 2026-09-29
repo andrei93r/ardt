@@ -20,7 +20,7 @@ sleep 1
 before="$(window_field "$left" rect)"
 
 adrt MoveToward right >/dev/null
-wait_settled 25
+wait_settled 12
 
 check_python "the pair is marked swapped" '
 import json,sys

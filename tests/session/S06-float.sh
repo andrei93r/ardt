@@ -5,14 +5,14 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 session_begin
 
 spawn
-wait_tests 1 25 || true
+wait_tests 1 12 || true
 spawn
-wait_tests 2 30 || true
-sleep 2
+wait_tests 2 15 || true
+sleep 1
 read -r A _ <<<"$(test_pair_by_x)"
 
 adrt ToggleFloat "$A" >/dev/null
-sleep 2
+sleep 1
 TEST_IDS="$(test_ids)" check_python "the window floats above the tiling" '
 import os, json, sys
 ids = set(int(x) for x in os.environ["TEST_IDS"].split())

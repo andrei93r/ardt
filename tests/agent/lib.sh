@@ -204,9 +204,9 @@ ensure_clean() {
 
 open_pair() {
   spawn_window >/dev/null
-  wait_count 1 30 || true
+  wait_count 1 15 || true
   spawn_window >/dev/null
-  wait_count 2 30 || true
+  wait_count 2 15 || true
   wait_pair_tiled 25 || true
 }
 

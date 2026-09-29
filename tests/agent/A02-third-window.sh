@@ -10,8 +10,8 @@ ensure_clean
 open_pair
 pair_ws="$(dump | python3 -c 'import json,sys; print(json.load(sys.stdin)["windows"][0]["workspace"])')"
 spawn_window >/dev/null
-wait_count 3 30 || true
-wait_settled 25
+wait_count 3 15 || true
+wait_settled 12
 
 assert_eq "three windows are tracked" "3" "$(count_windows)"
 check_python "the third window is on its own workspace, one to the right, and focused" '

@@ -17,7 +17,7 @@ assert_eq "extension is paused" "true" "$(state_expr 'str(d["paused"]).lower()')
 assert_eq "border is hidden" "false" "$(border_visible)"
 
 adrt SimulateSessionMode user >/dev/null
-wait_settled 25
+wait_settled 12
 assert_eq "extension resumed" "false" "$(state_expr 'str(d["paused"]).lower()')"
 
 ensure_clean

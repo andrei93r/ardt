@@ -9,8 +9,8 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 ensure_clean
 open_pair
 spawn_window >/dev/null
-wait_count 3 30 || true
-wait_settled 30
+wait_count 3 15 || true
+wait_settled 12
 
 read -r before_active before_count third_ws <<<"$(dump | python3 -c '
 import json,sys
@@ -27,7 +27,7 @@ print(max(d["windows"], key=lambda w: w["workspace"])["id"])
 echo "before: active=$before_active workspaces=$before_count third=$third on ws$third_ws"
 
 adrt MinimizeWindow "$third" >/dev/null
-wait_settled 30
+wait_settled 12
 
 check_python "the window returned to the previous workspace and followed" '
 import json, sys

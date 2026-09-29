@@ -11,7 +11,7 @@ ids=($(list_ids))
 
 before_lo="$(window_field "${ids[0]}" rect | python3 -c 'import sys,ast; print(ast.literal_eval(sys.stdin.read().strip())["x"])')"
 adrt SwapPair "${ids[0]}" "${ids[1]}" >/dev/null
-wait_settled 25
+wait_settled 12
 after_lo="$(window_field "${ids[0]}" rect | python3 -c 'import sys,ast; print(ast.literal_eval(sys.stdin.read().strip())["x"])')"
 
 if [ "$before_lo" != "$after_lo" ]; then pass "sides swapped"; else fail "sides did not swap"; fi

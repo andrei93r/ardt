@@ -17,6 +17,20 @@ npm run test:all      # all of the above
 `scripts/agent-test.sh` starts `gnome-shell --devkit --wayland --headless`,
 installs the extension into an isolated `XDG_DATA_HOME`, enables it, and drives
 it through D-Bus. It requires no display, no touchpad and no human.
+### Live session (real Shell)
+
+The nested harness proves the logic; these prove it on a real Wayland session
+with your compositor, GPU and input:
+
+```bash
+bash scripts/session-test.sh                    # all tests/session/S*.sh
+ADRT_SESSION_SCENARIOS='S0[12]' bash scripts/session-test.sh
+```
+
+They open their own test windows, close only those, restore the workspace they
+started on, and fail if the journal logs `[adrt] ERROR`. `S12` injects real
+`Super+…` keys via `ydotool`. Results are written to `TEST_RESULTS_SESSION.md`.
+
 ### Keybindings need the interactive session
 
 A22–A24 inject real key events with `ydotool`. A nested **headless** Shell does

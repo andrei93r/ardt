@@ -12,12 +12,12 @@ open_pair
 ids=($(list_ids))
 # Put a third window on its own workspace too.
 spawn_window >/dev/null
-wait_count 3 30 || true
-wait_settled 25
+wait_count 3 15 || true
+wait_settled 12
 
 # Shove the first window somewhere illegal without a drag gesture.
 adrt MoveWindow "${ids[0]}" 200 200 500 400 >/dev/null
-wait_settled 30
+wait_settled 12
 
 check_python "every tileable window is inside its work area, non-overlapping" '
 import json, sys

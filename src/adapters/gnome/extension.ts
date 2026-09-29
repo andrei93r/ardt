@@ -39,7 +39,7 @@ import { Tiling } from './tiling.js';
 const EXTENSION_VERSION = 1;
 /** §23.2: how often the focused actor's position is sampled, and how many
  * stable samples end a transition. */
-const MOTION_POLL_MS = 32;
+const MOTION_POLL_MS = 50;
 const MOTION_STABLE_SAMPLES = 3;
 /** Ignore movement for this long after we applied a plan ourselves. */
 const MOTION_SELF_MS = 200;

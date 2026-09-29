@@ -26,7 +26,7 @@ adrt BeginDrag "$a" >/dev/null
 adrt MoveWindow "$a" "$NX" "$AY" "$BW" "$BH" >/dev/null
 sleep 1
 adrt EndDrag "$a" >/dev/null
-wait_settled 25
+wait_settled 12
 
 check_python "the pair is marked swapped" '
 import json,sys

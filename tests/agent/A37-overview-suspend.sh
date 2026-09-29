@@ -18,7 +18,7 @@ sleep 1
 
 # Move a window out of place; tiling is suspended, so it must stay put.
 adrt MoveWindow "$a" 300 300 400 300 >/dev/null
-sleep 2
+sleep 1
 check_python "window stayed put while the overview was open" '
 import json, sys
 d = json.load(sys.stdin)
@@ -32,7 +32,7 @@ print("x", x)
 '
 
 assert_true "overview closes" "$(adrt SimulateOverview false | python3 "$PARSE")"
-sleep 3
+sleep 1.5
 check_python "window was re-tiled after the overview closed" '
 import json, sys
 d = json.load(sys.stdin)

@@ -9,12 +9,12 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 ensure_clean
 spawn_window >/dev/null
 wait_count 1 25 || true
-wait_settled 25
+wait_settled 12
 
 # Nautilus (Files) opens maximized by default.
 spawn_window "nautilus" >/dev/null
-wait_count 2 30 || true
-wait_settled 30
+wait_count 2 15 || true
+wait_settled 12
 
 check_python "the maximized app was tiled with its sibling" '
 import json, sys

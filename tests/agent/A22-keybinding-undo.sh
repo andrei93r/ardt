@@ -15,9 +15,9 @@ open_pair
 ids=($(list_ids))
 before="$(window_field "${ids[0]}" rect)"
 adrt SimulateResize "${ids[0]}" "${ids[1]}" 0.3 >/dev/null
-wait_settled 25
+wait_settled 12
 ydotool key 125:1 44:1 44:0 125:0
-wait_settled 25
+wait_settled 12
 after="$(window_field "${ids[0]}" rect)"
 if [ "$before" = "$after" ]; then pass "keybinding undo restored rects"; else fail "keybinding undo did not restore"; fi
 ensure_clean

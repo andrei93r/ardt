@@ -5,15 +5,15 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 session_begin
 
 spawn
-wait_tests 1 25 || true
+wait_tests 1 12 || true
 spawn
-wait_tests 2 30 || true
-sleep 2
+wait_tests 2 15 || true
+sleep 1
 read -r A B <<<"$(test_pair_by_x)"
 echo "pair: $A $B"
 
 adrt SimulateResize "$A" "$B" 0.3 >/dev/null
-sleep 3
+sleep 1.5
 TEST_IDS="$(test_ids)" check_python "resize applied a ~30/70 split" '
 import os, json, sys
 ids = set(int(x) for x in os.environ["TEST_IDS"].split())
@@ -27,7 +27,7 @@ print("ratios", ratios)
 '
 
 adrt Undo >/dev/null
-sleep 3
+sleep 1.5
 TEST_IDS="$(test_ids)" check_python "undo restored the even split" '
 import os, json, sys
 ids = set(int(x) for x in os.environ["TEST_IDS"].split())

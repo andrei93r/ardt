@@ -5,12 +5,12 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 session_begin
 
 spawn
-wait_tests 1 25 || true
+wait_tests 1 12 || true
 spawn
-wait_tests 2 30 || true
+wait_tests 2 15 || true
 spawn
-wait_tests 3 30 || true
-sleep 3
+wait_tests 3 15 || true
+sleep 1.5
 
 TEST_IDS="$(test_ids)" check_python "three test windows with one on a later workspace" '
 import os, json, sys
@@ -22,18 +22,13 @@ if len({w["workspace"] for w in ws}) < 2:
 print("ok")
 '
 
-third="$(TEST_IDS="$(test_ids)" dump | python3 -c '
-import os, json, sys
-ids = set(int(x) for x in os.environ["TEST_IDS"].split())
-ws = [w for w in json.load(sys.stdin)["windows"] if w["id"] in ids]
-print(max(ws, key=lambda w: w["workspace"])["id"])
-')"
-third_ws="$(dump | python3 -c 'import json,sys; d=json.load(sys.stdin); print(max((w["workspace"] for w in d["windows"] if w["id"]==int("'"$third"'")), default=0))')"
+third="$(test_id_on_highest_ws)"
+third_ws="$(window_workspace "$third")"
 before="$(state_expr 'd["workspaces"]')"
 echo "minimizing $third on ws$third_ws (workspaces=$before)"
 
 adrt MinimizeWindow "$third" >/dev/null
-sleep 3
+sleep 1.5
 
 TEST_IDS="$(test_ids)" check_python "the window followed back to the previous workspace" '
 import os, json, sys

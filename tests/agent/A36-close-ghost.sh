@@ -28,7 +28,7 @@ sleep 1
 
 spawn_window "zenity --info --text=adrt-test" >/dev/null
 wait_count 1 25 || true
-wait_settled 20
+wait_settled 12
 dialog="$(list_ids | awk "{print \$1}")"
 close_window "$dialog"
 sleep 0.8

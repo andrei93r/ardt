@@ -5,11 +5,11 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 session_begin
 
 spawn
-wait_tests 1 25 || true
-sleep 2
+wait_tests 1 12 || true
+sleep 1
 id="$(test_ids | awk '{print $1}')"
 adrt ActivateWindow "$id" >/dev/null
-sleep 2
+sleep 1
 
 # Overview suppression.
 if adrt SimulateOverview true | grep -q true; then

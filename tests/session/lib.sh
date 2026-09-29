@@ -12,7 +12,7 @@ SESSION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SESSION_DIR/../.." && pwd)"
 PARSE="$ROOT_DIR/tests/agent/parse.py"
 
-TEST_CLIENT="${ADRT_SESSION_CLIENT:-gnome-text-editor --new-window}"
+TEST_CLIENT="${ADRT_SESSION_CLIENT:-nautilus}"
 
 checks=0
 failures=0
@@ -81,13 +81,14 @@ require_adrt() {
 session_begin() {
   require_adrt
   BASE_IDS="$(list_ids)"
+  export BASE_IDS
   START_WS="$(state_expr 'd["activeWorkspace"]')"
 }
 
 test_ids() {
-  BASE_IDS="$BASE_IDS" list_ids | python3 -c '
+  list_ids | python3 -c '
 import os, sys
-base = set(os.environ["BASE_IDS"].split())
+base = set(os.environ.get("BASE_IDS", "").split())
 now = [w for w in sys.stdin.read().split() if w]
 print(" ".join(w for w in now if w not in base))
 '
@@ -95,23 +96,39 @@ print(" ".join(w for w in now if w not in base))
 
 spawn() {
   adrt SpawnWindow "${1:-$TEST_CLIENT}" >/dev/null
-  sleep 2
+  sleep 1
 }
 
 count_tests() { test_ids | tr ' ' '\n' | grep -c . || true; }
 
 # The two test windows ordered left-to-right, as "left right".
 test_pair_by_x() {
-  TEST_IDS="$(test_ids)" dump | python3 -c '
-import os, json, sys
-ids = set(int(x) for x in os.environ["TEST_IDS"].split())
+  dump | python3 -c '
+import json, sys
+ids = set(int(x) for x in (sys.argv[1] if len(sys.argv) > 1 else "").split())
 ws = sorted((w for w in json.load(sys.stdin)["windows"] if w["id"] in ids), key=lambda w: w["rect"]["x"])
-print(" ".join(str(w["id"]) for w in ws[:2]))
-'
+print(" ".join(str(w["id"]) for w in ws[:2]))' "$(test_ids)"
+}
+
+# The test window on the highest workspace id.
+test_id_on_highest_ws() {
+  dump | python3 -c '
+import json, sys
+ids = set(int(x) for x in (sys.argv[1] if len(sys.argv) > 1 else "").split())
+ws = [w for w in json.load(sys.stdin)["windows"] if w["id"] in ids]
+print(max(ws, key=lambda w: w["workspace"])["id"])' "$(test_ids)"
+}
+
+# Workspace of a window id.
+window_workspace() {
+  dump | python3 -c '
+import json, sys
+w = [x for x in json.load(sys.stdin)["windows"] if x["id"] == int(sys.argv[1])]
+print(w[0]["workspace"] if w else 0)' "$1"
 }
 
 wait_tests() {
-  local target="$1" timeout="${2:-25}"
+  local target="$1" timeout="${2:-12}"
   local deadline=$((SECONDS + timeout))
   while [ "$SECONDS" -lt "$deadline" ]; do
     [ "$(count_tests)" -ge "$target" ] && return 0

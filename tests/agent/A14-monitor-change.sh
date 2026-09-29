@@ -9,7 +9,7 @@ ensure_clean
 open_pair
 
 assert_true "InjectSignal returns true" "$(adrt InjectSignal screens-changed '' | python3 "$PARSE")"
-wait_settled 25
+wait_settled 12
 assert_eq "windows still tracked after the monitor change" "2" "$(count_windows)"
 check_python "tiles remain inside the monitor" '
 import json, sys

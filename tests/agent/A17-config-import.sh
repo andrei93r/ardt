@@ -10,7 +10,7 @@ original="$(get_setting gaps-base)"
 
 bundle="$(adrt_json ExportConfig | python3 -c 'import json,sys; b=json.load(sys.stdin); b["settings"]["gaps-base"]=24; print(json.dumps(b))')"
 adrt ImportConfig "'$bundle'" false >/dev/null
-wait_settled 20
+wait_settled 12
 sleep 1
 
 # Verify via a fresh export.

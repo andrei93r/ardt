@@ -45,9 +45,9 @@ interface WindowSignal {
 }
 
 /** Quiet period after the last user frame change before a drop is interpreted. */
-const ADJUST_SETTLE_MS = 180;
+const ADJUST_SETTLE_MS = 150;
 /** Debounce before a global reconcile pass. */
-const RECONCILE_DEBOUNCE_MS = 60;
+const RECONCILE_DEBOUNCE_MS = 120;
 
 export class WindowSession {
   readonly windows = new Map<number, TrackedWindow>();
@@ -496,7 +496,7 @@ export class WindowSession {
     if (Date.now() < this.ignoreMismatchUntilMs) return false;
     // Our own applies are still landing: give them a moment.
     if (this.deps.tiling.activeAnimations > 0) return false;
-    if (Date.now() - this.deps.tiling.lastApplyAtMs < 300) return false;
+    if (Date.now() - this.deps.tiling.lastApplyAtMs < 500) return false;
     for (const placement of plan.placements) {
       const tracked = this.windows.get(placement.surfaceId);
       if (tracked === undefined) return true;
@@ -1127,6 +1127,17 @@ export class WindowSession {
       rect = { x: inset.x, y: inset.y, width: inset.width, height: Math.max(0, a.y - gap - inset.y) };
     }
     if (rect.width <= 0 || rect.height <= 0) return;
+    // Skip redundant applies when the sibling is already where it should be.
+    sibling.surface.refreshFrame();
+    const current = sibling.surface.frame;
+    if (
+      Math.abs(current.x - rect.x) <= 2 &&
+      Math.abs(current.y - rect.y) <= 2 &&
+      Math.abs(current.width - rect.width) <= 2 &&
+      Math.abs(current.height - rect.height) <= 2
+    ) {
+      return;
+    }
     this.deps.tiling.applyFrame(sibling, rect, screen, false, 'follow', 0);
   }
 

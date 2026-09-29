@@ -10,7 +10,7 @@ open_pair
 ids=($(list_ids))
 close_window "${ids[0]}"
 wait_count 1 15 || true
-wait_settled 25
+wait_settled 12
 
 assert_eq "one window remains" "1" "$(count_windows)"
 check_python "the remaining window is maximized" '

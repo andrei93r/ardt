@@ -9,11 +9,11 @@ ensure_clean
 open_pair
 ids=($(list_ids))
 adrt SimulateResize "${ids[0]}" "${ids[1]}" 0.5 >/dev/null
-wait_settled 25
+wait_settled 12
 adrt ActivateWindow "${ids[0]}" >/dev/null
 sleep 1
 adrt NudgeSplit right 10 >/dev/null
-wait_settled 25
+wait_settled 12
 
 check_python "ratio moved away from 0.5 and was saved" '
 import json, sys

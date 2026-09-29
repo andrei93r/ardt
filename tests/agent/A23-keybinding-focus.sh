@@ -16,7 +16,7 @@ ids=($(list_ids))
 adrt ActivateWindow "${ids[0]}" >/dev/null
 sleep 1
 ydotool key 125:1 56:1 38:1 38:0 56:0 125:0
-wait_settled 25
+wait_settled 12
 focused="$(state_expr 'd["border"]["visible"]')"
 assert_true "focus keybinding moved the border" "$focused"
 ensure_clean

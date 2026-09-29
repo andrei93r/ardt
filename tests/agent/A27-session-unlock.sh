@@ -16,7 +16,7 @@ sleep 1
 assert_eq "paused while locked" "true" "$(state_expr 'str(d["paused"]).lower()')"
 
 adrt SimulateSessionMode user >/dev/null
-wait_settled 25
+wait_settled 12
 assert_eq "running again after unlock" "false" "$(state_expr 'str(d["paused"]).lower()')"
 assert_eq "pair still tracked" "2" "$(count_windows)"
 check_python "workspace was retiled once" '

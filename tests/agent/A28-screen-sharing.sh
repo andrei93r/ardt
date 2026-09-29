@@ -12,7 +12,7 @@ adrt ActivateWindow "${ids[0]}" >/dev/null
 sleep 1
 
 adrt SimulateSessionMode screen-sharing >/dev/null
-wait_settled 25
+wait_settled 12
 assert_eq "not paused while sharing" "false" "$(state_expr 'str(d["paused"]).lower()')"
 assert_eq "border hidden while sharing" "false" "$(border_visible)"
 assert_eq "tiling continues" "2" "$(count_windows)"

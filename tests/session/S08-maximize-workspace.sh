@@ -5,10 +5,10 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 session_begin
 
 spawn
-wait_tests 1 25 || true
+wait_tests 1 12 || true
 spawn
-wait_tests 2 30 || true
-sleep 2
+wait_tests 2 15 || true
+sleep 1
 read -r A B <<<"$(test_pair_by_x)"
 
 adrt MaximizeWindow "$B" >/dev/null
