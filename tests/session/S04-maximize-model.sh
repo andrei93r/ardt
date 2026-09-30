@@ -41,7 +41,6 @@ if any(w["maximized"] for w in ws):
 print("returned")
 ' 20
 
-before="$(state_expr 'd["workspaces"]')"
 adrt MaximizeWindow "$B" >/dev/null
 sleep 3
 adrt CloseWindow "$B" >/dev/null
@@ -54,12 +53,6 @@ while [ "$SECONDS" -lt "$deadline" ]; do
 done
 if [ "$moved" = "1" ]; then pass "closing returned the view to the left"; else fail "view did not return left (active $(state_expr 'd["activeWorkspace"]'))"; fi
 
-deadline=$((SECONDS + 25))
-while [ "$SECONDS" -lt "$deadline" ]; do
-  [ "$(state_expr 'd["workspaces"]')" -lt "$before" ] && break
-  sleep 1
-done
-now="$(state_expr 'd["workspaces"]')"
-if [ "$now" -lt "$before" ]; then pass "the workspace to the right was reaped"; else fail "workspace not reaped ($before -> $now)"; fi
+poll_no_stray_empty_workspaces
 
 summary

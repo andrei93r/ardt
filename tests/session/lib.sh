@@ -200,6 +200,24 @@ close_tests() {
   for id in $(test_ids); do adrt CloseWindow "$id" >/dev/null 2>&1 || true; done
 }
 
+# GNOME's dynamic workspaces always keep one empty workspace at the end, so the
+# honest invariant after finishing is: no empty workspace remains except (at
+# most) the last one. Asserting a raw count decrease would fail whenever the
+# emptied workspace happens to be the trailing one.
+poll_no_stray_empty_workspaces() {
+  poll "no stray empty workspaces" '
+import json, sys
+d = json.load(sys.stdin)
+n = d["workspaces"]
+used = {w["workspace"] for w in d["windows"]}
+empties = [i for i in range(n) if i not in used]
+stray = [i for i in empties if i != n - 1]
+if stray:
+    print("empty workspaces", stray, "of", n); sys.exit(1)
+print("empties", empties)
+' 15
+}
+
 # Every scenario ends by checking the tiling it produced is actually coherent:
 # each tiled test window is inside its work area and no two tiled windows on the
 # same workspace overlap. Floating windows (layer 2) legitimately sit above the

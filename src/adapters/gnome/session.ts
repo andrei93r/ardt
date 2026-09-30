@@ -58,6 +58,8 @@ export class WindowSession {
   private readonly timeoutSources = new Set<number>();
   /** Workspaces this extension created; empty ones are removed again (§16). */
   private readonly dynamicWorkspaces = new Set<number>();
+  /** Set once a pruned trailing workspace is seen to be re-created by Mutter. */
+  private avoidTrailingPrune = false;
   private reorderSignal = 0;
   private displaySignals: number[] = [];
   private managerSignals: number[] = [];
@@ -787,6 +789,7 @@ export class WindowSession {
     return workspace.list_windows().filter((win: any) => this.windows.has(win.get_id())).length === 0;
   }
 
+
   /** §7.6 `workspace-auto-name`: name a spawned workspace. */
   private maybeNameWorkspace(index: number): void {
     if (!this.deps.settings.boolean('workspace-auto-name', false)) return;
@@ -890,11 +893,16 @@ export class WindowSession {
   private pruneEmptyWorkspaces(): void {
     const manager = global.workspace_manager;
     if (manager.get_n_workspaces() <= 1) return;
+    const before = manager.get_n_workspaces();
     let active = manager.get_active_workspace_index();
     let changed = false;
-    for (let index = manager.get_n_workspaces() - 1; index >= 0; index--) {
+    for (let index = before - 1; index >= 0; index--) {
       if (manager.get_n_workspaces() <= 1) break;
       if (index === active) continue;
+      // GNOME's dynamic workspaces re-create a trailing empty workspace the
+      // moment it is removed. Once we have seen that happen, leave the trailing
+      // one alone instead of churning against the compositor.
+      if (this.avoidTrailingPrune && index === manager.get_n_workspaces() - 1) continue;
       const workspace = manager.get_workspace_by_index(index);
       if (workspace === null) continue;
       const remaining = workspace.list_windows().filter((win: any) => this.windows.has(win.get_id()));
@@ -913,6 +921,9 @@ export class WindowSession {
     if (changed) {
       this.realignWorkspaces();
       this.signatures.clearAll();
+      // If the count did not actually fall, the compositor re-created the
+      // trailing workspace; stop trying to reap it.
+      if (manager.get_n_workspaces() >= before) this.avoidTrailingPrune = true;
     }
   }
 

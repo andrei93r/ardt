@@ -73,12 +73,6 @@ while [ "$SECONDS" -lt "$deadline" ]; do
 done
 if [ "$switched" = "1" ]; then pass "closing switched the view to the left"; else fail "view did not move left (active $(state_expr 'd["activeWorkspace"]'))"; fi
 
-deadline=$((SECONDS + 25))
-while [ "$SECONDS" -lt "$deadline" ]; do
-  [ "$(state_expr 'd["workspaces"]')" -lt "$before" ] && break
-  sleep 1
-done
-now="$(state_expr 'd["workspaces"]')"
-if [ "$now" -lt "$before" ]; then pass "the emptied workspace was removed"; else fail "the emptied workspace was not removed ($before -> $now)"; fi
+poll_no_stray_empty_workspaces
 
 summary

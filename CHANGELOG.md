@@ -96,10 +96,13 @@ code changes, MINOR for features, PATCH for fixes.
 - A fresh pair splits 50/50 when the windows' minimum sizes allow it; the live
   suite clears the ratios it sets so a test run cannot leave your pairs on a
   test split.
-- An emptied workspace is reaped promptly: the prune that follows a close or
-  minimize runs again once the (asynchronous) workspace switch has landed, and
-  the periodic safety pass prunes too, so a reap no longer waits for the
-  backed-off scan tick.
+- An emptied workspace is reaped promptly: the post-close prune runs again once
+  the asynchronous workspace switch has landed, and a debounced reconcile only
+  records undo for user adjusts.
+- GNOME's dynamic workspaces re-create one empty workspace at the end. Adrt
+  reaps empty workspaces but, once it sees a removal re-created, stops reaping
+  the trailing one — so it no longer churns against the compositor while a
+  window is focused.
 - Undo restores the split ratios along with the window rects, so the restored
   layout agrees with the plan and no later reconcile re-tiles over it. This was
   an existing inconsistency that the periodic tiling pass made visible.

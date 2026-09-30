@@ -508,8 +508,6 @@ export default class AdrtExtension extends Extension {
     this.motionRetiles += 1;
     // A safety-net pass is not a user action: it must not push undo entries.
     this.session.retile(focused.surface.workspaceId, 'motion-tick', true, false);
-    // Keep empty workspaces from lingering until the scan backs off.
-    this.session.pruneEmptyNow();
   }
 
   private syncIndicator(): void {
