@@ -10,7 +10,7 @@ spawn
 wait_tests 2 15 || true
 sleep 1
 
-TEST_IDS="$(test_ids)" check_python "the two spawned windows tile side by side" '
+TEST_IDS="$(test_ids)" poll "the two spawned windows tile side by side" '
 import os, json, sys
 ids = set(int(x) for x in os.environ["TEST_IDS"].split())
 d = json.load(sys.stdin)
@@ -28,6 +28,6 @@ a1, b1 = ws[0]["rect"], ws[1]["rect"]
 if a1["x"] < b1["x"] + b1["width"] and b1["x"] < a1["x"] + a1["width"] and a1["y"] < b1["y"] + b1["height"] and b1["y"] < a1["y"] + a1["height"]:
     print("overlap"); sys.exit(1)
 print("tiled", [w["rect"] for w in ws])
-'
+' 20
 
 summary

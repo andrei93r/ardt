@@ -11,7 +11,7 @@ adrt SpawnWindow "nautilus" >/dev/null
 wait_tests 2 15 || true
 sleep 1.5
 
-TEST_IDS="$(test_ids)" check_python "the maximized app was tiled with its sibling" '
+TEST_IDS="$(test_ids)" poll "the maximized app was tiled with its sibling" '
 import os, json, sys
 ids = set(int(x) for x in os.environ["TEST_IDS"].split())
 d = json.load(sys.stdin)
@@ -27,6 +27,6 @@ for w in ws:
     if w["rect"]["width"] >= area["width"] - 1:
         print("window fills the monitor", w["id"]); sys.exit(1)
 print("paired")
-'
+' 20
 
 summary

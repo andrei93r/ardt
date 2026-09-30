@@ -24,9 +24,8 @@ wait_tests 3 15 || true
 sleep 2
 
 adrt UnmaximizeWindow "$B" >/dev/null
-sleep 3
 
-TEST_IDS="$(test_ids)" check_python "the returned window floats on top without hiding the pair" '
+TEST_IDS="$(test_ids)" poll "the returned window floats on top without hiding the pair" '
 import os, json, sys
 ids = set(int(x) for x in os.environ["TEST_IDS"].split())
 d = json.load(sys.stdin)
@@ -45,6 +44,6 @@ fully = [o for o in others if r["x"] <= o["rect"]["x"] and r["y"] <= o["rect"]["
 if others and len(fully) >= len(others):
     print("every tiled window is fully covered"); sys.exit(1)
 print("floating", r, "over", len(others), "windows")
-'
+' 20
 
 summary

@@ -91,6 +91,10 @@ code changes, MINOR for features, PATCH for fixes.
 - Safety-net passes (the scan tick and the periodic retile) do not record undo
   entries and skip while an apply is animating, so they can never mask the
   entry a user action pushed.
+- The nested harness closes the overview when its Shell comes up (a headless
+  devkit Shell opens it during startup; a real session never does), and the
+  live scenarios wait for a settled state instead of sampling once, so the
+  slower real Shell no longer produces false failures.
 - The border's workspace-switch suppression is driven by GNOME's
   `WorkspaceAnimationController`: the swipe tracker's `begin`/`update` hide it
   the instant a touchpad gesture starts, and the motion watcher polls

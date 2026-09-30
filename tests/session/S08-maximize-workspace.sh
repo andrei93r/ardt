@@ -12,8 +12,7 @@ sleep 1
 read -r A B <<<"$(test_pair_by_x)"
 
 adrt MaximizeWindow "$B" >/dev/null
-sleep 4
-TEST_IDS="$(test_ids)" check_python "the maximized window has its own workspace" '
+TEST_IDS="$(test_ids)" poll "the maximized window has its own workspace" '
 import os, json, sys
 ids = set(int(x) for x in os.environ["TEST_IDS"].split())
 d = json.load(sys.stdin)
@@ -24,11 +23,10 @@ if not maxed:
 if any(w["workspace"] == maxed[0]["workspace"] for w in ws if not w["maximized"]):
     print("sibling shares the workspace"); sys.exit(1)
 print("own workspace", maxed[0]["workspace"])
-'
+' 15
 
 adrt UnmaximizeWindow "$B" >/dev/null
-sleep 4
-TEST_IDS="$(test_ids)" check_python "unmaximizing returned it to the pair" '
+TEST_IDS="$(test_ids)" poll "unmaximizing returned it to the pair" '
 import os, json, sys
 ids = set(int(x) for x in os.environ["TEST_IDS"].split())
 d = json.load(sys.stdin)
@@ -38,6 +36,6 @@ if len({w["workspace"] for w in ws}) != 1:
 if any(w["maximized"] for w in ws):
     print("still maximized"); sys.exit(1)
 print("returned")
-'
+' 20
 
 summary

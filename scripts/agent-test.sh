@@ -56,9 +56,6 @@ run_worker() {
     echo "worker ${ADRT_WORKER_INDEX}: start failed"
   fi
   bash "$NESTED" wait-adrt 60 || echo "worker ${ADRT_WORKER_INDEX}: adrt D-Bus did not appear"
-  # The headless devkit Shell starts with the overview open; tiling is
-  # suspended there by design, so close it before running scenarios.
-  bash "$NESTED" dbus SimulateOverview false >/dev/null 2>&1 || true
 
   local script name output rc status
   for script in $ADRT_SCENARIO_LIST; do

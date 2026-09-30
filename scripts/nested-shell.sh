@@ -170,6 +170,10 @@ cmd_wait_adrt() {
     if run_on_bus gdbus call --session --dest org.adrt.Adrt --object-path /org/adrt/Adrt \
         --method org.adrt.Adrt.DumpState >/dev/null 2>&1; then
       echo "nested-shell: adrt D-Bus is up"
+      # The headless devkit Shell starts with the overview open, which a normal
+      # session never does. Close it so the Shell matches the real desktop
+      # before any scenario runs.
+      cmd_dbus SimulateOverview false >/dev/null 2>&1 || true
       return 0
     fi
     sleep 0.5

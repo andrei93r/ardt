@@ -52,6 +52,19 @@ check_python() {
   fi
 }
 
+# Poll a python predicate over DumpState until it holds, then pass. On timeout,
+# run it once more to print the failing state. The live Shell is slower than the
+# nested one, so a single sample after a fixed sleep is not reliable.
+poll() {
+  local label="$1" code="$2" timeout="${3:-12}" out
+  if wait_python "$timeout" "$code"; then
+    pass "$label"
+  else
+    out="$(dump | python3 -c "$code" 2>&1 || true)"
+    fail "$label${out:+ — $out}"
+  fi
+}
+
 wait_python() {
   local timeout="$1" code="$2"
   local deadline=$((SECONDS + timeout))
