@@ -10,7 +10,7 @@ scenarios in a nested GNOME Shell, and manual scenarios that need hardware
 npm run lint          # eslint src tests
 npm run build         # tsc
 npm run test:core     # Vitest, plain Node
-npm run test:agent    # 69 scenarios in a nested GNOME Shell
+npm run test:agent    # 71 scenarios in a nested GNOME Shell
 npm run test:all      # all of the above
 ```
 
@@ -131,6 +131,8 @@ those shortcuts.
 | A73 | Lost drag release | an abandoned drag is cleared and the layout restored |
 | A74 | Overview drop is a move | a scaled drop teaches no split ratio |
 | A75 | Overview patterns | open/close and an overview workspace move leave everything tiled |
+| A76 | Workspace runaway | a reorder cannot put the exile policy into an unbounded loop |
+| A77 | Clamped drop swaps | a drop onto the sibling swaps even if the client resized it |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

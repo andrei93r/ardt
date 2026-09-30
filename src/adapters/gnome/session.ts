@@ -15,6 +15,7 @@ import { wm } from 'resource:///org/gnome/shell/ui/main.js';
 import type { HeuristicContext } from '../../core/classify.js';
 import { classifyAdjust } from '../../core/adjust.js';
 import type { AdjustMode } from '../../core/adjust.js';
+import { RateBudget } from '../../core/budget.js';
 import { checkPlan } from '../../core/invariants.js';
 import { SignatureCache, planSignature } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
@@ -63,6 +64,17 @@ const RECONCILE_DEBOUNCE_MS = 60;
  * another actor — would otherwise freeze the layout until the next real drag.
  */
 const DRAG_STALE_MS = 2500;
+/**
+ * How long a window that was just sent to its own workspace is left alone.
+ * Exiling the *same* window over and over is always a bug (a workspace reorder
+ * re-entering the policy), and it is what once produced 86 workspaces in a
+ * second; after one exile the window waits this long before it can be exiled
+ * again, so the cycle cannot close.
+ */
+const EXILE_COOLDOWN_MS = 3000;
+/** Containment: the most workspaces Adrt will create in a rolling window. */
+const SPAWN_BUDGET = 12;
+const SPAWN_WINDOW_MS = 10_000;
 
 export class WindowSession {
   readonly windows = new Map<number, TrackedWindow>();
@@ -82,6 +94,15 @@ export class WindowSession {
   private dragStartRect: Rect | null = null;
   /** When the dragged window last changed geometry (stale-drag watchdog). */
   private dragLastActivityMs = 0;
+  /**
+   * Depth of a workspace mutation we are performing. Mutter's
+   * `append_new_workspace`/`reorder_workspace`/`remove_workspace` emit
+   * `workspaces-reordered` synchronously, which used to re-enter the exile
+   * policy from inside itself.
+   */
+  private workspaceOpDepth = 0;
+  /** Containment for workspace creation (see SPAWN_BUDGET). */
+  private readonly spawnBudget = new RateBudget(SPAWN_BUDGET, SPAWN_WINDOW_MS);
   /** True while a compositor state makes tiling pointless (the overview). */
   private suspended = false;
   private adjustId: number | null = null;
@@ -382,7 +403,7 @@ export class WindowSession {
     // A workspace holds at most one pair. A third tileable always gets its own
     // workspace, however it opened — including an app that opens maximized.
     if (siblings.length >= 2) {
-      this.moveToNewWorkspace(tracked, false);
+      if (!this.moveToNewWorkspace(tracked, false)) this.floatOverPair(tracked);
       return;
     }
     if (compat.isFullyMaximized(tracked.win) && siblings.length > 0) {
@@ -397,7 +418,7 @@ export class WindowSession {
       return;
     }
     if (!compat.isMaximized(tracked.win) && siblings.length >= 2) {
-      this.moveToNewWorkspace(tracked, false);
+      if (!this.moveToNewWorkspace(tracked, false)) this.floatOverPair(tracked);
       return;
     }
     this.evaluateLoneMaximize(workspaceId);
@@ -492,9 +513,11 @@ export class WindowSession {
     if (this.deps.settings.boolean('log-workspace-reorder', false)) {
       this.deps.history.log('ws_removed', { reason: 'reorder' });
     }
-    this.retileAll('workspace-reorder');
+    // Debounced, never synchronous: this handler runs inside Mutter's signal
+    // emission, and retiling here used to re-enter the exile policy from inside
+    // the workspace mutation that caused the reorder (see `workspaceOpDepth`).
+    this.scheduleReconcile('workspace-reorder');
   }
-
   /** Re-derive every tracked window's workspace index from Mutter. */
   private realignWorkspaces(): void {
     for (const tracked of this.windows.values()) {
@@ -546,14 +569,12 @@ export class WindowSession {
       // opened here goes to its own workspace (§7.1).
       if (tileables.length > 2) {
         const extra = tileables[tileables.length - 1];
-        if (this.userMoveProtected(extra)) {
-          this.floatOverPair(extra);
-        } else {
-          this.moveToNewWorkspace(extra, false);
-          return;
-        }
+        const exiled = !this.userMoveProtected(extra) && this.moveToNewWorkspace(extra, false);
+        // Exiling can be refused (cooling down, re-entrant, or the creation
+        // budget is spent): float over the pair rather than leave it stacked.
+        if (!exiled) this.floatOverPair(extra);
         this.signatures.clearAll();
-        this.scheduleRetile(workspaceId, 'float-extra');
+        this.scheduleRetile(workspaceId, exiled ? 'spawn-ws' : 'float-extra');
         continue;
       }
       // §7.2 takes precedence over §6: a lone window stays maximized, not tiled.
@@ -845,6 +866,16 @@ export class WindowSession {
     }
   }
 
+  /** Test hook: reorder workspaces the way the overview does (the trigger that
+   * used to send the exile policy into an unbounded loop). */
+  simulateWorkspaceReorder(from: number, to: number): boolean {
+    const manager = global.workspace_manager;
+    const workspace = manager.get_workspace_by_index(from);
+    if (workspace === null || to < 0 || to >= manager.get_n_workspaces()) return false;
+    manager.reorder_workspace(workspace, to);
+    return true;
+  }
+
   /** Test hook: make a window genuinely sticky (pinned to every workspace). */
   simulateSticky(id: number, sticky: boolean): boolean {
     const tracked = this.windows.get(id);
@@ -995,8 +1026,19 @@ export class WindowSession {
    * §7.1 / §7.3: move a window to a new workspace placed **immediately to the
    * right** of its current one, then follow it there.
    */
-  private moveToNewWorkspace(tracked: TrackedWindow, rememberPrevious: boolean): void {
-    if (this.userMoveProtected(tracked)) return;
+  private moveToNewWorkspace(tracked: TrackedWindow, rememberPrevious: boolean): boolean {
+    const now = Date.now();
+    if (this.userMoveProtected(tracked)) return false;
+    // Never re-enter. Mutter emits `workspaces-reordered` synchronously from the
+    // calls below, and the handler retiles — which used to call straight back
+    // into this method and exile the same window again, ~1 ms per iteration,
+    // until the workspace list had exploded.
+    if (this.workspaceOpDepth > 0) return false;
+    // The same window twice in a row is a cycle, not a policy.
+    if (now - tracked.exiledAtMs < EXILE_COOLDOWN_MS) {
+      this.deps.history.log('ws_spawn_blocked', { id: tracked.id, reason: 'cooldown', since_ms: now - tracked.exiledAtMs });
+      return false;
+    }
     const manager = global.workspace_manager;
     const previous = tracked.surface.workspaceId;
     const target = previous + 1;
@@ -1008,13 +1050,32 @@ export class WindowSession {
       // would disturb window state).
       index = target;
     } else {
-      const appended = manager.get_n_workspaces();
-      manager.append_new_workspace(false, global.get_current_time());
-      const created = manager.get_workspace_by_index(appended);
-      if (created !== null && target < appended) manager.reorder_workspace(created, target);
-      index = Math.min(target, manager.get_n_workspaces() - 1);
+      // Containment: creating workspaces is a handful-per-burst operation, so a
+      // bug anywhere above must not be able to turn it into an unbounded loop.
+      const cap = Math.max(8, this.windows.size + 4);
+      if (manager.get_n_workspaces() >= cap || !this.spawnBudget.take(now)) {
+        this.deps.history.log('ws_spawn_blocked', {
+          id: tracked.id,
+          reason: manager.get_n_workspaces() >= cap ? 'cap' : 'budget',
+          workspaces: manager.get_n_workspaces(),
+          cap,
+          windows: this.windows.size,
+        });
+        return false;
+      }
+      this.workspaceOpDepth += 1;
+      try {
+        const appended = manager.get_n_workspaces();
+        manager.append_new_workspace(false, global.get_current_time());
+        const created = manager.get_workspace_by_index(appended);
+        if (created !== null && target < appended) manager.reorder_workspace(created, target);
+        index = Math.min(target, manager.get_n_workspaces() - 1);
+      } finally {
+        this.workspaceOpDepth -= 1;
+      }
     }
 
+    tracked.exiledAtMs = now;
     this.dynamicWorkspaces.add(index);
     this.maybeNameWorkspace(index);
     this.suppress.add(tracked.id);
@@ -1040,6 +1101,11 @@ export class WindowSession {
     // immediate; the border is hidden by `onWindowMoving` instead.)
     this.instantSwitch(() => this.activateWorkspace(index));
     this.signatures.clearAll();
+    // The reorder signal was suppressed while we were inside the workspace op,
+    // so ask for the pass ourselves: both the origin and the destination
+    // workspace need a plan.
+    this.scheduleReconcile('move-workspace');
+    return true;
   }
 
   private workspaceIsEmpty(workspace: any): boolean {
@@ -1221,7 +1287,14 @@ export class WindowSession {
       for (const i of this.dynamicWorkspaces) shifted.add(i > index ? i - 1 : i);
       this.dynamicWorkspaces.clear();
       for (const i of shifted) this.dynamicWorkspaces.add(i);
-      manager.remove_workspace(workspace, global.get_current_time());
+      // Removing a workspace emits signals of its own; keep it inside the same
+      // no-reentry window as the other workspace mutations.
+      this.workspaceOpDepth += 1;
+      try {
+        manager.remove_workspace(workspace, global.get_current_time());
+      } finally {
+        this.workspaceOpDepth -= 1;
+      }
       if (index < active) active -= 1;
       changed = true;
       this.deps.history.log('ws_removed', { workspaceId: index, reason: 'pruned' });
@@ -1530,12 +1603,19 @@ export class WindowSession {
     return override >= 0 ? override : base;
   }
 
-  private interpretDrop(tracked: TrackedWindow, mode: 'move' | 'resize'): void {
+  private interpretDrop(tracked: TrackedWindow, mode: AdjustMode): void {
     const sibling = this.pairSibling(tracked);
     const screen = this.screenFor(tracked.surface.screenId);
     if (sibling === null || screen === null) return;
-    if (mode === 'move') this.applySwapIntent(tracked, sibling);
-    else this.applyResizeIntent(tracked, sibling, screen);
+    // Landing on the sibling is a swap attempt whatever the reported mode says:
+    // a client or the compositor can clamp a dragged window, changing its size,
+    // which would otherwise read as an inner-edge resize and skew the split
+    // ratio instead of swapping at all (§13).
+    if (mode === 'move' || this.landsOn(tracked.surface.frame, sibling.surface.frame)) {
+      this.applySwapIntent(tracked, sibling);
+      return;
+    }
+    this.applyResizeIntent(tracked, sibling, screen);
   }
 
   private onMaximizeSignal(tracked: TrackedWindow): void {
@@ -1549,7 +1629,7 @@ export class WindowSession {
         // Keep the window's size (it is already maximized) and slide it onto
         // its own workspace to the right; it arrives maximized. Resizing it
         // first would make the transition visibly jump.
-        this.moveToNewWorkspace(tracked, true);
+        if (!this.moveToNewWorkspace(tracked, true)) this.signatures.clearAll();
       } else {
         this.signatures.clearAll();
       }

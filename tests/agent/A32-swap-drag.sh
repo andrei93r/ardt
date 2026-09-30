@@ -27,7 +27,7 @@ adrt MoveWindow "$a" "$NX" "$AY" "$BW" "$BH" >/dev/null
 sleep 1
 start_ns="$(date +%s%N)"
 adrt EndDrag "$a" >/dev/null
-swapped_ms=0
+swapped_ms=-1
 deadline=$((SECONDS + 6))
 while [ "$SECONDS" -lt "$deadline" ]; do
   if dump | python3 -c '

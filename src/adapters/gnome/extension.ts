@@ -77,6 +77,7 @@ interface ExtraHandlers {
   QuitFocused(): boolean;
   SimulateAbove(id: number): boolean;
   SimulateSticky(id: number, sticky: boolean): boolean;
+  SimulateWorkspaceReorder(from: number, to: number): boolean;
   SimulateWorkspaceOrientation(vertical: boolean): boolean;
 }
 
@@ -961,6 +962,7 @@ export default class AdrtExtension extends Extension {
       QuitFocused: () => this.session.closeFocused(),
       SimulateAbove: (id) => this.session.simulateAbove(id),
       SimulateSticky: (id, sticky) => this.session.simulateSticky(id, sticky),
+      SimulateWorkspaceReorder: (from, to) => this.session.simulateWorkspaceReorder(from, to),
       SimulateWorkspaceOrientation: (vertical) => this.session.simulateWorkspaceOrientation(vertical),
       MinimizeWindow: (id) => {
         if (!this.session.windows.has(id)) return false;

@@ -48,6 +48,8 @@ are covered. Coverage references the harnesses:
 | D32 | Drag release | received (interpret the drop); never received (abandoned after 2.5 s quiet with no button held, drop not interpreted) | `session.dragIsStale`, `session.abandonDrag` |
 | D33 | Window changed monitor | re-read the whole surface (flags depend on the monitor) | `TrackedWindow.refreshFrame` |
 | D34 | Policy scope | per workspace **and** monitor: lone-maximize, "more than a pair", unfloat | `session.retile`, `session.evaluateLoneMaximize` |
+| D35 | Workspace creation | allowed (empty workspace to the right, or within budget and cap); refused (cooldown, re-entrant, budget/cap spent → float over the pair) | `session.moveToNewWorkspace`, `core/budget.ts` |
+| D36 | Drop interpretation | lands on the sibling → swap (whatever the reported mode); else move (nothing) or resize (save the ratio) | `session.interpretDrop`, `session.landsOn` |
 | D30 | Indicator style | accent vs hex; width 1–20; opacity 0–100; radius 0–32; pulse on/off | `indicator.ts` |
 | D31 | Close ghost | window was tiled, never tiled, override-redirect | `session.unregister` |
 | D32 | Config bundle | v3, v2; merge, replace; malformed; unknown keys | `core/config.ts` |

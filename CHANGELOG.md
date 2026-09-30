@@ -176,10 +176,28 @@ code changes, MINOR for features, PATCH for fixes.
   then persisted (the pair came back skewed instead of 50/50 for good). Move
   versus resize is now decided by `core/adjust.ts`: a resize changes exactly one
   axis, anything else is a move. Spec §12; A74 and 6 core tests.
+- **The exile policy could run away and explode the workspace list.** Sending a
+  window to its own workspace calls `WorkspaceManager.reorder_workspace()`,
+  which emits `workspaces-reordered` **synchronously**; that handler retiled,
+  which called straight back into the exile policy for the same window. One
+  window was exiled 160 times in a second at ~1 ms per iteration and the
+  workspace count reached **86**: the window ended up on workspace 86 while its
+  clone was left on every workspace, and the desktop was unusable. Deeper
+  containment now: the reorder handler only schedules a debounced pass, a
+  workspace operation can never re-enter `moveToNewWorkspace`, a window that was
+  just exiled waits 3 s before it can be exiled again, and workspace *creation*
+  is rationed (`core/budget.ts`, 12 per 10 s) and capped at `windows + 4`. A
+  refused exile floats the window over the pair instead of leaving it stacked,
+  and the refusal is logged as `ws_spawn_blocked`. A76.
+- A drop that lands on the sibling is a swap whatever the reported drag mode says:
+  a client or the compositor can clamp a dragged window's size, which used to be
+  read as an inner-edge resize and skewed the split ratio instead of swapping at
+  all (A32, A77). Spec §13.
 - New scenarios A72 (pinned versus monitor-implied), A73 (lost drag release), A74
-  (overview drop is a move), A75 (overview patterns stay tiled) and live S15
-  (multi-monitor tiling). A66's resize assertion no longer depends on the pair's
-  current ratio, and is polled instead of sampled once.
+  (overview drop is a move), A75 (overview patterns stay tiled), A76 (the exile
+  runaway), A77 (a clamped drop still swaps) and live S15 (multi-monitor
+  tiling). A66's resize assertion no longer depends on the pair's current ratio,
+  and is polled instead of sampled once.
 - Performance work starts with measurement (stage 0 of `PERFORMANCE_PLAN.md`):
   `DumpState.counters` reports the per-call costs that matter — coherence sweeps
   and their timing, classify calls and cache misses, config builds, rules

@@ -39,6 +39,8 @@ export class TrackedWindow {
   ready = false;
   /** Set when the user moves this window; policies leave it alone for a while. */
   userMovedAtMs = 0;
+  /** When Adrt last sent this window to its own workspace (see EXILE_COOLDOWN_MS). */
+  exiledAtMs = 0;
   lastWorkspaceIdx = 0;
 
   /** Cached min/max dimensions; never re-queried on the tile hot path. */

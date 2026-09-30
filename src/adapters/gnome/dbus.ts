@@ -81,6 +81,7 @@ const INTERFACE_XML = `
     <method name="QuitFocused"><arg type="b" direction="out"/></method>
     <method name="SimulateAbove"><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
     <method name="SimulateSticky"><arg type="u" direction="in"/><arg type="b" direction="in"/><arg type="b" direction="out"/></method>
+    <method name="SimulateWorkspaceReorder"><arg type="u" direction="in"/><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
     <method name="SimulateWorkspaceOrientation"><arg type="b" direction="in"/><arg type="b" direction="out"/></method>
   </interface>
 </node>`;

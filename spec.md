@@ -686,7 +686,7 @@ Keyboard nudge: same, by configured step %, clamped, saved under same key.
 ## 13. Pair Swap
 
 - **Keyboard**: focus one, move toward sibling → toggle swap flag.
-- **Drag**: pick up one, drag center past sibling's center along split axis, no resize, exactly one sibling → toggle swap.
+- **Drag**: pick up one, drag center past sibling's center along split axis, no resize, exactly one sibling → toggle swap. A drop that lands on the sibling swaps even when the client clamped the window's size on the way — the clamp would otherwise read as an inner-edge resize (§12, `core/adjust.ts`).
 - Swap flag stored as set of pair keys (`min(idA,idB)|max(idA,idB)`).
 - Live preview during drag: highlighted rect over the sibling.
 
@@ -715,6 +715,8 @@ Every retile that actually moves ≥ 1 window pushes a snapshot of all tileable 
 ## 16. Workspace Dynamics
 
 Set of dynamic workspaces created by the third-window or maximized-window policies. Empty dynamic → remove (unless only one). User removes dynamic → drop from set. Pending retiles for removed workspaces → cancel. Scan tick periodically re-checks.
+
+Sending a window to a new workspace reorders workspaces, which emits Mutter's `workspaces-reordered` **synchronously**. That must never re-enter the policy: the reorder handler only schedules a debounced pass, a workspace operation blocks a nested exile, a window that was just exiled waits 3 s, and creation itself is rationed (12 per 10 s) and capped at `windows + 4`. A refused exile floats the window over the pair and logs `ws_spawn_blocked`. Without this, one window was exiled 160 times a second and the workspace count reached 86 (`core/budget.ts`, A76).
 
 ---
 

@@ -385,9 +385,10 @@ primitive payloads.
 
 > Interlude (2026-09-30): between Stage 0 and Stage 1 the multi-monitor and
 > overview bugs were fixed first (see `CHANGELOG.md`): the `sticky` flag,
-> `TrackedWindow.refreshFrame`, per-monitor policies, the stale-drag watchdog and
-> `core/adjust.ts`. New tests A72-A75 and live S15. The Stage 0 counters made the
-> diagnosis possible and stay valid; Stage 1 resumes unchanged.
+> `TrackedWindow.refreshFrame`, per-monitor policies, the stale-drag watchdog,
+> `core/adjust.ts`, and the workspace-runaway containment (`core/budget.ts`).
+> New tests A72-A76 and live S15. The Stage 0 counters made the diagnosis
+> possible and stay valid; Stage 1 resumes unchanged.
 | 2 | not started | — | — |
 | 3 | not started | — | — |
 | 4 | not started | — | — |
