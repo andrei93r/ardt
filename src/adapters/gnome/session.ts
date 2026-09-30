@@ -9,6 +9,7 @@
 
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import { wm } from 'resource:///org/gnome/shell/ui/main.js';
 
 import type { HeuristicContext } from '../../core/classify.js';
 import { checkPlan } from '../../core/invariants.js';
@@ -869,11 +870,12 @@ export class WindowSession {
     tracked.lastWorkspaceIdx = index;
     if (rememberPrevious) tracked.previousWorkspaceIdx = previous;
     this.deps.history.log('spawn_ws', { id: tracked.id, workspaceId: index, previous });
-    // Follow the window to the workspace it was just given. (Delaying this so
+    // Follow the window to the workspace it was just given, with no switch
+    // clones (see `instantSwitch`). (Delaying this so
     // the window lands first was tried, but Mutter drops the maximise while the
     // window sits on a workspace the view has not reached, so the follow is
     // immediate; the border is hidden by `onWindowMoving` instead.)
-    this.activateWorkspace(index);
+    this.instantSwitch(() => this.activateWorkspace(index));
     this.signatures.clearAll();
   }
 
@@ -972,11 +974,37 @@ export class WindowSession {
         this.deps.history.log('ws_switch_empty', { id: tracked.id, to: left, reason: 'minimize-float' });
       }
       // Follow the window. The empty workspace it left is pruned safely later.
-      this.activateWorkspace(left);
+      this.instantSwitch(() => this.activateWorkspace(left));
       this.schedulePrune();
       this.scheduleRetile(left, 'minimize-return');
     }
     this.scheduleRetile(workspaceId, 'minimize');
+  }
+
+  /**
+   * Run a programmatic workspace change with the switch animation suppressed.
+   * Mutter draws *clones* of every window during that slide, each carrying the
+   * window's shadow, so a window we are moving looks like it casts a shadow of
+   * itself. Our own slides are instant instead; the user's switches keep their
+   * animation.
+   */
+  private instantSwitch(fn: () => void): void {
+    const controller = (wm as { _workspaceAnimation?: any })._workspaceAnimation;
+    const original = controller?.animateSwitch;
+    if (controller === undefined || controller === null || typeof original !== 'function') {
+      fn();
+      return;
+    }
+    controller.animateSwitch = function (_from: any, _to: any, _direction: any, onComplete: any) {
+      if (typeof onComplete === 'function') onComplete();
+    };
+    try {
+      fn();
+    } finally {
+      this.addTimeout(400, () => {
+        controller.animateSwitch = original;
+      });
+    }
   }
 
   /**
@@ -1468,6 +1496,14 @@ export class WindowSession {
       for (const screen of this.deps.host.screens()) {
         const tileables = this.tileables(index).filter((t) => t.surface.screenId === screen.index);
         if (tileables.length < 2) continue;
+        // More than a pair is incoherent by itself: `retile` resolves it by
+        // floating the newest extra (the plan would otherwise ignore it and
+        // leave it stacked).
+        if (tileables.length > 2) {
+          this.signatures.clearAll();
+          this.retile(index, 'coherence');
+          continue;
+        }
         const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, this.tilerConfig());
         let offender = false;
         for (const placement of plan.placements) {
