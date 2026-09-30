@@ -360,7 +360,7 @@ primitive payloads.
 
 | Stage | State | Commit | Evidence |
 | --- | --- | --- | --- |
-| 0 | **done** | pending | counters live; A66 6/6; 139 core tests; 65 nested scenarios, 0 failures, 3 skips (keybindings need the live session) |
+| 0 | **done** | `3b7103f` | counters live; A66 6/6; 139 core tests; 65 nested scenarios, 0 failures, 3 skips (keybindings need the live session) |
 | 1 | not started | — | — |
 | 2 | not started | — | — |
 | 3 | not started | — | — |

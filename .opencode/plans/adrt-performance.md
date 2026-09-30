@@ -91,7 +91,7 @@ Tick a box as each item lands. A stage is done only when its tests pass.
 - [x] Branch `perf/reduce-work` created from `e001980`
 - [x] Full plan written (`PERFORMANCE_PLAN.md`, commit `4d5ed64`)
 - [x] Checklist available at `~/.opencode/plan/adrt-performance.md` and `~/.local/share/opencode/plans/adrt-performance.md`
-- [x] Stage 0 — counters + `A66` (6/6); core 139/139; nested 65 scenarios, 0 failures, 3 skips
+- [x] Stage 0 — counters + `A66` (6/6); core 139/139; nested 65 scenarios, 0 failures, 3 skips (commit `3b7103f`)
 - [ ] Stage 1
 - [ ] Stage 2
 - [ ] Stage 3
