@@ -16,7 +16,21 @@ EXT_DIR="$STATE/data/gnome-shell/extensions/$UUID"
 BUS_FILE="$STATE/bus"
 PID_FILE="$STATE/shell.pid"
 LOG_FILE="$STATE/shell.log"
-WAYLAND_DISPLAY_NAME="${ADRT_WAYLAND_DISPLAY:-wayland-adrt}"
+WAYLAND_DISPLAY_NAME="${ADRT_WAYLAND_DISPLAY:-wayland-adrt-$(basename "$STATE")}"
+# The runtime dir holds our Wayland socket and lockfile. Resolve it the same way
+# `nested_env` does so an unclean kill (CI timeout, container restart) can be
+# cleaned up: a stale `$WAYLAND_DISPLAY.lock` makes the next start fail with
+# "Failed to create_socket".
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-$STATE/runtime}"
+if [ ! -d "$RUNTIME_DIR" ]; then
+  mkdir -p "$RUNTIME_DIR"
+  chmod 700 "$RUNTIME_DIR"
+fi
+
+# Remove *our own* socket/lock files, never another compositor's.
+cleanup_display_files() {
+  rm -f "$RUNTIME_DIR/$WAYLAND_DISPLAY_NAME" "$RUNTIME_DIR/$WAYLAND_DISPLAY_NAME.lock"
+}
 
 nested_env() {
   export XDG_DATA_HOME="$STATE/data"
@@ -28,6 +42,20 @@ nested_env() {
   export XDG_CURRENT_DESKTOP=GNOME
   export XDG_SESSION_ID=adrt-agent
   export SHELL_DEBUG="${SHELL_DEBUG:-0}"
+  # A headless server has no user session, so XDG_RUNTIME_DIR may be unset or
+  # missing; Mutter requires it to exist with mode 0700.
+  if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ ! -d "${XDG_RUNTIME_DIR:-}" ]; then
+    export XDG_RUNTIME_DIR="$STATE/runtime"
+    mkdir -p "$XDG_RUNTIME_DIR"
+    chmod 700 "$XDG_RUNTIME_DIR"
+  fi
+  # Servers have no GPU: the native headless backend uses a surfaceless EGL
+  # context served by llvmpipe, so software GL must be selected explicitly.
+  if [ "${ADRT_SOFTWARE_GL:-0}" = "1" ]; then
+    export LIBGL_ALWAYS_SOFTWARE=1
+    export GALLIUM_DRIVER=llvmpipe
+    export MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
+  fi
 }
 
 nested_gsettings() {
@@ -81,8 +109,27 @@ cmd_start() {
     echo "nested-shell: already running"
     return 0
   fi
+  # Monitor matrix (ADRT_MONITORS): colon-separated `WxH[@R]` specs, one
+  # `--virtual-monitor` each, in the order given. Mixed resolutions and
+  # orientations are supported: a portrait monitor is simply a spec that is
+  # taller than it is wide. The shell lays them out linearly left to right and
+  # picks the primary itself (see gdctl for control at runtime).
+  local mon_args=""
+  local spec
+  IFS=':' read -r -a monitor_specs <<< "${ADRT_MONITORS:-1280x800}"
+  for spec in "${monitor_specs[@]}"; do
+    [ -n "$spec" ] && mon_args="$mon_args --virtual-monitor $spec"
+  done
+  # `--devkit` is local-development sugar (it forces the headless backend and
+  # exports the Devkit service); D-Bus-driven tests do not need it, and a plain
+  # server install may not have it.
+  local devkit_flag="--devkit"
+  [ "${ADRT_DEVKIT:-1}" = "0" ] && devkit_flag=""
+  # llvmpipe startup is slow, so the readiness window is configurable.
+  local start_ticks=$(( ${ADRT_START_TIMEOUT_S:-20} * 2 ))
   mkdir -p "$STATE/data" "$STATE/config" "$STATE/cache" "$STATE/state"
   rm -f "$BUS_FILE" "$PID_FILE"
+  cleanup_display_files
 
   STATE="$STATE" BUS_FILE="$BUS_FILE" PID_FILE="$PID_FILE" LOG_FILE="$LOG_FILE" \
     WAYLAND_DISPLAY_NAME="$WAYLAND_DISPLAY_NAME" \
@@ -100,22 +147,26 @@ cmd_start() {
       export XDG_CURRENT_DESKTOP=GNOME
       export XDG_SESSION_ID=adrt-agent
       export WAYLAND_DISPLAY="$WAYLAND_DISPLAY_NAME"
-      exec gnome-shell --devkit --wayland --headless --no-x11 \
-        --wayland-display="$WAYLAND_DISPLAY_NAME" \
-        --virtual-monitor 1280x800 > "$LOG_FILE" 2>&1
+      exec gnome-shell '"$devkit_flag"' --wayland --headless --no-x11 \
+        --wayland-display="$WAYLAND_DISPLAY_NAME"'"$mon_args"' > "$LOG_FILE" 2>&1
     ' >/dev/null 2>&1 &
   disown || true
 
-  for _ in $(seq 1 40); do
+  for _ in $(seq 1 "$start_ticks"); do
     sleep 0.5
     if [ -f "$BUS_FILE" ] && shell_name_owned; then
-      echo "nested-shell: started"
+      echo "nested-shell: started ($(monitor_summary))"
       return 0
     fi
   done
-  echo "nested-shell: failed to start; see $LOG_FILE" >&2
+  echo "nested-shell: failed to start within ${ADRT_START_TIMEOUT_S:-20}s; see $LOG_FILE" >&2
   tail -20 "$LOG_FILE" >&2 || true
   return 1
+}
+
+# Human-readable monitor configuration, for logs and test reports.
+monitor_summary() {
+  echo "${ADRT_MONITORS:-1280x800}"
 }
 
 cmd_stop() {
@@ -133,6 +184,7 @@ cmd_stop() {
     fi
   fi
   rm -f "$PID_FILE" "$BUS_FILE"
+  cleanup_display_files
 }
 
 cmd_status() {

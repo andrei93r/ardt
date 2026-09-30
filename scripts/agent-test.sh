@@ -203,7 +203,8 @@ fi
   echo
   echo "- Node: $(node --version 2>/dev/null || echo 'n/a')"
   echo "- GNOME Shell: $(gnome-shell --version 2>/dev/null || echo 'n/a')"
-  echo "- Nested shells: $WORKERS in parallel, each \`gnome-shell --devkit --wayland --headless --no-x11 --virtual-monitor 1280x800\`"
+  echo "- Nested shells: $WORKERS in parallel, each \`gnome-shell${ADRT_DEVKIT:+ }${ADRT_DEVKIT:+--devkit} --wayland --headless --no-x11${ADRT_MONITORS:+ --virtual-monitor ${ADRT_MONITORS//:/ --virtual-monitor }}\`"
+  echo "- Monitor matrix: ${ADRT_MONITORS:-1280x800} (colon-separated, applied to every worker)"
   echo "- Sharding: round-robin across $WORKERS workers"
   echo
   echo "## Commands"

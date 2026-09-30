@@ -1,5 +1,14 @@
 # Performance plan: fewer computations, fewer Shell calls
 
+> **Status 2026-09-30 — re-scoped, not cancelled.** The v2 work
+> (`docs/V2_MODEL.md`, `docs/V2_PLAN.md`) lands first: it deletes the coherence sweep
+> and the timers this plan was measured against. Everything below is still the record
+> of the baseline. What survives is carried forward into v2 Stage 8 — the Stage 0
+> counters (already live), Stage 1 (stop rebuilding configs per call) and Stage 2
+> (O(1) host window lookup). Stage 3 (sweep gating) and the adaptive back-off are
+> struck: the queue and the per-(workspace, monitor) bucketing the router needs
+> replace them. The numbers in *Baseline* stay valid as the before-measurement.
+
 Goal: cut the work the extension does per unit time — especially the work it
 does while nothing is happening — without changing a single user-visible
 behaviour. Every stage is behaviour-preserving by construction, and every change
