@@ -131,6 +131,15 @@ code changes, MINOR for features, PATCH for fixes.
   no slide/clones (like the maximize-right), and the landing is applied snapped
   instead of animating a maximized rect down to a tile while the workspace
   changes. The minimize-return snaps too.
+- A workspace that ends up with more than a pair no longer floats an extra that
+  simply *opened* there: a window the user dragged in (the overview) floats over
+  the pair, while a newly opened third window goes to its own workspace, as the
+  model requires. The sweep could previously float a fresh third window before
+  the register policy moved it right.
+- Floating a window over a pair never touches a *minimized* window's geometry:
+  applying a frame to a minimized window makes Mutter un-minimize it, so a
+  window the user minimized popped back on screen. It now keeps the float
+  state and receives the float rect when it is restored (A62).
 - Adrt's own float paths set Mutter's "always on top" flag (`applyLayer(FLOATING)`
   → `make_above()`), and the classifier then treated `above` as non-tileable, so
   a window we had floated over a pair stayed an orphan after the pair was gone.

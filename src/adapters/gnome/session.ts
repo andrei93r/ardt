@@ -486,15 +486,21 @@ export class WindowSession {
       this.scheduleRetile(workspaceId, 'unfloat-lone');
       return;
     }
-    // A workspace that somehow holds more than a pair (e.g. a window was moved
-    // here in the overview) never leaves an extra floating/stacked: the newest
-    // extra floats centred over the pair, which also retiles the pair.
+    // A workspace that somehow holds more than a pair must never leave an
+    // extra stacked. What to do with the extra depends on how it got here: a
+    // window the user dragged in (the overview) floats over the pair, while one
+    // that simply opened here goes to its own workspace (§7.1).
     const wsTileables = this.tileables(workspaceId);
     if (wsTileables.length > 2) {
       const extra = wsTileables[wsTileables.length - 1];
       const screen = this.screenFor(extra.surface.screenId);
       if (screen !== null) {
-        this.floatOverPair(extra);
+        if (this.userMoveProtected(extra)) {
+          this.floatOverPair(extra);
+        } else {
+          this.moveToNewWorkspace(extra, false);
+          return;
+        }
         this.signatures.clearAll();
         this.scheduleRetile(workspaceId, 'float-extra');
       }
@@ -593,6 +599,10 @@ export class WindowSession {
     tracked.surface.setFloating(true);
     this.deps.tiling.noteSelfApply();
     this.deps.host.applyLayer(tracked.id, Layer.FLOATING, 0);
+    // Never touch a minimized window's geometry: Mutter un-minimizes it as a
+    // side effect, so a window the user minimized would pop back on screen.
+    // It gets the float rect when it is restored instead (see onMinimized).
+    if (tracked.surface.flags.minimized) return;
     // Keep it on top but do not hide the pair behind it: centre it with a
     // margin so the tiled windows stay visible.
     const screen = this.screenFor(tracked.surface.screenId);
@@ -999,6 +1009,14 @@ export class WindowSession {
   /** §7.4 minimize follows to the previous workspace. */
   private onMinimized(tracked: TrackedWindow): void {
     if (!tracked.surface.flags.minimized) {
+      // A window Adrt floated (over a pair) gets its float rect back; it is not
+      // a tile, so it must not be re-tiled.
+      if (tracked.autoFloated) {
+        tracked.surface.refresh();
+        this.floatOverPair(tracked);
+        this.deps.onStateChanged();
+        return;
+      }
       this.scheduleRetile(tracked.surface.workspaceId, 'unminimize');
       return;
     }
