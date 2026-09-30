@@ -77,6 +77,15 @@ misbehaving-client path. The families the last revision added:
   index; the settle after `workareas-changed`; a primary that changes.
 - **undo**: instance + configuration + ratios; recreating a deleted workspace; the toast
   when an instance is gone or a slot was taken.
+- **directions**: same-plane focus and move; across a screen edge with a positional
+  match; onto a portrait screen and back; never a workspace switch.
+- **float placement**: a script-placed float is offset from the window beneath it; a
+  user-placed float is untouched.
+- **highlight diagnostics**: every transition (focus, each suppression, occlusion,
+  workspace switch, overview, close ghost) is journalled with its reason and rect; no
+  suppression is left stuck after any event class; the rect follows an animation.
+- **screen-edge shifts**: axis change, work-area change (primary-only panel strut),
+  gap change and occupancy rules when a window or focus crosses between two screens.
 
 ## Targets and capabilities
 

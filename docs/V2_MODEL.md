@@ -123,6 +123,10 @@ anywhere except §7's single-workspace-capable pair rule.
   restored from minimized onto a full workspace, and overflow on a
   single-workspace-capable screen;
 - a window the user resized beyond its slot when the sibling cannot adapt (§10).
+- **A float adrt places is offset, never perfectly aligned with what is under it**: the
+  initial placement is the centre shifted by an offset (a cascade), so a float over a
+  pair is visibly distinct and immediately grabbable instead of exactly covering the
+  window beneath. A float the *user* positioned is left exactly where they put it.
 
 **Drags and drops.**
 - Dragging the **inner** edge of a pair changes the ratio; the tiler resizes the
@@ -138,6 +142,39 @@ anywhere except §7's single-workspace-capable pair rule.
   the dropped window floats; onto the spare → it lands there and is maximized.
 - A window **restored from minimized** onto a workspace whose two slots are taken
   floats.
+
+### Focus and move directions
+
+- The four directions act **on the current plane first**: on a pair, `left` selects
+  slot 0 and `right` slot 1 along the pair's own axis — so on a portrait screen, or
+  with a vertical workspace layout, `up`/`down` are the pair axis and `left`/`right`
+  reach the other screen.
+- With no window in that direction on this screen, the direction crosses to the
+  **next physical screen** in that direction, chosen by geometry (never by index), and
+  lands on the window whose position matches the one you came from — "the correct
+  orientation": moving left out of a landscape screen onto a portrait one picks the
+  window nearest your current vertical position, and the reverse likewise.
+- **Focus never switches workspace, and neither does a keyboard move**: there is no
+  keyboard path between workspaces.
+- A keyboard **move** follows the same plane rule — into a free slot, a swap when the
+  plane is joined — and the target screen's own rules (§6, §7) when it crosses an edge.
+
+### Behaviour shifts at screen edges
+
+Crossing an edge changes more than the coordinates, and it is explicit rather than
+emergent:
+
+- **Axis**: each screen's split axis follows that screen (landscape → left/right,
+  portrait or vertical workspaces → top/bottom), so a window crossing the edge is
+  re-slotted on the target's axis, chosen from where it was dropped mapped onto it.
+- **Work area**: each screen has its own, and the top bar's strut exists **only on the
+  primary**, so the same slot is a different size on two screens. A window crossing an
+  edge is re-clamped to the target's fresh work area (§10).
+- **Gaps** are per orientation, so the spacing shifts with the target.
+- **Occupancy** is decided by the target screen's own rules: a free slot, a swap by
+  perimeter crossing, or a float when there is no room (and always a float on a
+  single-workspace-capable screen).
+- None of this creates, removes or navigates a workspace.
 
 ## 7. Single-workspace-capable and fixed-workspace screens
 
@@ -245,6 +282,14 @@ split between two windows.
   `_swipeTracker` for gesture suppression; accepting a client's own rect through the
   §10 ladder.
 - **Invariants are asserted, never enforced** (§5).
+- **The active-window highlight is instrumented**, because it has its own bug classes
+  (stuck on a workspace that is gone, drawn at a stale rect, flicker, a suppression
+  that never lifts): every highlight change is journalled with its **reason** — focus
+  changed, suppression added or removed (`drag`, `switch`, `pause`, `sharing`,
+  `overview`, `occluded`), rect update, close ghost, animation tick — together with its
+  rect and the active suppression set, under `debug.indicator`. `DumpState` reports the
+  same values, so "why is the border there / not there" is answerable from one
+  snapshot.
 
 ## 12. App registry (profiles, exceptions and adaptation in one entry)
 
