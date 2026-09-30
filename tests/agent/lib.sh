@@ -45,6 +45,25 @@ assert_true() {
   if [ "$value" = "true" ]; then pass "$label"; else fail "$label (got '$value')"; fi
 }
 
+# Numeric comparison for the performance scenarios:
+#   assert_num <label> <op> <value> <threshold>     e.g. assert_num "idle builds" == 0 "$delta"
+assert_num() {
+  local label="$1" op="$2" value="$3" threshold="$4"
+  if python3 -c "
+import operator, sys
+ops = {'==': operator.eq, '>': operator.gt, '<': operator.lt, '>=': operator.ge, '<=': operator.le}
+try:
+    ok = ops['$op'](float('$value'), float('$threshold'))
+except ValueError:
+    ok = False
+sys.exit(0 if ok else 1)
+" 2>/dev/null; then
+    pass "$label"
+  else
+    fail "$label (got '$value', expected $op $threshold)"
+  fi
+}
+
 adrt() {
   bash "$NESTED" dbus "$@"
 }
@@ -88,6 +107,34 @@ for w in data['windows']:
 
 state_expr() {
   dump | python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"
+}
+
+# Stage 0 diagnostics (PERFORMANCE_PLAN.md): the whole counter block, as JSON.
+counters() {
+  dump | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin).get("counters", {})))'
+}
+
+# One counter's current value; prints MISSING when the counter does not exist.
+counter() {
+  dump | python3 -c "
+import json,sys
+c = json.load(sys.stdin).get('counters', {})
+print(c.get('$1', 'MISSING'))
+"
+}
+
+# How much a counter grew over N seconds (default 3). NAN when it is missing.
+counter_delta() {
+  local name="$1" secs="${2:-3}" before after
+  before="$(counter "$name")"
+  sleep "$secs"
+  after="$(counter "$name")"
+  python3 -c "
+try:
+    print(round(float('$after') - float('$before'), 3))
+except ValueError:
+    print('NAN')
+"
 }
 
 border_visible() {

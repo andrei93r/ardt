@@ -33,6 +33,26 @@ export class GnomeHost implements PlatformHost {
   private readonly connections: Connection[] = [];
   private readonly surfaceCache = new Map<number, GnomeSurface>();
   private screensCache: Screen[] = [];
+  /**
+   * Diagnostics (§24): window lookups and full `list_all_windows()` scans. A
+   * lookup must not cost a scan — the surface cache already holds the window.
+   */
+  private lookupCount = 0;
+  private scanCount = 0;
+
+  get hostLookups(): number {
+    return this.lookupCount;
+  }
+
+  get hostScans(): number {
+    return this.scanCount;
+  }
+
+  /** The single place the window list is fetched, so the counter is honest. */
+  private listAllWindows(): any[] {
+    this.scanCount += 1;
+    return global.display.list_all_windows();
+  }
 
   enable(): void {
     this.refreshScreens();
@@ -84,7 +104,7 @@ export class GnomeHost implements PlatformHost {
 
   surfaces(): Surface[] {
     const out: Surface[] = [];
-    for (const win of global.display.list_all_windows()) {
+    for (const win of this.listAllWindows()) {
       if (win.get_id() === undefined) continue;
       out.push(this.ensureSurface(win));
     }
@@ -119,7 +139,8 @@ export class GnomeHost implements PlatformHost {
   }
 
   windowFor(id: number): any | null {
-    for (const win of global.display.list_all_windows()) {
+    this.lookupCount += 1;
+    for (const win of this.listAllWindows()) {
       if (win.get_id() === id) return win;
     }
     return null;
@@ -189,7 +210,8 @@ export class GnomeHost implements PlatformHost {
   }
 
   private windowById(id: number): any | null {
-    for (const win of global.display.list_all_windows()) {
+    this.lookupCount += 1;
+    for (const win of this.listAllWindows()) {
       if (win.get_id() === id) return win;
     }
     return null;

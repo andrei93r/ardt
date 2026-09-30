@@ -49,8 +49,14 @@ export class Tiling {
   private destroyed = false;
   private verifyFailuresRemaining = 0;
   private lastAppliedAtMs = 0;
+  /** Diagnostics: plans that actually moved at least one window. */
+  private appliedPlans = 0;
 
   constructor(private readonly deps: TilingDeps) {}
+
+  get plansApplied(): number {
+    return this.appliedPlans;
+  }
 
   /** When the tiler last moved a window, so callers can ignore their own frames. */
   get lastApplyAtMs(): number {
@@ -169,6 +175,8 @@ export class Tiling {
     }
 
     if (!moved) return false;
+
+    this.appliedPlans += 1;
 
     const workspaceId = plan.placements.length > 0 ? this.deps.windows().get(plan.placements[0].surfaceId)?.surface.workspaceId ?? 0 : 0;
     // §15: capture the ratios the "before" rects came from, so undo restores a

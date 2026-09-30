@@ -81,6 +81,13 @@ export class WindowSession {
   private lastReconcileMs = 0;
   private lastApplyMs = 0;
   private lastApplyAtMs = 0;
+  /** Diagnostics (PERFORMANCE_PLAN.md stage 0): counted, never used to decide. */
+  private classifyCalls = 0;
+  private classifyMisses = 0;
+  private plansComputed = 0;
+  private sweepFrameReads = 0;
+  private sweepMsTotal = 0;
+  private sweepMsMax = 0;
 
   constructor(private readonly deps: SessionDeps) {}
 
@@ -526,6 +533,7 @@ export class WindowSession {
       // behind the policy's back (§7.3), so leave it to the policy.
       if (tileables.some((t) => compat.isMaximized(t.win))) continue;
       const startedUs = GLib.get_monotonic_time();
+      this.plansComputed += 1;
       const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, this.tilerConfig());
       const violations = checkPlan(plan, screen.workArea ?? screen.geometry);
       if (violations.length > 0) {
@@ -859,6 +867,8 @@ export class WindowSession {
   }
 
   classify(tracked: TrackedWindow): ReturnType<TrackedWindow['classify']> {
+    this.classifyCalls += 1;
+    if (!tracked.hasClassification) this.classifyMisses += 1;
     return tracked.classify(this.deps.settings.classifierConfig(), this.heuristicContext(tracked.id));
   }
 
@@ -1602,6 +1612,7 @@ export class WindowSession {
     if (this.deps.isPaused() || this.suspended) return;
     if (this.dragging || this.adjustId !== null) return;
     this.coherenceRuns += 1;
+    const sweepStartedUs = GLib.get_monotonic_time();
     const count = global.workspace_manager.get_n_workspaces();
     for (let index = 0; index < count; index++) {
       for (const screen of this.deps.host.screens()) {
@@ -1653,11 +1664,13 @@ export class WindowSession {
           continue;
         }
 
+        this.plansComputed += 1;
         const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, this.tilerConfig());
         let offender = false;
         for (const placement of plan.placements) {
           const tracked = this.windows.get(placement.surfaceId);
           if (tracked === undefined) continue;
+          this.sweepFrameReads += 1;
           tracked.surface.refreshFrame();
           const r = tracked.surface.frame;
           const off =
@@ -1681,6 +1694,9 @@ export class WindowSession {
         this.deps.onStateChanged();
       }
     }
+    const sweepMs = (GLib.get_monotonic_time() - sweepStartedUs) / 1000;
+    this.sweepMsTotal += sweepMs;
+    if (sweepMs > this.sweepMsMax) this.sweepMsMax = sweepMs;
   }
 
   /** How many periodic coherence sweeps have run (diagnostics). */
@@ -1696,6 +1712,31 @@ export class WindowSession {
   /** How many corrections the sweeps have made (diagnostics). */
   coherenceFixCount(): number {
     return this.coherenceFixes;
+  }
+
+  /**
+   * Stage 0 counters (PERFORMANCE_PLAN.md). They exist only to be observed:
+   * no decision anywhere reads them.
+   */
+  counters(): {
+    sweeps: number;
+    sweepMsMax: number;
+    sweepMsAvg: number;
+    classifyCalls: number;
+    classifyMisses: number;
+    plansComputed: number;
+    sweepFrameReads: number;
+  } {
+    const round = (value: number): number => Math.round(value * 1000) / 1000;
+    return {
+      sweeps: this.coherenceRuns,
+      sweepMsMax: round(this.sweepMsMax),
+      sweepMsAvg: this.coherenceRuns > 0 ? round(this.sweepMsTotal / this.coherenceRuns) : 0,
+      classifyCalls: this.classifyCalls,
+      classifyMisses: this.classifyMisses,
+      plansComputed: this.plansComputed,
+      sweepFrameReads: this.sweepFrameReads,
+    };
   }
 
   /** §21: bounded state assertion. */

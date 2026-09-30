@@ -33,7 +33,23 @@ function writeVariant(settings: any, key: string, value: unknown): boolean {
 }
 
 export class GnomeSettings implements SettingsStore {
+  /**
+   * Diagnostics (§24): how often a config object is built and how often the
+   * rules JSON is parsed. Both are per-call today and are the target of the
+   * first caching pass.
+   */
+  private configBuildCount = 0;
+  private rulesParseCount = 0;
+
   constructor(private readonly settings: any) {}
+
+  get configBuilds(): number {
+    return this.configBuildCount;
+  }
+
+  get rulesParses(): number {
+    return this.rulesParseCount;
+  }
 
   keys(): string[] {
     return this.settings.list_keys();
@@ -76,10 +92,12 @@ export class GnomeSettings implements SettingsStore {
   }
 
   rules(): { rules: Rule[]; errors: string[] } {
+    this.rulesParseCount += 1;
     return parseRulesJson(this.string('rules-json', '[]'));
   }
 
   classifierConfig(): ClassifyConfig {
+    this.configBuildCount += 1;
     return {
       exceptionApps: this.strv('exception-apps'),
       heuristicModalDetect: this.boolean('heuristic-modal-detect', true),
@@ -88,6 +106,7 @@ export class GnomeSettings implements SettingsStore {
   }
 
   tilerConfig(ratios: Readonly<Record<string, number>>, swapPairs: ReadonlySet<string>): TilerConfig {
+    this.configBuildCount += 1;
     const policy = this.string('min-size-policy', 'respect');
     const minSizePolicy: MinSizePolicy =
       policy === 'ignore' || policy === 'stack' ? policy : 'respect';

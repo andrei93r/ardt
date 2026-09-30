@@ -1079,6 +1079,15 @@ export default class AdrtExtension extends Extension {
       motionSkip: this.motionSkip,
       adaptations: this.adaptation.size,
       perf: this.session.perf(),
+      counters: {
+        ...this.session.counters(),
+        configBuilds: this.settings.configBuilds,
+        rulesParses: this.settings.rulesParses,
+        plansApplied: this.tiling.plansApplied,
+        hostLookups: this.host.hostLookups,
+        hostScans: this.host.hostScans,
+        logEvents: this.history.logEvents,
+      },
       bounds: this.session.memoryBounds(),
     });
   }

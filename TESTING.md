@@ -10,7 +10,7 @@ scenarios in a nested GNOME Shell, and manual scenarios that need hardware
 npm run lint          # eslint src tests
 npm run build         # tsc
 npm run test:core     # Vitest, plain Node
-npm run test:agent    # 49 scenarios in a nested GNOME Shell
+npm run test:agent    # 65 scenarios in a nested GNOME Shell
 npm run test:all      # all of the above
 ```
 
@@ -124,6 +124,7 @@ those shortcuts.
 | A63 | Client text bounded | titles are clipped, no oversized history lines |
 | A64 | Vertical workspaces | top/bottom split and up/down swap (V-Shell) |
 | A65 | Logging and rotation | build marker reported; the log rotates and is pruned |
+| A66 | Performance counters | the counter block is present and advances as work happens |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

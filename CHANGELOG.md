@@ -148,6 +148,14 @@ code changes, MINOR for features, PATCH for fixes.
   the tiler all read the same signal V-Shell sets
   (`override_workspace_layout(rows = -1, columns = 1)`), so a pair splits 50/50
   top/bottom and moving a window up/down swaps it (A64).
+- Performance work starts with measurement (stage 0 of `PERFORMANCE_PLAN.md`):
+  `DumpState.counters` reports the per-call costs that matter — coherence sweeps
+  and their timing, classify calls and cache misses, config builds, rules
+  parses, plans computed/applied, Mutter frame reads from the sweep, host window
+  lookups, `list_all_windows()` scans and log events. The agent harness gains
+  `counters`, `counter`, `counter_delta` and `assert_num` helpers; scenario A66
+  is the baseline every later stage measures against. No behaviour changes: the
+  counters are only observed, never read to decide anything.
 - Client text is bounded (core/text.ts): a window title is clipped at 256 chars
   and every history payload string at 512. A corrupted client title (a
   mojibake-doubling one reached 805 million characters) produced a 256 MB

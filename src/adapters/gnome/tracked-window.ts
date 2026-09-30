@@ -62,6 +62,15 @@ export class TrackedWindow {
     return this.hintsKnown;
   }
 
+  /**
+   * Whether a classification is already cached. Diagnostics only: it lets the
+   * session report how often `classify()` actually had to run (a cache miss)
+   * instead of quietly rebuilding the config for a cached answer.
+   */
+  get hasClassification(): boolean {
+    return this.cached !== null;
+  }
+
   /** §24 item 1: classify at most once per relevant signal. */
   classify(config: ClassifyConfig, context: HeuristicContext): Classification {
     if (this.cached === null) this.cached = classify(this.surface, config, context);

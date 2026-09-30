@@ -117,6 +117,12 @@ export class History {
 
   /** Size at which the live part rotates (bytes). */
   private maxBytes = DEFAULT_MAX_BYTES;
+  /** Diagnostics: events actually written (not the ones dropped while disabled). */
+  private written = 0;
+
+  get logEvents(): number {
+    return this.written;
+  }
 
   constructor(enabled: boolean, retentionDays: number, dailyFolders: boolean, maxBytes = DEFAULT_MAX_BYTES) {
     this.enabled = enabled;
@@ -148,6 +154,7 @@ export class History {
     const event: HistoryEvent = { t: Date.now(), ev, trace, ...safe };
     if (typeof fields.trace === 'number') event.trace = fields.trace;
     this.append(event);
+    this.written += 1;
     return event;
   }
 
