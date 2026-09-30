@@ -103,9 +103,16 @@ code changes, MINOR for features, PATCH for fixes.
 - The border is hidden at once when Adrt moves a window to another workspace
   (a third window going right), instead of being drawn at the old spot while
   the window is pushed away.
-- Animation frames are clamped to the screen's work area and run shorter
-  (70-160 ms), so a reflow no longer looks harsh or leaves a window briefly
-  outside its tile.
+- Animation frames are clamped to the screen's work area and eased out cubic
+  at 130-190 ms (up to 240 ms for large moves), so a reflow stays smooth
+  without exceeding the boundary.
+- A pair is laid out by where its windows actually are, not by window id, so
+  the window on the left stays the left tile (and the top one stays on top in
+  a stacked split) even after a window is created or reordered out of id order.
+- Maximize keeps the immediate view follow: delaying it so the window lands
+  first was tried and Mutter drops the maximise while the window sits on a
+  workspace the view has not reached. The border is hidden during the move
+  instead, so the window is not "selected" on the workspace it leaves.
 - An emptied workspace is reaped promptly: the post-close prune runs again once
   the asynchronous workspace switch has landed, and a debounced reconcile only
   records undo for user adjusts.

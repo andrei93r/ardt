@@ -20,8 +20,10 @@ export function easeOutQuad(t: number): number {
 }
 
 /** §11.4: ease-out quad for short moves, ease-out cubic otherwise. */
-export function easingFor(durationMs: number): (t: number) => number {
-  return durationMs < 150 ? easeOutQuad : easeOutCubic;
+export function easingFor(_durationMs: number): (t: number) => number {
+  // Always ease out cubic: a quadratic start is too abrupt and reads as janky
+  // at the short durations a reflow uses.
+  return easeOutCubic;
 }
 
 export interface AnimatorHooks {

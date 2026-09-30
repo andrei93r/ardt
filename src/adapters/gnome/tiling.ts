@@ -347,7 +347,7 @@ export class Tiling {
   private durationFor(from: Rect, to: Rect): number {
     const base = this.deps.settings.int('animation-duration', 180);
     const delta = Math.abs(from.x - to.x) + Math.abs(from.y - to.y) + Math.abs(from.width - to.width) + Math.abs(from.height - to.height);
-    return delta > 400 ? Math.min(160, base) : Math.max(70, Math.min(120, base));
+    return delta > 400 ? Math.min(240, base) : Math.max(130, Math.min(190, base));
   }
 
   private within(a: Rect, b: Rect): boolean {

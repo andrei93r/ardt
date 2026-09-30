@@ -228,3 +228,32 @@ describe('gap overrides', () => {
     expect(plan.placements[0].rect).toEqual(rect(12, 12, 1056, 1896));
   });
 });
+
+describe('computePlans — sides follow relative position', () => {
+  it('keeps the window that is visually on the left on the left, whatever the ids', () => {
+    // id 2 is on the left, id 1 on the right.
+    const left = window({ id: 2, appId: 'b', rect: rect(0, 0, 400, 600) });
+    const right = window({ id: 1, appId: 'a', rect: rect(1000, 0, 400, 600) });
+    const plan = computePlans([right, left], landscape, config());
+    const at = (id: number) => plan.placements.find((p) => p.surfaceId === id)!;
+    expect(at(2).rect.x).toBeLessThan(at(1).rect.x);
+    expect(at(2).order).toBe(0);
+    expect(at(1).order).toBe(1);
+  });
+
+  it('falls back to the id when the windows overlap exactly', () => {
+    const a = window({ id: 1, appId: 'a', rect: rect(0, 0, 400, 600) });
+    const b = window({ id: 2, appId: 'b', rect: rect(0, 0, 400, 600) });
+    const plan = computePlans([b, a], landscape, config());
+    expect(plan.placements.find((p) => p.surfaceId === 1)!.order).toBe(0);
+    expect(plan.placements.find((p) => p.surfaceId === 2)!.order).toBe(1);
+  });
+
+  it('orders a stacked (vertical) pair top-to-bottom by y', () => {
+    const top = window({ id: 2, appId: 'b', rect: rect(0, 0, 800, 300) });
+    const bottom = window({ id: 1, appId: 'a', rect: rect(0, 700, 800, 300) });
+    const plan = computePlans([bottom, top], portrait, config());
+    const at = (id: number) => plan.placements.find((p) => p.surfaceId === id)!;
+    expect(at(2).rect.y).toBeLessThan(at(1).rect.y);
+  });
+});

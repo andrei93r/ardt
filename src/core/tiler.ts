@@ -241,11 +241,24 @@ function applyRuleOverride(override: RuleOverride, w0: TilerWindow, w1: TilerWin
 }
 
 /**
+ * Order windows by where they actually are, so a pair's left window stays the
+ * left tile and its right window stays the right tile — even when a window was
+ * created or reordered out of id order. Ties fall back to the id.
+ */
+function byRelativePosition(a: TilerWindow, b: TilerWindow): number {
+  const dx = a.rect.x - b.rect.x;
+  if (Math.abs(dx) > 1) return dx;
+  const dy = a.rect.y - b.rect.y;
+  if (Math.abs(dy) > 1) return dy;
+  return a.id - b.id;
+}
+
+/**
  * Layout for the tileable windows of a single workspace and monitor (§6).
  * Callers guarantee at most two windows; extras are ignored.
  */
 export function computePlans(windows: readonly TilerWindow[], screen: Screen, config: TilerConfig): TilePlan {
-  const sorted = [...windows].sort((a, b) => a.id - b.id);
+  const sorted = [...windows].sort(byRelativePosition);
   if (sorted.length === 0) return { placements: [] };
 
   const gap = effectiveGap(config, screen);

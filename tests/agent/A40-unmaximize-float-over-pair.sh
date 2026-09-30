@@ -27,12 +27,18 @@ sleep 1
 spawn_window >/dev/null
 wait_count 3 15 || true
 wait_settled 12
+if ! wait_python 15 '
+import json, sys
+d = json.load(sys.stdin)
+here = [w for w in d["windows"] if w["tileable"] and w["workspace"] == int("'"$pair_ws"'")]
+sys.exit(0 if len(here) >= 2 else 1)'; then
+  fail "the pair workspace never held two windows (only $(state_expr "len([w for w in d['windows'] if w['tileable'] and w['workspace'] == $pair_ws])"))"
+fi
 
 # Return B to that workspace.
 adrt UnmaximizeWindow "$B" >/dev/null
-sleep 3
 
-check_python "the returned window floats on top without hiding the pair" '
+poll "the returned window floats on top without hiding the pair" '
 import json, sys
 d = json.load(sys.stdin)
 area = d["monitors"][0].get("workArea") or d["monitors"][0]["geometry"]

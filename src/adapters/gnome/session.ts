@@ -784,7 +784,10 @@ export class WindowSession {
     tracked.lastWorkspaceIdx = index;
     if (rememberPrevious) tracked.previousWorkspaceIdx = previous;
     this.deps.history.log('spawn_ws', { id: tracked.id, workspaceId: index, previous });
-    // Follow the window to the workspace it was just given.
+    // Follow the window to the workspace it was just given. (Delaying this so
+    // the window lands first was tried, but Mutter drops the maximise while the
+    // window sits on a workspace the view has not reached, so the follow is
+    // immediate; the border is hidden by `onWindowMoving` instead.)
     this.activateWorkspace(index);
     this.signatures.clearAll();
   }

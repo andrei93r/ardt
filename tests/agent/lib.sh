@@ -189,6 +189,18 @@ check_python() {
   fi
 }
 
+# Poll a python predicate until it holds, then pass; on timeout report the
+# failing state. Prefer this over sampling once when a retile may be settling.
+poll() {
+  local label="$1" code="$2" timeout="${3:-12}" out
+  if wait_python "$timeout" "$code"; then
+    pass "$label"
+  else
+    out="$(dump | python3 -c "$code" 2>&1 || true)"
+    fail "$label${out:+ — $out}"
+  fi
+}
+
 close_all() {
   local ids
   ids="$(list_ids)"
