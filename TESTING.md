@@ -33,10 +33,15 @@ started on, and fail if the journal logs `[adrt] ERROR`. `S12` injects real
 
 Each scenario runs on a workspace that holds no windows (the lowest-index
 empty one), so your own tileable windows never take part in the layouts under
-test. The test client is `nautilus --new-window` — plain `nautilus` is
-single-instance and would silently reuse one window. If every workspace holds a
-window, the scenarios exit with a message asking you to free one. Results are
-written to `TEST_RESULTS_SESSION.md`.
+test. The overview is never opened: every scenario runs with it closed, as your
+desktop normally is. The client rotates across real apps — Files
+(`nautilus --new-window`), **Chrome** (`google-chrome --new-window`) and
+Calculator — so several apps exercise the tiler; pin one with `spawn <cmd>`.
+Plain `nautilus`/`chrome` are single-instance and would silently reuse a
+window, and `gnome-text-editor` is excluded (it opens a draft window and
+ignores a close). If every workspace holds a window, the scenarios exit with a
+message asking you to free one. Results are written to
+`TEST_RESULTS_SESSION.md`.
 
 ### Keybindings need the interactive session
 
@@ -91,7 +96,7 @@ those shortcuts.
 | A34 | App opens maximized | `SpawnWindow('nautilus')`, assert it tiles with the sibling |
 | A35 | Minimize         | `MinimizeWindow`, assert return + empty workspace removed |
 | A36 | Close ghost      | tiled close fades a ghost, dialog close does not |
-| A37 | Overview border | border hidden in the overview, tiling keeps running |
+| A37 | Overview closed | scenarios run with the overview closed; border shows |
 | A38 | Indicator style  | border uses the system accent and configured width |
 | A39 | Keybinding conflicts | no Adrt accelerator collides with a GNOME binding |
 | A40 | Unmaximize onto a pair | floats on top, centred, pair still visible |

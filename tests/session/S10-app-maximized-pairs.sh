@@ -4,12 +4,16 @@
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 session_begin
 
-spawn
+# The premise is an app that opens maximized, so pin Files for both windows and
+# wait for the first to be maximized before the sibling arrives.
+spawn "$FILES"
 wait_tests 1 12 || true
-sleep 1
-adrt SpawnWindow "nautilus" >/dev/null
+wait_python 15 '
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if any(w["maximized"] for w in d["windows"]) else 1)' || true
+adrt SpawnWindow "$FILES" >/dev/null
 wait_tests 2 15 || true
-sleep 1.5
 
 TEST_IDS="$(test_ids)" poll "the maximized app was tiled with its sibling" '
 import os, json, sys

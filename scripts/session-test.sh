@@ -26,11 +26,18 @@ if ! gdbus call --session --dest org.adrt.Adrt --object-path /org/adrt/Adrt \
   exit 2
 fi
 
-# Is the running module the freshly installed one? Probe a recent method.
-if gdbus call --session --dest org.adrt.Adrt --object-path /org/adrt/Adrt \
-  --method org.adrt.Adrt.SimulateOverview true 2>&1 | grep -q 'UnknownMethod'; then
-  echo "session-test: WARNING: the running build is older than the installed one." >&2
-  echo "  Log out and back in (Wayland cannot reload the Shell), then re-run." >&2
+# Is the running module the freshly installed one? Compare the installed file's
+# time with the Shell's start time. This never touches the desktop (an earlier
+# version probed a D-Bus method, which opened the overview on the user's screen).
+INSTALLED="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/adrt@adrt.dev/extension.js"
+shell_pid="$(pgrep -x gnome-shell | head -1)"
+if [ -f "$INSTALLED" ] && [ -n "$shell_pid" ]; then
+  file_ts="$(stat -c %Y "$INSTALLED" 2>/dev/null || echo 0)"
+  proc_ts="$(stat -c %Y "/proc/$shell_pid" 2>/dev/null || echo 0)"
+  if [ "$file_ts" -gt "$proc_ts" ]; then
+    echo "session-test: WARNING: the installed extension is newer than the running Shell." >&2
+    echo "  Log out and back in (Wayland cannot reload the Shell), then re-run." >&2
+  fi
 fi
 
 echo "session-test: running against the live session."

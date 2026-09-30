@@ -12,7 +12,17 @@ SESSION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SESSION_DIR/../.." && pwd)"
 PARSE="$ROOT_DIR/tests/agent/parse.py"
 
-TEST_CLIENT="${ADRT_SESSION_CLIENT:-nautilus --new-window}"
+# Test clients. Plain nautilus/chrome are single-instance and silently reuse an
+# existing window, so always ask for a new one. gnome-text-editor is excluded:
+# it opens a second draft window and ignores a close request.
+FILES="${ADRT_SESSION_FILES:-nautilus --new-window}"
+CHROME="${ADRT_SESSION_CHROME:-google-chrome --new-window}"
+CALC="${ADRT_SESSION_CALC:-gnome-calculator}"
+TEST_CLIENT="${ADRT_SESSION_CLIENT:-$FILES}"
+# Rotate the client across spawned windows so several real apps (Chrome in
+# particular) exercise the tiler. Pass an explicit command to `spawn` to pin it.
+CLIENTS=("$FILES" "$CHROME" "$FILES" "$CHROME" "$CALC")
+SPAWN_INDEX=0
 
 checks=0
 failures=0
@@ -138,7 +148,12 @@ print(" ".join(w for w in now if w not in base))
 }
 
 spawn() {
-  adrt SpawnWindow "${1:-$TEST_CLIENT}" >/dev/null
+  local cmd="${1:-}"
+  if [ -z "$cmd" ]; then
+    cmd="${CLIENTS[$((SPAWN_INDEX % ${#CLIENTS[@]}))]}"
+    SPAWN_INDEX=$((SPAWN_INDEX + 1))
+  fi
+  adrt SpawnWindow "$cmd" >/dev/null
   sleep 1
 }
 

@@ -13,7 +13,7 @@ id="$(test_ids | awk '{print $1}')"
 adrt ActivateWindow "$id" >/dev/null
 sleep 1
 
-if ! adrt SimulateWorkspaceSwitch 1500 | grep -q true; then
+if ! adrt SimulateWorkspaceSwitch 800 | grep -q true; then
   skip "SimulateWorkspaceSwitch unsupported by the running build"
   summary
   exit 0

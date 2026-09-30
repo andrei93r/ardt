@@ -94,7 +94,11 @@ code changes, MINOR for features, PATCH for fixes.
 - The nested harness closes the overview when its Shell comes up (a headless
   devkit Shell opens it during startup; a real session never does), and the
   live scenarios wait for a settled state instead of sampling once, so the
-  slower real Shell no longer produces false failures.
+  slower real Shell no longer produces false failures. No test ever opens the
+  overview.
+- Live scenarios run on a window-free workspace and rotate the client across
+  Files, Chrome and Calculator, so several real apps (Chrome in particular)
+  exercise the tiler.
 - The border's workspace-switch suppression is driven by GNOME's
   `WorkspaceAnimationController`: the swipe tracker's `begin`/`update` hide it
   the instant a touchpad gesture starts, and the motion watcher polls
