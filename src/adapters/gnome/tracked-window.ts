@@ -32,6 +32,9 @@ export class TrackedWindow {
   stubborn = false;
   cooldownUntilMs = 0;
   previousWorkspaceIdx: number | null = null;
+  /** True when Adrt floated this window itself (float-over-pair, unmaximize
+   * return) rather than the user asking for it. */
+  autoFloated = false;
   /** Set once the first frame has been processed; signals before that are not user actions. */
   ready = false;
   /** Set when the user moves this window; policies leave it alone for a while. */

@@ -111,6 +111,7 @@ those shortcuts.
 | A50 | Unmaximize returns left | left workspace holds a pair → comes back floating on top |
 | A51 | Prune safety | only Adrt's workspaces are reaped; no churn |
 | A52 | Adaptation minimum | a refusal to grow does not record a bogus min |
+| A53 | No floating leftover | one tile + an auto-float re-tiles both |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

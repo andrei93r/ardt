@@ -318,6 +318,7 @@ export class WindowSession {
     tracked.ready = true;
     // §9.3 / §19.1: an app the user opted to keep floating stays floating.
     if (this.deps.floats.has(tracked.surface.appId)) {
+      tracked.autoFloated = false;
       tracked.surface.setFloating(true);
       this.deps.host.applyLayer(tracked.id, Layer.FLOATING, 0);
       tracked.invalidateClassification();
@@ -460,6 +461,20 @@ export class WindowSession {
       this.scheduleRetile(workspaceId, 'lone-unmaximize');
       return;
     }
+    // A workspace reduced to a single tile plus an automatic float tiles both
+    // again — no floating leftover once the pair loses a member. This runs
+    // before the lone-maximize policy, which would otherwise keep the one
+    // remaining tile maximized and leave the float alone.
+    const autoFloated = this.autoFloated(workspaceId);
+    if (autoFloated.length === 1 && this.tileables(workspaceId).length === 1) {
+      const floater = autoFloated[0];
+      floater.surface.setFloating(false);
+      this.deps.host.applyLayer(floater.id, Layer.TILED, 0);
+      this.signatures.clearAll();
+      this.deps.history.log('tile', { reason: 'unfloat-lone', id: floater.id, workspaceId });
+      this.scheduleRetile(workspaceId, 'unfloat-lone');
+      return;
+    }
     // §7.2 takes precedence over §6: a lone window stays maximized, not tiled.
     if (this.shouldLoneMaximize(workspaceId)) {
       const only = this.tileables(workspaceId)[0];
@@ -542,6 +557,20 @@ export class WindowSession {
     return out.sort((a, b) => a.id - b.id);
   }
 
+  /** Windows Adrt floated itself (float-over-pair, unmaximize-return), i.e.
+   * floating windows the user did not ask to keep floating. */
+  private autoFloated(workspaceId: number): TrackedWindow[] {
+    const out: TrackedWindow[] = [];
+    for (const tracked of this.windows.values()) {
+      if (tracked.surface.workspaceId !== workspaceId) continue;
+      if (tracked.surface.flags.minimized) continue;
+      if (!tracked.surface.flags.floating) continue;
+      if (!tracked.autoFloated) continue;
+      out.push(tracked);
+    }
+    return out;
+  }
+
   nonTransient(workspaceId: number): TrackedWindow[] {
     return this.tileables(workspaceId).filter((t) => !t.surface.flags.transient);
   }
@@ -615,6 +644,7 @@ export class WindowSession {
     const tracked = this.windows.get(id);
     if (tracked === undefined) return false;
     const floating = !tracked.surface.flags.floating;
+    tracked.autoFloated = false;
     tracked.surface.setFloating(floating);
     this.deps.host.applyLayer(id, floating ? Layer.FLOATING : Layer.TILED, 0);
     this.deps.floats.set(tracked.surface.appId, floating);
@@ -778,6 +808,10 @@ export class WindowSession {
     // workspace, and our own move would otherwise be ignored by the position
     // watcher, leaving the border drawn at the old spot for a frame or two.
     this.deps.onWindowMoving();
+    // Drop any in-flight frame animation for this window: a resize animation
+    // still running while Mutter animates the workspace switch draws the window
+    // twice (its clone lags behind the real actor).
+    this.deps.tiling.cancel(tracked.id);
     this.deps.host.applyWorkspace(tracked.id, index);
     this.suppress.delete(tracked.id);
     tracked.surface.workspaceId = index;
@@ -841,6 +875,7 @@ export class WindowSession {
     this.suppress.add(tracked.id);
     this.deps.tiling.noteSelfApply();
     this.deps.onWindowMoving();
+    this.deps.tiling.cancel(tracked.id);
     this.deps.host.applyWorkspace(tracked.id, previous);
     this.suppress.delete(tracked.id);
     const current = tracked.surface.workspaceId;
@@ -852,6 +887,7 @@ export class WindowSession {
     // §7.3: a workspace that already holds a pair makes the newcomer float.
     // The incoming window is excluded: only two *others* make it a pair.
     if (this.tileables(previous).filter((t) => t.id !== tracked.id).length >= 2) {
+      tracked.autoFloated = true;
       tracked.surface.setFloating(true);
       this.deps.tiling.noteSelfApply();
       this.deps.host.applyLayer(tracked.id, Layer.FLOATING, 0);

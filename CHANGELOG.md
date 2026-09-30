@@ -111,6 +111,13 @@ code changes, MINOR for features, PATCH for fixes.
   a stacked split) even after a window is created or reordered out of id order.
   A pair the user marked *swapped* keeps the stable id order instead, so the
   two rules cannot fight and oscillate.
+- A workspace reduced to a single tile plus an automatic float tiles both again
+  (no floating leftover), ahead of the lone-maximize policy. A window the user
+  floated themselves, and the 2-tiles-plus-1-float case, are left alone.
+  Scenario A53.
+- Adrt cancels a window's in-flight frame animation before moving it to another
+  workspace, so Mutter's workspace-switch clone no longer doubles the window or
+  lags behind it.
 - Maximize keeps the immediate view follow: delaying it so the window lands
   first was tried and Mutter drops the maximise while the window sits on a
   workspace the view has not reached. The border is hidden during the move
