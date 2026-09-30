@@ -49,6 +49,35 @@ depend on those answers.
 - [ ] Deletions (settings, features, scenarios) are listed in the CHANGELOG in the
       commit that removes them.
 
+## Test families the model requires (each with its variations)
+
+Every feature and every fix lands with a **family** of tests, not a single case: one
+and two screens; workspace-capable, single-workspace-capable and fixed-workspace;
+landscape and portrait; `layout_rows === -1`; real apps; the refusal path; and the
+misbehaving-client path. The families the last revision added:
+
+- **routing**: right slot; split into a maximized single; create-to-the-right;
+  per-screen (never yanked); fixed-workspace routing; no creation on single/fixed screens.
+- **packing and reaping**: pair → close one → survivor maximized; close the last → reap
+  and the view moves; a drop that empties a workspace → reap; a reconnect that empties
+  one → reap; the spare is never removed; a reorder of loaded workspaces survives.
+- **minimize law**: occupancy kept; the visible partner fills; restore re-splits; a
+  workspace left with only minimized windows has that window moved (left, else right).
+- **maximize / unmaximize / fullscreen**: own workspace to the right; in place plus
+  `maximize-minimizes-others` on a single-workspace screen; unmaximize → left, else
+  right, else minimized-and-moved-left; fullscreen recorded and restored.
+- **resize / refusal ladder**: the sibling follows an inner-edge drag; a refusing client
+  keeps its size and the sibling adapts; the sibling cannot adapt → own workspace,
+  size clamped to [1/6, full screen]; on a single-workspace screen the clamped size stays.
+- **cross-screen drags**: free slot; perimeter swap across screens; no room → float; a
+  maximized window un-maximized at the drop.
+- **gaps**: per-side and between-window, both orientations.
+- **work area**: top bar; a fixed dock; an autohiding dock (reserves nothing); a
+  transient `-1×-1` reading; a stale index (the Mutter assertion class); an out-of-range
+  index; the settle after `workareas-changed`; a primary that changes.
+- **undo**: instance + configuration + ratios; recreating a deleted workspace; the toast
+  when an instance is gone or a slot was taken.
+
 ## Targets and capabilities
 
 | Capability | `headless` (VM) | `session-like` (VM) | `session` (real) |
@@ -298,30 +327,21 @@ Target runs: matrix on `headless` · `session-like` · `session` (real monitors)
       re-measure with the existing counters.
 - [ ] A long mixed run asserting no `invariant_violated` entries in the journal.
 
-## Open decisions (answering these finalises the plan)
+## Decisions (all settled — nothing pending)
 
-- **Q1 — target set.** Three targets (`headless`, `session-like` on the VM, `session`
-  on your laptop) with capability gating, or two (`headless` + `session`) with
-  `session-like` added later?
-- **Q2 — what "real GNOME instance" must mean.** Is a `session-like` VM target
-  (gnome-session + gsd + journal + injection) an acceptable stand-in for everything
-  except the hardware-only classes (real gestures, suspend, physical hotplug, logind
-  lock, GPU/fractional visuals)? Or must every scenario be verifiable on the VM,
-  which is impossible for those classes?
-- **Q3 — TDD strictness.** Test-commit-then-implementation-commit per behaviour stage
-  (I show the scenarios failing first), or tests in the same commit with failure
-  evidence recorded for bug fixes only?
-- **Q4 — cross-monitor drag rules.** Confirm: the monitor is Mutter's choice (rect
-  centre); a free target slot takes the window; an **occupied** target slot swaps the
-  two windows across monitors (my default, consistent with the perimeter rule) or
-  floats the dropped one; a target with no room (single-workspace screen, both slots
-  taken) floats; a maximized window still maximized at drop is unmaximized and tiled
-  in the target slot.
-- **Q5 — per-stage session gate.** Hard: a stage is not done until its scenarios also
-  pass on the real session (you run them when convenient; the checklist shows
-  pending). Soft: the real-session run is required before a *release*, not per stage.
-- **Q6 — parallel code policy.** Parallelise only research, new `core/` modules and
-  new scenario files (worktrees, merged in stage order, hot files single-writer), or
-  single writer throughout?
-- **Q7 — where the checklist lives.** Repo `docs/V2_PLAN.md` as the authority with a
-  UI mirror at `~/.opencode/plan/v2-plan.md`, or the mirror only?
+- **Targets**: `headless`, `session-like` (VM) and `session` (hardware), with capability
+  gating. `session-like` is what "a real GNOME instance" means for everything except
+  real touchpad gestures, suspend/resume, physical hotplug, logind lock and
+  GPU/fractional visuals, which are mandatory-on-hardware checks before a release.
+- **TDD**: super strict — failing tests (with variations) first for every feature and
+  fix; a stage's tests must pass on `headless` **and** `session-like`; the hardware run
+  is a tracked pending line.
+- **Cross-screen drop onto an occupied slot**: **swap** (the perimeter rule), never
+  float; float only when the target screen has no room at all.
+- **Parallel work**: research, new `core/` modules and new scenario files only, each in
+  its own worktree; hot files single-writer; one committer; the suite runs between
+  merges.
+- **Checklist home**: this file in the repo, mirrored at `~/.opencode/plan/v2-plan.md`.
+- **Reorder prohibition dropped**: user reordering is honoured with no correction, no
+  tagging and no toast (model §8); reaping is a property, so an empty workspace is
+  pruned wherever it sits and the spare is never removed.

@@ -1,349 +1,357 @@
 # Adrt v2 model (authoritative)
 
-Status: **draft — decisions still being settled.** This document is the authority
-for v2 behaviour; `spec.md` (and its byte-identical `README.md` copy) is superseded
-section by section as the code lands. Anything not written here is not v2.
+Status: **frozen for implementation.** `spec.md` (and `README.md`, which is a separate
+file — it omits a §12 clause and adds install prose) is superseded section by section
+as the code lands. Anything not written here is not v2.
 
-Written 2026-09-30. Supersedes the eviction/`>2`-extra model, the spawn budget and
-cooldown, and the timers-and-guards scheduling.
+Companion: `docs/V2_PLAN.md` (order of work, tests per stage).
 
 ## 1. Vocabulary
 
-- **Slot** — one half of a monitor. A workspace on a monitor has exactly two slots:
-  left and right. (Vertical layouts stack them: top and bottom.)
-- **Pair** — two windows occupying the two slots of one workspace.
-- **Maximized workspace** — a workspace whose single window covers its monitor.
-- **Solo** — the only window on a workspace-monitor that is *not* maximized. Only
-  legal as the last workspace of a screen (§3).
-- **Managed window** — tileable and not floated: it owns a slot.
-- **Floated window** — unmanaged: no slot, never moved or resized by us.
-- **Screen** — a monitor. A given screen either **can host workspaces** (primary
-  monitor while `workspaces-only-on-primary` is on, or any monitor when it is off,
-  or when more than one workspace exists) or is **single-workspace**.
+- **Screen** — a monitor. It is in exactly one of three states:
+  - **workspace-capable**: GNOME's dynamic workspaces are on, so adrt may create and
+    remove workspaces there;
+  - **single-workspace-capable**: it has one workspace (a non-primary monitor while
+    `workspaces-only-on-primary` is on, or dynamic workspaces off with one workspace);
+  - **fixed-workspace**: several workspaces exist but GNOME cannot create more
+    (dynamic off, two or more workspaces).
+- **Slot** — one of the screen's two tiling halves: `0`/`1` along the screen's split
+  axis. Landscape → left/right; portrait, or a vertical workspace layout
+  (`layout_rows === -1`) → top/bottom. In this document "left" means slot 0 and
+  "right" means slot 1.
+- **Pair** — two managed windows, one per slot.
+- **Maximized single** — a workspace whose one managed window is maximized.
+- **Managed** — tiled: it owns a slot.
+- **Floated** — unmanaged: no slot, never moved or resized by adrt. Floated windows
+  still belong to a workspace for the emptiness rule (§5).
+- **Occupancy** — a slot is occupied by a window that *exists*, not by what is
+  visible: a minimized managed window still occupies its slot.
+- **Spare** — the single empty workspace GNOME keeps at the end of the list. Global,
+  not per screen. adrt never creates it and never removes it.
+- **Instance id** — a window's identity within the session (its stable sequence);
+  admissions also carry a durable per-app ordinal (§12).
+- **Lane** — the priority of queued work: 1 feedback, 2 layout, 3 maintenance (§11).
+- **View** — the active workspace.
+- **Reap** — delete an empty workspace.
 
-## 2. The core rule: nothing is ever evicted
+## 2. Nothing is ever evicted
 
-No window is ever moved to another workspace *because another window needs its
-place*. The only things that change a window's workspace are:
+No window is moved to another workspace because another window needs its place. The
+only things that change a window's workspace are:
 
-1. **Routing a new window** (§3),
-2. **Maximising / unmaximising** the window itself (§4),
-3. **A user move** — drag, overview drag, or a drop that swaps (§6).
+1. **routing a newly opened window** (§3),
+2. **maximize / unmaximize / fullscreen of that window itself** (§4),
+3. **a user move** — a drag or an overview drop (§6),
+4. **a disconnect** — a vanished screen's windows move to the primary (§9).
 
-## 3. Routing a newly opened window (workspace-capable screen)
+A reconnect never moves a window *because* of another window either; it replays a
+screen's previous state (§9).
 
-1. The new window takes the **right slot** of the active workspace. If a single
-   maximized window is there, it un-maximizes into the left slot and the two split
-   (vertical layouts: top/bottom).
-2. If the **right slot is already taken** (the workspace holds a pair), a new
-   workspace is created **to the right**, the window is placed there **maximized**,
-   and the view shifts to it.
-3. Workspace order is never rearranged by us. No scanning for holes, no wrapping,
-   no reordering.
+## 3. Routing a newly opened window
 
-## 4. Maximize / unmaximize
+Auto-routing applies to windows **opening**, per **screen** — a window is placed on
+the screen it opens on, never yanked to another screen's active workspace. Focus
+changes never move a window.
 
-- **Maximize on a workspace-capable screen** moves the window to a new workspace
-  **to the right** of its current one and maximizes it there; the workspace it left
-  keeps its other window (which is then a maximized single). The view follows.
-- **Maximize on a single-workspace screen** maximizes **in place** and (with
-  `maximize-minimizes-others`, default on) minimizes the other managed windows
-  **on that monitor only** — never windows on another monitor. They come back when
-  the maximized window is unmaximized, minimized or closed.
-- **Unmaximize** looks at the **left** workspace:
-  - if it has space (one window), the window moves into that workspace's **right
-    slot** and the now-empty workspace is **deleted**;
-  - if the left workspace is **full** (a pair), the window is **minimized and moved
-    to the left workspace**. Restoring it there later makes that workspace a pair
-    naturally — its lone window un-maximizes into the left slot, and the restored
-    window takes the right — so the restore path needs no special routing.
-  - if there is no left workspace, the window stays where it is and un-maximizes in
-    place.
+- **Workspace-capable screen**: the window takes the **right slot** of the active
+  workspace. If a maximized single is there, it un-maximizes into the left slot and
+  the two split. If both slots are occupied, a workspace is created **to the right**,
+  the window is placed there **maximized**, and the view follows.
+- **Single-workspace-capable screen**: a free slot → the pair splits; both slots
+  taken → the window **floats** (§7).
+- **Fixed-workspace screen**: route to the nearest existing workspace (right first,
+  then left) that has a free slot; if every fixed workspace is full, **float**.
+  Nothing is created.
+- Routing does not apply to hotplug, which has its own rule (§9).
 
-## 5. Emptiness: the workspace invariant
+## 4. Maximize, unmaximize, fullscreen, minimize
 
-- **Exactly one empty workspace exists** — the trailing spare GNOME's dynamic
-  workspaces already create. It is never reaped.
-- **Every other empty workspace is a bug.** When a policy action empties a
-  workspace (a pair losing both windows, an unmaximize returning left, a window
-  moving away), it is deleted, and the view moves to the nearest workspace with
-  windows (preferring the left).
-- A workspace holding **any** window is not empty, including a window on another
-  screen: emptiness is judged per screen, and "exists on another screen" is the one
-  legal exception to the single-spare rule.
-- A workspace holds **either one maximized window or a full pair**, except:
-  - the trailing spare (empty), and
-  - the **solo** case of §3/§7 — one un-maximized window waiting for a partner on
-    a workspace that is the last one with windows on its screen.
+**Maximize.**
+- On a workspace-capable screen the window moves to a workspace created **to the
+  right** and is maximized there. The workspace it left keeps its other window (a
+  maximized single) or, if it had none, is reaped. The view follows.
+- On a single-workspace-capable screen it maximizes **in place** and, with
+  `maximize-minimizes-others` (default on), minimizes the other managed windows **on
+  that monitor only**. They return when it is unmaximized, minimized or closed.
 
-## 6. Floats and drags
+**Fullscreen** behaves like maximize: on a workspace-capable screen it gets a
+workspace **to the right**; on a single-workspace-capable screen it stays in place.
+It **is** recorded and restored by display memory when the window still exists (§9).
 
-- **Floated** (unmanaged, never touched by us): any window the user marks with the
-  float keybinding; all modals, dialogs and popups; and any further window on a
-  single-workspace screen whose both slots are taken (§7).
-- **Everything else is enforced** (tiled). There is no "leave it alone" state for a
-  managed window.
-- **Drag to swap:** dragging a managed window so its perimeter crosses another
-  managed window and dropping swaps the two windows (their slots, and their
-  workspaces if it crossed a workspace boundary).
-- **Overview drop / user-driven placement** is honoured, never routed:
-  - onto a workspace with a single maximized window → the pair **splits** as usual
-    (the maximized window takes the left slot, the dropped window the right);
-  - onto a workspace whose **two slots are taken → the dropped window floats**
-    (it is the user's own placement, so it is not given a workspace of its own);
-  - onto the trailing empty spare → it lands there and is maximized.
-- **The rule that separates the two:** a *policy* placement (a window **opens**
-  while the right slot is taken) routes right and creates a workspace; a
-  *user-driven* placement with no slot available floats. A window **restored from
-  minimized** onto a workspace whose two slots are then occupied counts as
-  user-driven: it floats.
-- **"Newly active" means newly opened.** Focus changes never move, place or
-  re-slot a window — which is what keeps the keyboard system's promise of never
-  navigating to another workspace.
+**Unmaximize** tries, in order:
+1. the **left** workspace's right slot, if that workspace has a free slot;
+2. otherwise the **right** workspace's free slot;
+3. otherwise the window is **minimized and moved to the left** workspace.
 
-## 7. Single-workspace screens
+Any workspace emptied by the move is reaped (§5).
 
-A screen that cannot host workspaces (with `workspaces-only-on-primary`, a
-non-primary monitor; or any monitor when dynamic workspaces are off with one
-workspace) never creates, deletes or navigates workspaces:
+**Minimize** never navigates the view and never moves another window. The window
+keeps its slot, and while its partner is minimized the visible window fills the
+monitor; restoring re-splits. If a workspace would be left holding only minimized
+windows, that window is moved to the **left** workspace, or, if it cannot go left, to
+the **right** one, so the workspace can be reaped.
 
-- one window → **maximized**;
-- a new window while a slot is free → the pair **splits** (the maximized window
-  takes the left slot);
-- both slots taken → any further window **floats**;
-- the two slots are a **persistent pair on that screen** (the screen always shows
-  the same content, so its slots do not move when the primary switches workspace).
+**A lone managed window is always maximized** — there is no un-maximized lone window
+anywhere except §7's single-workspace-capable pair rule.
 
-## 8. User-driven layout changes
+## 5. Emptiness and packing
 
-- **Overview window moves and window drags are honoured** (§6).
-- **Workspace reordering is honoured verbatim, with one prohibition:** the trailing
-  **empty spare may not be dragged elsewhere**. Mutter applies a reorder before we
-  are told, so the rejection is a correction: reorder the spare back to last
-  (guarded against re-entry) and raise a toast (`Main.notify`) saying the action is
-  not possible.
-- Because the spare cannot be moved, **"only the trailing workspace is empty" can
-  never be broken by a user**, and policy never repacks by moving windows. Non-empty
-  workspaces may be reordered freely.
+- Every workspace holds a **maximized single** or a **full pair** — counting
+  occupancy, so a minimized window still counts. The only empty workspace is the
+  **spare**.
+- **Reaping is a property, not an event**: at every drain, any empty workspace other
+  than the spare is reaped, whoever emptied it — a close, a move, a drop, a routing,
+  a reconnect. A workspace holding any window, including one on another screen, is not
+  empty.
+- When a reaped workspace was the one the view was on, the view moves to the nearest
+  non-empty workspace with windows (left first). Otherwise the view does not move.
+- Workspaces emptied **by our own reorder work** are exempt only for the duration of
+  that work (they are the adjacency placement of §9); they are reaped on the next
+  drain if still empty.
+- The invariant is **asserted, not enforced**: a violation is logged with its
+  identifier and the state. There is no rationing, no budget and no cooldown.
 
-## 9. Displays (docking)
+## 6. Floats and user-driven changes
 
-Monitors appear and disappear at any moment; up to four, mixed resolutions and
-orientations, and the primary can change.
+**Floated** (unmanaged, never touched by adrt):
+- a window marked with the float keybinding — **session-scoped per app**: the mark
+  lasts until that app is closed, and is never persisted (the registry's `neverTile`
+  flag is the durable path, §12);
+- an app with `neverTile`;
+- modals, dialogs and popups;
+- a **user placement with no room**: an overview drop onto a full pair, a window
+  restored from minimized onto a full workspace, and overflow on a
+  single-workspace-capable screen;
+- a window the user resized beyond its slot when the sibling cannot adapt (§10).
 
-- Memory is keyed by **connector**, never by index: `connector → [ { appId, title,
-  slot, maximized, fullscreen, rect } ]`.
-- **Disconnect**: windows on the vanished connector are routed to free slots on a
-  remaining screen (a new workspace only when none is free); the view stays put.
-- **Reconnect replays the monitor's previous state**, it does not choose among
-  windows: the slot occupants return to their own slots (split), windows that were
-  minimized come back minimized, floats come back floating at their rects, clamped
-  into the new work area. Instance ids make this exact within a session; the durable
-  per-app ordinal roll-up covers windows recreated after a restart. Nothing is
-  floated and no workspace is created by a reconnect.
-- A window is not moved if the user touched it since, or if the memory expired
-  (`display-memory-minutes`, default 30).
-- Mutter already moves windows proportionally on unplug/replug; our job is to
-  correct the **slot** and state afterwards.
-- We never change the primary monitor ourselves.
+**Drags and drops.**
+- Dragging the **inner** edge of a pair changes the ratio; the tiler resizes the
+  sibling so the pair stays flush (§10).
+- Dragging a managed window so its perimeter **crosses another managed window** and
+  dropping **swaps** the two.
+- **Cross-screen drags** follow the target screen's rules: a free slot takes the
+  window (its pair splits as usual); a window whose perimeter was crossed is swapped
+  with; no room at all → the dropped window floats. A maximized window dragged across
+  screens is un-maximized at the drop (Mutter freezes a maximized window's horizontal
+  drag and shakes it loose vertically) and then treated by the same rules.
+- **Overview drops**: onto a maximized single → the pair splits; onto a full pair →
+  the dropped window floats; onto the spare → it lands there and is maximized.
+- A window **restored from minimized** onto a workspace whose two slots are taken
+  floats.
 
-## 10. Scheduling, observability, exceptions
+## 7. Single-workspace-capable and fixed-workspace screens
 
-- **One scheduling path**: every signal handler pushes an event; a single deferred
-  pass (one `global.compositor.get_laters()` later, ids tracked and removed on
-  disable) applies work. Lane 1 = feedback, lane 2 = layout, lane 3 = maintenance.
-  No policy runs inside a Mutter signal handler.
+Never create, reap or navigate workspaces there.
+
+- **Single-workspace-capable**: the first window is maximized; a second splits it; the
+  third and later windows **float**. The two slots are a persistent pair on that
+  screen — they do not move when the primary switches workspace. Maximize is in place
+  with `maximize-minimizes-others`.
+- **Fixed-workspace**: routing fills existing workspaces (right, then left); a window
+  with no free slot floats. Maximize behaves as on a workspace-capable screen, except
+  that it may only use existing workspaces; if none is free it maximizes in place.
+
+## 8. User workspace reordering
+
+Reordering is **honoured exactly**, with no correction, no tagging, no toast, no
+per-gesture state: you keep the ability to move workspaces, including with an
+extension. Because reaping is a property (§5), an empty workspace — including the
+spare — is pruned wherever it sits, so dragging the spare has no lasting effect while
+a reorder of loaded workspaces is preserved. GNOME recreates a spare when it needs
+one, and adrt never removes the spare.
+
+## 9. Displays and docking
+
+Memory is keyed by **connector** (never by index): for each remembered window, its
+connector, slot, maximized, fullscreen and rect; matched in-session by instance id,
+and by per-app ordinal for windows recreated after a restart.
+
+**Disconnect.** Windows on a vanished screen move to the **primary** screen. As many
+workspaces are created as those windows need (two per workspace), placed **adjacent
+to the current workspace on the physical side the vanished screen was on**: a screen
+to the right → the new workspaces go to the right of the current one; to the left →
+to the left, and if there were already screens to the left, at the leftmost position;
+above or below → treated as left. Then §5 reaps whatever is left empty. Mutter
+migrates windows on its own; adrt only routes windows that a surviving
+workspace-capable screen is not already displaying.
+
+**Reconnect** **replays the screen's previous state** — slot occupants to their slots,
+minimized windows minimized, floats floating at their rects, fullscreen restored when
+the window still exists — clamped into the fresh work area. It never floats a window
+and never creates a workspace. A window the user has touched since, or whose memory
+has expired (`display-memory-minutes`, default 30), is left alone; replay is partial
+in that case, and §5 reaps afterwards.
+
+adrt never changes the primary monitor; a primary change is followed, not caused.
+
+## 10. Sizing: ratios, refusals, gaps, and the work area
+
+**Ratios** are per workspace (per pair), default 50/50. The user adjusts them by
+dragging the inner edge, and the tiler resizes the sibling to match, so the pair stays
+flush. The ratios that produced a layout are captured by undo.
+
+**The resize/refusal ladder**, in order:
+1. the user resizes a window → the sibling follows so the pair stays flush;
+2. if a client refuses the requested split, the **sibling adapts** — the refusing
+   window keeps the size it insists on and the sibling takes the remainder, clamped to
+   the sibling's own limits;
+3. if the sibling cannot adapt either, the refusing window takes **its own workspace
+   to the right**, sized to itself, clamped between **one sixth of the screen and the
+   full screen**;
+4. on a single-workspace-capable screen there is no workspace to give it: it keeps its
+   clamped size over the sibling, which remains reachable because focusing it raises
+   it.
+
+**Gaps** are adjustable per side (left, right, top, bottom) and between windows, per
+orientation: new settings beside the existing `gaps-base`/`gaps-portrait`/
+`gaps-landscape`, defaulting to zero for the outer edges and to the base gap for the
+split between two windows.
+
+**The work area** is the available surface, and it is never assumed:
+- read `Main.layoutManager.getWorkAreaForMonitor(index)` — workspace-independent
+  (workspace 0), and the only authority (`Meta.Display` exposes no work-area method in
+  GNOME 50);
+- a non-autohiding top bar and a non-autohiding dock are already excluded from it:
+  the shell's panel reserves a top strut on the **primary only**, and a dock reserves
+  one only when it is fixed (`dash-to-dock` with `dock-fixed=false`, i.e. autohide or
+  intellihide, reserves nothing);
+- re-read it on `monitors-changed`, on `workareas-changed`, and after
+  `startup-complete`; never cache it across a screen change;
+- validate every reading: the index in range, a positive size, and the rect inside the
+  monitor's geometry. On an invalid or transient reading, keep the last good value —
+  Mutter can report `-1 × -1` mid-transition, and querying a stale index raises
+  `logical_monitor != NULL` assertions in the journal;
+- defer the replan (a lane-3 event, coalesced, a few hundred milliseconds): the first
+  `workareas-changed` can arrive before the shell has set the new struts.
+
+## 11. Scheduling, observability, exceptions
+
+- **One scheduling path**: every signal handler only pushes an event; a single
+  deferred pass drains it. No policy runs inside a Mutter signal handler. Workspace
+  mutations happen only in the drain's layout lane.
+- **Lanes**: 1 feedback (focus, border, marker), 2 layout (route, plan, apply,
+  workspace create/reap, view shift), 3 maintenance (reap, persist, work-area
+  refresh, sweep). Per-key coalescing inside a lane.
 - **Plain records and predicates** (`isTileable(record)`, …), no classes extending
   Mutter objects.
-- **Flags**: `debug.*` (queue, placement, slots, workspaces, geometry), `record`
-  (replayable decision traces), `perf.*` (queue depth/drain time, apply latency,
-  counters), all surfaced in `DumpState`, plus `DumpDecisions(n)`.
-- **Event journal.** Every signal handler writes one line into a ring buffer —
-  `{ seq, source: 'mutter' | 'shell' | 'settings' | 'internal', event, at }` — so an
-  injected input can be *confirmed* against the real Mutter event that followed it.
-  It has one monotonic sequence shared with the decision log (the dead `trace` field
-  finally gets a meaning). Exposed as `DumpEvents(n, filter?)`.
-- **Test triggers are honest and event-confirmed**, in three kinds:
-  - `Inject*` — **real input through Mutter**: pointer motion/buttons and keycodes
-    from a virtual input device, so `grab-op-begin`/`grab-op-end`, real keybinding
-    activation and real touchpad gestures fire. Available in a headless shell with
-    no seat and no `/dev/uinput`, either in-process
-    (`Clutter.Seat.create_virtual_device()`, behind a `debug-input` setting that is
-    off by default) or externally (`org.gnome.Mutter.RemoteDesktop`, whose session
-    must be driven by a single long-lived client because it is peer-checked);
-  - plain commands that **call a real Mutter API** (`MoveWindow`, `MinimizeWindow`,
-    `SpawnWindow`, `MoveToWorkspace`, …);
-  - `Simulate*` — **extension state only**, for situations input cannot express
-    (a synthetic signal), used sparingly, never pretending to exercise Mutter.
-  This is what allows the keybinding scenarios that are currently skipped for lack of
-  a seat — and the live suite's `ydotool` dependency — to run in CI.
-- **Exceptions** (each documented with owner and reason): the
-  `WorkspaceAnimationController.animateSwitch` override for clone-free slides;
-  reading `_swipeTracker` for gesture suppression; accepting a client's geometry
-  after one retry instead of looping.
-- **Invariant assertion, log-only**: at most one empty workspace per screen, and
-  each workspace at most one maximized window or two managed windows. Violations
-  are logged with state, never enforced by rationing.
+- **Event journal**: every signal handler writes `{ seq, source, event, at }` into a
+  ring buffer with one monotonic sequence, shared with the decision log; `DumpEvents`,
+  `DumpDecisions`, plus `debug.*`, `record` and `perf.*` flags in `DumpState`.
+- **Triggers are honest and event-confirmed**: `Inject*` = real input through Mutter
+  (virtual input devices); a plain command = a real Mutter API; `Simulate*` =
+  extension state only.
+- **Exceptions** (documented, each with its reason): replacing
+  `WorkspaceAnimationController.animateSwitch` for clone-free slides; reading
+  `_swipeTracker` for gesture suppression; accepting a client's own rect through the
+  §10 ladder.
+- **Invariants are asserted, never enforced** (§5).
 
-## 11. App registry (profiles and exceptions merged)
-
-One durable record per app, keyed by `appId`, **auto-populated**: every app whose
-window we ever see gets an entry, so the list in prefs is the log of apps that have
-opened. Shape:
+## 12. App registry (profiles, exceptions and adaptation in one entry)
 
 ```
 appId → {
-  firstSeen, lastSeen, windowsSeen, lastTitle,   // the log
-  neverTile: boolean,                            // the "exception" flag
-  profile: { …timing/behaviour overrides… },     // today's profiles.ts hints
+  firstSeen, lastSeen, windowsSeen, lastTitle,   // the log of every app that opened
+  neverTile: boolean,                            // never managed, always floating
+  profile: { …timing/behaviour hints… },
   adapt:   { unmaximizeDelayMs?, settleMs?, skipAnimation?, retries? },
   placements: { <instanceId>: { connector, slot, maximized, fullscreen, rect } },
 }
 ```
 
-- **`adapt` is the learning, and it is only about performance and smoothness**:
-  delays before resizing a just-unmaximized window, how long to wait before
-  verifying a geometry, whether to skip the frame animation for an app that
-  animates badly, and retry backoff. It is visible and resettable per app in prefs,
-  in the same entry as everything else about that app.
-- **The boundary is hard: adaptation never influences placement or geometry
-  policy.** No learned minimum is ever fed to the tiler (the "bogus minimum" that
-  pinned windows is exactly what goes away), and "stubborn" as a *suppression* of
-  tiling is removed — a client that refuses a rect is simply accepted at its own
-  rect after one retry, and the next plan treats it normally.
+- **Identity** is resolved at the window's first frame by this chain, recording the
+  key, its source and the raw values: `Shell.WindowTracker` desktop id (ignored while
+  provisional `window:<seq>`) → `get_sandboxed_app_id()` (Flatpak/Snap) →
+  `get_gtk_application_id()` → an **AppImage** found by walking the process ancestors
+  for `APPIMAGE` (mount paths are random per run, and Chromium zeroes its own
+  environment) → `wm_class` → a session-only `window:<seq>`. Normalisation strips
+  `.desktop` and an `AppImage` suffix, never casefolds a path, never `realpath`. Deb,
+  Flatpak and Snap installs of one app are **different identities**; a conservative
+  "family" normaliser exists for grouping only. A provisional key is re-keyed,
+  carrying its entry, with the real key winning and `neverTile = old || new`.
+- **`adapt` is performance and smoothness only**: delays, settle, animation skip,
+  retry backoff. It never influences placement or geometry — no learned minimum ever
+  reaches the tiler.
+- Placements are keyed by instance id, with a durable per-app ordinal (`#1`, `#2`, …)
+  so windows recreated after a restart can be matched in order.
+- Deleting the old stores (`adaptation.json`, `behavior.json`, `exception-apps`) is a
+  real settings/state migration with a version bump.
 
-- The **exception flag** replaces both `exception-apps` and the `float: true` rule:
-  one concept, "this app is never managed — always floating". A window of such an
-  app is floated on sight and the tiler never touches it.
-- **Profiles keep being respected**: an app's timing hints (retry delays, animation,
-  settle) still apply, now visible and editable **under the same entry** rather than
-  in a separate concept.
-- The `tile: full|left-half|right-half` rule modes are **dropped**: they fight the
-  two-slot invariant (`full` is what routing already does; a slot claim can conflict
-  with another window's).
-- The per-window history log already records every `register` with its `appId`; the
-  registry is the durable per-app roll-up of that.
-- Prefs exposes the list with a per-app toggle and a "forget this app" action.
-- **App identity must work for distro packages, Flatpak and Snap alike.** The
-  registry key is a resolved, normalised app identity (preferring the desktop-app
-  id, falling back to the window class), recorded alongside the raw values so
-  prefs and diagnostics can show what was matched. Two windows of the same app
-  packaging format must resolve to one entry; the same app installed two ways may
-  legitimately be two entries.
-- **Placements are keyed by instance id.** Within a session the instance id is the
-  window's stable sequence (exact — a live window goes back to its own slot); the
-  durable roll-up is per app plus a creation ordinal (`#1`, `#2`, …) so windows
-  recreated after a restart can be matched in order. Each placement records
-  connector, slot, maximized/fullscreen state and rect.
-- **Identity resolution** happens at the window's **first frame** (at
-  `window-created` it is racy), by this chain, and the resolved key, its source and
-  the raw values are all stored:
-  1. `Shell.WindowTracker.get_window_app(win).get_id()` — GNOME's canonical
-     desktop id (`org.gnome.Calculator.desktop`), ignored while it is still the
-     provisional `window:<seq>`;
-  2. `Meta.Window.get_sandboxed_app_id()` (public in 50) — `org.mozilla.firefox`
-     for Flatpak, `firefox_firefox` for Snap, null for distro packages;
-  3. `Meta.Window.get_gtk_application_id()`;
-  4. for portable apps: walk the window's process **ancestors** for an AppImage —
-     the `APPIMAGE` variable or an ancestor `cmdline[0]`/`/proc/<pid>/exe` ending in
-     `.AppImage` — keyed by its **basename** (the runtime's mount path is random per
-     run, and Chromium/Electron zero their own environment, so the window's pid
-     alone is unreliable);
-  5. `wm_class` (+ instance);
-  6. a session-only `window:<stable-sequence>` key (never persisted).
-  Normalisation: strip `.desktop` and an `AppImage`/`.appimage` suffix, never
-  casefold a path, never `realpath`. An unintegrated AppImage that only reports
-  `wm_class` is the documented worst case and gets a `wmclass:` key.
-  A provisional key is **re-keyed** when the real identity arrives, carrying its
-  registry entry and placements with it; re-resolution listens on
-  `tracked-windows-changed` and the window's own `notify::wm-class`.
-- **Deb, Flatpak and Snap installs of the same app are different identities** and
-  get separate entries (that is what their desktop ids are). A conservative
-  "family" normaliser exists only for user-facing grouping, never as a key.
-- **The float keybinding is session-scoped per app**: it floats the focused window
-  and remembers the app as floating **until that app is closed**, so its other
-  windows float too while it runs. It is *not* persisted; the registry's
-  `neverTile` flag is the permanent path.
+## 13. Undo
 
-## 12. Undo
+- `Super+Z` reverts **the change**: the specific window instances and their
+  configuration — workspace, slot, rect, maximized, floating — plus the ratios that
+  produced them.
+- **Exactly one change** is held, in memory only; a restart clears it.
+- Undoing an unmaximize **recreates** the workspace that unmaximize deleted.
+- If the revert is impossible — an instance is gone, or a slot it needs has since been
+  taken — **nothing** is applied and a toast (`Main.notify`) says so. Partial restores
+  never happen.
 
-- `Super+Z` reverts **the change**: the specific window **instances** and their
-  configuration — workspace, slot, rect, maximized/floating state — plus the split
-  ratios that produced them. A change that moved a window between workspaces or
-  maximised it is reverted by restoring that instance, never skipped.
-- Entries are pushed for changes to **existing managed windows** as a result of a
-  user action. A window's *first* placement (it just opened) is not an entry: there
-  is no previous state to restore.
-- **Undo holds exactly one change.** There is no stack: `Super+Z` reverts the most
-  recent change or nothing. It is kept in memory only — a restart clears it, since
-  the window instances it refers to are gone with the session. This is deliberate:
-  one entry is cheap to keep and impossible to mis-target.
-- **If the revert is not possible** — the window has closed, the monitor is gone,
-  the workspace no longer exists — **nothing is applied** and a toast
-  (`Main.notify`, the same mechanism as the reorder rejection) says undo is not
-  possible and why. A partial restore that leaves the layout inconsistent never
-  happens.
-- Each instance is validated (still exists, still reachable) before anything moves.
-- `undo-stack-size` is dropped (there is nothing to size); any stored stack from the
-  old version is discarded by the settings migration.
+## 14. Preserved subsystems (out of scope for v2)
 
-## 13. Decisions log
+Unchanged by this model, and to be maintained: the active-window border and its
+animation, all keybindings, gesture control, the prefs UI, session modes, history
+rotation and retention, the D-Bus observability surface, profiles (as part of §12),
+and the pure-core/`platform` split.
 
-Everything the model above rests on, in the order it was settled (each was an
-explicit choice, not an inference):
+## 15. Decisions log
 
-1. **No eviction.** Nothing is moved to another workspace because another window
-   needs its place; a new window is routed, a maximise moves only its own window,
-   a drag floats.
-2. **Routing is right-only**: right slot, else a workspace created to the right with
-   the window maximized there. No scanning for holes, no wrap, no reorder.
-3. **Workspaces are packed**: one maximized window or a full pair; the trailing
-   spare is the only empty one; every other empty workspace is a bug and is
-   reaped (per screen; a workspace holding a window on another screen is not empty).
-4. **Maximise** moves the window to its own workspace on a workspace-capable screen;
-   on a single-workspace screen it maximises in place and minimises the other
-   managed windows **on that monitor only** (`maximize-minimizes-others`, default
-   on).
-5. **Unmaximise** joins the left workspace's right slot and deletes the emptied
-   workspace; if the left workspace is full, the window is minimized and moved
-   there.
-6. **Single-workspace screens**: one window maximized; a new window splits while a
-   slot is free; both slots taken → further windows float.
-7. **Floats**: the float keybinding (session-scoped per app — it lasts until the app
-   closes, and is never persisted); modals, dialogs and popups; a user-driven
-   placement with no room (an overview drop onto a full pair, a window restored from
-   minimized onto a full workspace). Everything else is enforced.
-8. **Drag onto another window's perimeter swaps** the two.
-9. **Overview drops**: onto a single maximized window → split; onto a full pair →
-   float.
-10. **Workspace reordering is honoured**, except that the trailing empty spare may
-    not be moved — that attempt is reverted and answered with a toast.
-11. **"Newly active" means newly opened**; focus changes never move a window.
-12. **The app registry** merges exceptions and profiles into one auto-populated
-    per-app log, with `neverTile`, profile hints, adaptation and placements in one
-    entry; identity is resolved at first frame by the documented chain (deb, Flatpak,
-    Snap and AppImage alike).
-13. **Adaptation is kept but scoped**: performance and smoothness only (delays,
-    settle, animation skip, retries). It never influences placement or geometry —
-    no learned minimum ever reaches the tiler, and "stubborn" as suppression is gone.
-14. **Hotplug replays the monitor's previous state** per connector; a reconnect never
-    floats a window and never creates a workspace; we never change the primary.
-15. **Undo holds exactly one change**, in memory, per instance and configuration;
-    if it cannot be reverted, nothing is applied and a toast says why.
-16. **Test discipline**: `DumpState` is add-only per commit, the D-Bus trigger
-    surface is declared in one place, and triggers are honest and event-confirmed
-    (`Inject*` real input, plain commands for real APIs, `Simulate*` for state only).
-17. **Queue first, model second**: lanes + per-key coalescing + one deferred drain +
-    the re-entrancy guard land before the model; budgets, fairness and flags follow.
-18. **v2 before the performance plan**, which is re-scoped afterwards.
-19. **Cleanup appetite is high**: dead settings/branches removed, the two float
-    representations unified into the registry, a real settings migration with a
-    version bump, and the trigger names corrected.
+1. **No eviction**; the only workspace changes are routing, maximize/unmaximize/
+   fullscreen, a user move, and a disconnect (§2).
+2. **Routing is right-only, per screen**: right slot, else a workspace created to the
+   right with the window maximized there; no scanning, no wrap, no reorder.
+3. **Workspaces are packed**: maximized single or full pair; the trailing spare is the
+   only empty one and is never removed; every other empty workspace is reaped as a
+   property, wherever it sits.
+4. **Maximize** moves the window to its own workspace on a workspace-capable screen;
+   on a single-workspace-capable screen it maximizes in place and minimizes the other
+   windows on that monitor only (`maximize-minimizes-others`, default on).
+5. **Fullscreen** behaves as maximize and is recorded and restored when the window
+   still exists.
+6. **Unmaximize** joins the left workspace's right slot; failing that, the right
+   workspace; failing that, it is minimized and moved left.
+7. **Minimize** keeps occupancy; a workspace left holding only minimized windows has
+   that window moved (left, else right) so the workspace reaps.
+8. **Single-workspace-capable screens**: maximize once, split twice, float thereafter;
+   the pair is persistent per screen.
+9. **Fixed-workspace screens** route to existing workspaces only, else float.
+10. **Floats**: the keybinding (session-scoped per app until it closes), `neverTile`,
+    modals and popups, and user placements with no room.
+11. **Drags**: inner edge changes the ratio and the sibling follows; perimeter crossing
+    swaps; cross-screen drags follow the target screen's rules; overview drops split
+    onto a maximized single and float onto a full pair; a restored window with no room
+    floats.
+12. **Workspace reordering is honoured with no correction and no bookkeeping**, and the
+    spare is never removed.
+13. **The resize/refusal ladder**: adapt the sibling first; give the refusing window
+    its own workspace, clamped to [1/6, full screen], only when the sibling cannot
+    adapt; on a single-workspace screen it keeps the clamped size.
+14. **Ratios** are per workspace, user-adjustable on the inner edge, captured by undo;
+    there is no app-pair ratio learning.
+15. **Gaps** are adjustable per side and between windows, per orientation.
+16. **The work area is never assumed or cached**: `getWorkAreaForMonitor`, validated,
+    re-read on monitor and work-area changes and after startup, replanned after a
+    settle.
+17. **Hotplug**: disconnect moves a vanished screen's windows to the primary and
+    creates adjacency-ordered workspaces on the side the screen was on; reconnect
+    replays the screen's previous state, never floats or creates; the primary is never
+    changed by adrt.
+18. **The app registry** merges exceptions, profiles and adaptation into one
+    auto-populated per-app entry with the documented identity chain.
+19. **Adaptation is timing-only**; no learned geometry, no "stubborn" suppression.
+20. **Undo holds exactly one change**, per instance and configuration, recreating a
+    deleted workspace, and toasts when it cannot.
+21. **Three targets and strict TDD**: every feature and fix lands as failing tests
+    with their variations first, and passes on `headless` and on `session-like`; the
+    hardware-only classes are checked on the real session.
+22. **No policy inside a Mutter signal handler**, ever.
+23. **Cleanup appetite is high**: dead code, dead settings and the duplicate float
+    representations go; the settings migration is real.
 
 ## Deliberate non-goals
 
-- Per-app *geometry* learning (only timing adaptation survives).
-- Repacking workspaces after a user reorder.
-- Changing the primary monitor, or restoring a fullscreen state on reconnect.
-- A long undo history.
+- Per-app geometry learning; "stubborn" suppression of tiling.
+- Repacking workspaces after a user reorder; removing the spare.
+- Changing the primary monitor.
+- A multi-entry or persisted undo history.
 - Any policy that runs inside a Mutter signal handler.
