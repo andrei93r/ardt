@@ -12,6 +12,7 @@ import * as compat from './compat.js';
 import { Layer, SurfaceKind, emptyFlags } from '../../core/types.js';
 import type { Rect, Size, Surface, SurfaceFlags } from '../../core/types.js';
 import { layerFor } from '../../core/classify.js';
+import { clipText } from '../../core/text.js';
 
 function toRect(source: any): Rect {
   return { x: source.x, y: source.y, width: source.width, height: source.height };
@@ -40,8 +41,8 @@ export class GnomeSurface implements Surface {
     this.id = win.get_id();
     this.appVersion = appVersion;
     this.kind = compat.kindFor(win);
-    this.appId = win.get_wm_class() ?? '';
-    this.title = win.get_title() ?? '';
+    this.appId = clipText(win.get_wm_class(), 128);
+    this.title = clipText(win.get_title());
     const min = win.get_min_size();
     const max = win.get_max_size();
     this.min = { width: min[0], height: min[1] };
@@ -59,8 +60,8 @@ export class GnomeSurface implements Surface {
 
   /** Re-read mutable properties after a signal that can change them. */
   refresh(): void {
-    this.title = this.win.get_title() ?? this.title;
-    this.appId = this.win.get_wm_class() ?? this.appId;
+    this.title = clipText(this.win.get_title());
+    this.appId = clipText(this.win.get_wm_class(), 128) || this.appId;
     this.kind = compat.kindFor(this.win);
     this.frame = toRect(this.win.get_frame_rect());
     this.screenId = this.win.get_monitor();

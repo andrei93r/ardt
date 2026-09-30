@@ -121,6 +121,7 @@ those shortcuts.
 | A60 | Switch watchdog | a stuck workspace animation is torn down |
 | A61 | Above flag ignored | a normal window with "always on top" is still tiled |
 | A62 | Minimize onto a pair | it stays minimized, then floats when restored |
+| A63 | Client text bounded | titles are clipped, no oversized history lines |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

@@ -11,6 +11,7 @@ import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 
 import type { Rect } from '../../core/types.js';
+import { clipPayload } from '../../core/text.js';
 import { dataDir, readText, writeAtomic } from './adapt.js';
 
 export interface HistoryEvent {
@@ -117,7 +118,10 @@ export class History {
     if (!this.enabled) return null;
     const first = fields.trace;
     const trace = typeof first === 'number' ? first : this.nextTrace();
-    const event: HistoryEvent = { t: Date.now(), ev, trace, ...fields };
+    // A client string (a window title) is unbounded; clip it before it can
+    // become a giant log line or an out-of-memory in GJS.
+    const safe = clipPayload(fields) as Record<string, unknown>;
+    const event: HistoryEvent = { t: Date.now(), ev, trace, ...safe };
     if (typeof fields.trace === 'number') event.trace = fields.trace;
     this.append(event);
     return event;

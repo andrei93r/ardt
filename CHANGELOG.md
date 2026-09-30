@@ -136,6 +136,12 @@ code changes, MINOR for features, PATCH for fixes.
   the pair, while a newly opened third window goes to its own workspace, as the
   model requires. The sweep could previously float a fresh third window before
   the register policy moved it right.
+- Client text is bounded (core/text.ts): a window title is clipped at 256 chars
+  and every history payload string at 512. A corrupted client title (a
+  mojibake-doubling one reached 805 million characters) produced a 256 MB
+  history line and exhausted GJS, which crashed the Shell with SIGSEGV in
+  layout.js. `surface.title`/`appId` and the history writer clip at the edges;
+  A63 guards it and 6 core tests cover the clipper.
 - Floating a window over a pair never touches a *minimized* window's geometry:
   applying a frame to a minimized window makes Mutter un-minimize it, so a
   window the user minimized popped back on screen. It now keeps the float
