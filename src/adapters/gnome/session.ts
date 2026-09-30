@@ -369,6 +369,9 @@ export class WindowSession {
     // tooltips and other transient surfaces must not flash a border.
     const wasTiled = tracked.lastTarget !== null;
     this.coherenceRetryAt.delete(id);
+    // Defensive: a window we floated carries Mutter's "above" flag; drop it as
+    // the window goes away so it cannot linger on a recycled surface.
+    this.deps.host.clearAbove(id);
     this.disconnectWindow(id);
     this.windows.delete(id);
     this.deps.host.forgetSurface(id);
@@ -380,6 +383,10 @@ export class WindowSession {
     this.switchAwayIfEmpty(workspaceId);
     this.evaluateLoneMaximize(workspaceId);
     this.scheduleRetile(workspaceId, 'close');
+    // A close can leave a window we had floated over a pair with nowhere to
+    // float: run the sweep so it comes back into the tiling and its "above"
+    // flag is cleared with it.
+    this.addTimeout(150, () => this.coherenceSweep());
   }
 
   /** Re-classify and retile after a settings change. */
@@ -502,6 +509,11 @@ export class WindowSession {
     for (const screen of this.deps.host.screens()) {
       const tileables = this.tileables(workspaceId).filter((t) => t.surface.screenId === screen.index);
       if (tileables.length === 0) continue;
+      // A window we are about to tile must not stay "always on top", or it
+      // would cover its sibling.
+      for (const tracked of tileables) {
+        if (tracked.surface.flags.above) this.deps.host.clearAbove(tracked.id);
+      }
       // A maximized tileable is mid-policy: it either lives on its own
       // workspace or is about to move there. Tiling it now would unmaximize it
       // behind the policy's back (§7.3), so leave it to the policy.
@@ -716,6 +728,17 @@ export class WindowSession {
     this.deps.history.log('undo', { workspaceId: entry.workspaceId, windows: entry.rects.length });
     // Do not immediately re-tile over the restored rects.
     this.ignoreMismatchUntilMs = Date.now() + 4000;
+    return true;
+  }
+
+  /** Test hook: mark a window "always on top" (it must still be tiled). */
+  simulateAbove(id: number): boolean {
+    const tracked = this.windows.get(id);
+    if (tracked === undefined) return false;
+    tracked.win.make_above();
+    tracked.invalidateClassification();
+    this.signatures.clearAll();
+    this.scheduleRetile(tracked.surface.workspaceId, 'simulate-above');
     return true;
   }
 

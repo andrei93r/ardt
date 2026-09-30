@@ -107,7 +107,9 @@ export function classify(
   if (f.overrideRedirect) return fail('override-redirect');
   if (f.onAllWorkspaces) return fail('on-all-workspaces');
   if (f.fullscreen) return fail('fullscreen');
-  if (f.above) return fail('above');
+  // Note: `above` ("always on top") deliberately does NOT disqualify a window.
+  // Apps leave that flag set by accident, and the user's model is that a normal
+  // window is always tiled; the adapter clears the flag when it tiles it.
   for (const exception of config.exceptionApps) {
     if (globMatch(exception, surface.appId)) return fail('exception-app');
   }

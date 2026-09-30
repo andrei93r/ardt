@@ -4,7 +4,8 @@
 # and can maintain this code.
 # A59 A window that Adrt floated itself must never be left alone and floating:
 # once the workspace has no tiles, the sweep pulls it back into the tiling and
-# the lone-window rule maximizes it.
+# the lone-window rule maximizes it. The "always on top" flag Adrt sets while
+# floating must be cleared with it (it leaked into the classifier before).
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 ensure_clean
@@ -22,7 +23,8 @@ d = json.load(sys.stdin)
 b = [w for w in d["windows"] if w["id"] == int("'"$B"'")]
 sys.exit(0 if b and b[0]["maximized"] and b[0]["workspace"] != int("'"$pair_ws"'") else 1)' || true
 
-# ...come back, add a third window to the pair, then return B: it must float.
+# ...come back, add a third window to the pair, then return B: it must float,
+# which is what sets the "above" flag on it.
 adrt ActivateWorkspace "$pair_ws" >/dev/null
 sleep 1
 before_ids="$(list_ids)"
@@ -41,6 +43,15 @@ else
   fail "B did not float over the pair"
 fi
 
+check_python "floating set the always-on-top flag" '
+import json, sys
+d = json.load(sys.stdin)
+w = [x for x in d["windows"] if x["id"] == int("'"$B"'")]
+if not w:
+    print("window gone"); sys.exit(1)
+sys.exit(0 if w[0].get("above") is True else 1)
+'
+
 # Remove both tiles by their known ids; B is left alone and auto-floated.
 adrt CloseWindow "$A" >/dev/null 2>&1 || true
 adrt CloseWindow "$third" >/dev/null 2>&1 || true
@@ -54,6 +65,15 @@ sys.exit(0 if b and b[0]["layer"] != 2 and b[0]["maximized"] else 1)'; then
 else
   fail "window not tiled ($(state_expr "[(w['id'], w['layer'], w['maximized'], w['rect']) for w in d['windows'] if w['id'] == $B]"))"
 fi
+
+poll "the leaked always-on-top flag was cleared" '
+import json, sys
+d = json.load(sys.stdin)
+w = [x for x in d["windows"] if x["id"] == int("'"$B"'")]
+if not w:
+    print("window gone"); sys.exit(1)
+sys.exit(0 if w[0].get("above") is False else 1)
+' 10
 
 poll "it fills the work area" '
 import json, sys

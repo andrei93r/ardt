@@ -119,6 +119,7 @@ those shortcuts.
 | A58 | Lone window maximized | an untiled lone window is maximized again |
 | A59 | Auto-float pulled back | a lone auto-float returns to the tiling |
 | A60 | Switch watchdog | a stuck workspace animation is torn down |
+| A61 | Above flag ignored | a normal window with "always on top" is still tiled |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

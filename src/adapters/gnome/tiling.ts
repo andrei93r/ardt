@@ -62,6 +62,23 @@ export class Tiling {
     this.lastAppliedAtMs = Date.now();
   }
 
+  /**
+   * Drop swap entries whose windows no longer exist. They are keyed by window
+   * id, which does not survive a restart, so a saved state otherwise keeps
+   * dead pairs forever.
+   */
+  pruneSwapPairs(alive: ReadonlySet<number>): void {
+    let changed = false;
+    for (const key of [...this.swapPairs]) {
+      const [a, b] = key.split('|').map((part) => Number.parseInt(part, 10));
+      if (!alive.has(a) || !alive.has(b)) {
+        this.swapPairs.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) this.deps.onRatiosChanged();
+  }
+
   loadRatios(ratios: Record<string, number>, swapPairs: string[]): void {
     this.ratios.clear();
     for (const [key, value] of Object.entries(ratios)) this.ratios.set(key, value);

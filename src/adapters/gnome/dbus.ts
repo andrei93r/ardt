@@ -79,6 +79,7 @@ const INTERFACE_XML = `
     <method name="MoveDirection"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
     <method name="ToggleFullscreen"><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
     <method name="QuitFocused"><arg type="b" direction="out"/></method>
+    <method name="SimulateAbove"><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
   </interface>
 </node>`;
 

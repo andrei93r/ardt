@@ -75,6 +75,7 @@ interface ExtraHandlers {
   MoveDirection(direction: string): boolean;
   ToggleFullscreen(id: number): boolean;
   QuitFocused(): boolean;
+  SimulateAbove(id: number): boolean;
 }
 
 type Handlers = DbusHandlers & ExtraHandlers;
@@ -220,6 +221,8 @@ export default class AdrtExtension extends Extension {
 
     this.onStateChanged();
     this.firstRun();
+    // Swap pairs are keyed by window id, which does not survive a restart.
+    this.tiling.pruneSwapPairs(new Set(this.session.windows.keys()));
     this.history.log('tile', { event: 'enable', ms: Math.round((GLib.get_monotonic_time() - started) / 1000) });
   }
 
@@ -933,6 +936,7 @@ export default class AdrtExtension extends Extension {
       },
       ToggleFullscreen: (id) => this.session.toggleFullscreen(id),
       QuitFocused: () => this.session.closeFocused(),
+      SimulateAbove: (id) => this.session.simulateAbove(id),
       MinimizeWindow: (id) => {
         if (!this.session.windows.has(id)) return false;
         this.host.minimize(id);
@@ -1014,6 +1018,8 @@ export default class AdrtExtension extends Extension {
         z: tracked.surface.zPosition,
         maximized: tracked.surface.flags.maximized,
         minimized: tracked.surface.flags.minimized,
+        above: tracked.surface.flags.above,
+        transient: tracked.surface.flags.transient,
         tileable: this.session.classify(tracked).tileable,
         reason: this.session.classify(tracked).reason,
         profile: tracked.profile.name,

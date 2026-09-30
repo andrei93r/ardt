@@ -31,6 +31,14 @@ describe('layerFor', () => {
     expect(layerFor(surface({ flags: { floating: true } }))).toBe(Layer.FLOATING);
   });
 
+  it('tiles a normal window that carries the above flag', () => {
+    // "Always on top" is often left set by an app; a normal window is still
+    // tiled (the adapter clears the flag when it tiles it).
+    const verdict = classify(surface({ flags: { above: true } }), config());
+    expect(verdict.tileable).toBe(true);
+    expect(verdict.reason).toBeNull();
+  });
+
   it('treats skip-taskbar chrome as BACKGROUND', () => {
     expect(layerFor(surface({ kind: SurfaceKind.SKIP }))).toBe(Layer.BACKGROUND);
   });
@@ -53,7 +61,6 @@ describe('classify', () => {
     ['override-redirect', surface({ flags: { overrideRedirect: true } })],
     ['on-all-workspaces', surface({ flags: { onAllWorkspaces: true } })],
     ['fullscreen', surface({ flags: { fullscreen: true } })],
-    ['above', surface({ flags: { above: true } })],
     ['floating', surface({ flags: { floating: true } })],
     ['non-tileable-kind', surface({ kind: SurfaceKind.DIALOG })],
     ['min-equals-max', surface({ min: size(500, 100), max: size(500, 10000) })],

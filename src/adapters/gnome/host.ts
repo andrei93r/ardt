@@ -107,6 +107,17 @@ export class GnomeHost implements PlatformHost {
   }
 
   /** Resolve the live Mutter window for a surface id. */
+  /** Drop the "always on top" hint so the window can sit in the tiling. */
+  clearAbove(id: number): void {
+    const win = this.windowFor(id);
+    if (win === null) return;
+    try {
+      if (win.is_above() === true) win.unmake_above();
+    } catch {
+      /* window gone */
+    }
+  }
+
   windowFor(id: number): any | null {
     for (const win of global.display.list_all_windows()) {
       if (win.get_id() === id) return win;

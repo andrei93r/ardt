@@ -126,23 +126,24 @@ code changes, MINOR for features, PATCH for fixes.
   tiling. It is no longer skipped while any animation runs — it skips only the
   individual windows that are animating — and it retries a lone window at most
   every 3 s so a refusing window is not hammered. `coherenceFixes` is exposed in
-  `DumpState` (A58/A59).
-- The coherence sweep also enforces the lone-window rule:
-  a single tileable window is maximized on its workspace, even if the policy
-  missed it (A58).
+  `DumpState` (A56/A58/A59).
 - Returning from a maximize no longer overshoots: its workspace switch runs with
   no slide/clones (like the maximize-right), and the landing is applied snapped
   instead of animating a maximized rect down to a tile while the workspace
   changes. The minimize-return snaps too.
+- Adrt's own float paths set Mutter's "always on top" flag (`applyLayer(FLOATING)`
+  → `make_above()`), and the classifier then treated `above` as non-tileable, so
+  a window we had floated over a pair stayed an orphan after the pair was gone.
+  `above` no longer disqualifies a normal window, the flag is cleared whenever
+  the window is tiled, and it is cleared on close with a sweep so a leftover
+  auto-float returns to the tiling (A59/A61).
+- Swap pairs are pruned on enable: they are keyed by window id, which does not
+  survive a restart.
 - A workspace-switch animation that never finishes leaves its clone group on
   screen, which is the doubled/frozen view seen in a screenshot. A watchdog now
   tears it down when it is still running after 1.5 s and no gesture owns it (a
   live swipe is left alone). `workspaceAnimating` is exposed in `DumpState`;
   A60 covers it.
-- A periodic coherence sweep (every 2 s) guarantees a normal window is never
-  left untiled beside a sibling: it compares every window against its plan,
-  clears any refusal bookkeeping and re-applies. `coherenceSweeps` is exposed
-  in `DumpState`, and the live/nested suites cover it (A56).
 - Our frame animations no longer run for a window that is maximized or
   minimized, and are cancelled when a window is minimized, so they cannot fight
   Mutter's own transitions.
