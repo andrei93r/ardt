@@ -17,11 +17,16 @@ pair_ws="$(window_field "$A" workspace)"
 spawn_window >/dev/null
 wait_count 3 20 || true
 wait_settled 15
-wait_python 25 '
+if ! wait_python 30 '
 import json, sys
 d = json.load(sys.stdin)
 ws = [w["workspace"] for w in d["windows"] if w["tileable"]]
-sys.exit(0 if ws and max(ws) > int("'"$pair_ws"'") else 1)' || true
+sys.exit(0 if ws and max(ws) > int("'"$pair_ws"'") else 1)'; then
+  fail "the third window never took its own workspace"
+  ensure_clean
+  summary
+  exit 1
+fi
 read -r third third_ws <<<"$(dump | python3 -c '
 import json,sys
 ws = [w for w in json.load(sys.stdin)["windows"] if w["tileable"]]
