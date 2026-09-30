@@ -106,7 +106,7 @@ export class WindowSession {
       global.display.connect('notify::focus-window', () => this.scheduleReconcile('focus')),
     );
     this.managerSignals.push(
-      global.workspace_manager.connect('active-workspace-changed', () => this.scheduleReconcile('workspace-active')),
+      global.workspace_manager.connect('active-workspace-changed', () => this.retileEverywhere('workspace-active')),
       global.workspace_manager.connect('workspace-added', () => this.scheduleReconcile('workspace-added')),
       global.workspace_manager.connect('workspace-removed', () => this.scheduleReconcile('workspace-removed')),
       global.workspace_manager.connect('notify::n-workspaces', () => this.scheduleReconcile('workspace-count')),
@@ -712,6 +712,15 @@ export class WindowSession {
     this.deps.history.log('undo', { workspaceId: entry.workspaceId, windows: entry.rects.length });
     // Do not immediately re-tile over the restored rects.
     this.ignoreMismatchUntilMs = Date.now() + 4000;
+    return true;
+  }
+
+  /** Test hook: pretend the surface cache already saw a workspace change, the
+   * way a `refresh()` during an overview drag would. */
+  markWorkspaceCached(id: number, index: number): boolean {
+    const tracked = this.windows.get(id);
+    if (tracked === undefined) return false;
+    tracked.surface.workspaceId = index;
     return true;
   }
 
@@ -1350,16 +1359,34 @@ export class WindowSession {
     const workspace = tracked.win.get_workspace();
     if (workspace === null) return;
     const index = workspace.index();
-    if (index === tracked.surface.workspaceId) return;
-    const from = tracked.surface.workspaceId;
+    // Compare against the index WE last recorded, not `surface.workspaceId`:
+    // `refresh()` copies the live workspace into the surface at every frame, so
+    // by the time this signal arrives the cached value can already be the new
+    // one — and the change would be missed entirely (the overview-drag case).
+    const from = tracked.lastWorkspaceIdx;
+    if (index === from) return;
     tracked.surface.workspaceId = index;
     tracked.lastWorkspaceIdx = index;
     // §19.1: remember the user's move so policies leave the window alone.
     tracked.userMovedAtMs = Date.now();
     this.deps.history.log('ws_switch_empty', { id: tracked.id, from, to: index, byUser: true });
     this.signatures.clearAll();
-    this.scheduleRetile(from, 'workspace-changed');
-    this.scheduleRetile(index, 'workspace-changed');
+    // A move between workspaces can leave either side untiled (and a workspace
+    // whose tileable is still maximized is skipped by a plain retile), so
+    // recalculate every workspace, not just the two involved.
+    this.retileEverywhere('workspace-changed');
+  }
+
+  /** Recalculate every workspace, retrying shortly if a drag is in flight —
+   * the move and the grab-end can arrive in either order. */
+  private retileEverywhere(reason: string): void {
+    if (this.dragging || this.adjustId !== null) {
+      this.addTimeout(200, () => {
+        if (!this.dragging && this.adjustId === null) this.reconcileAll(reason, false);
+      });
+      return;
+    }
+    this.reconcileAll(reason, false);
   }
 
   private scheduleScan(): void {

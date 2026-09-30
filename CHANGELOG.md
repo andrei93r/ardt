@@ -111,6 +111,13 @@ code changes, MINOR for features, PATCH for fixes.
   a stacked split) even after a window is created or reordered out of id order.
   A pair the user marked *swapped* keeps the stable id order instead, so the
   two rules cannot fight and oscillate.
+- Moving a window to another workspace outside Adrt (the overview) now triggers
+  a full recalculation of **every** workspace. Change detection compares
+  against the index Adrt last recorded, because a per-frame `refresh()` copied
+  the live workspace into the cache before the signal arrived and the move was
+  silently ignored. If the move races a drag, the recalculation is retried once
+  the drag ends. Switching workspaces recalculates every workspace too.
+  Scenarios A54/A55 and live S13.
 - A workspace that ends up holding more than a pair (e.g. a window was dragged
   here in the overview) never leaves an extra stacked: the newest extra floats
   centred over the pair, which also retiles the pair. Both the origin and the

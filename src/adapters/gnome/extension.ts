@@ -68,6 +68,8 @@ interface ExtraHandlers {
   ResetLayoutState(): boolean;
   SimulateOverview(visible: boolean): boolean;
   SimulateWorkspaceSwitch(holdMs: number): boolean;
+  MoveToWorkspace(id: number, index: number): boolean;
+  MarkWorkspaceCached(id: number, index: number): boolean;
 }
 
 type Handlers = DbusHandlers & ExtraHandlers;
@@ -828,6 +830,8 @@ export default class AdrtExtension extends Extension {
       BeginDrag: (id) => this.session.beginDrag(id),
       EndDrag: (id) => this.session.endDrag(id),
       MoveWindow: (id, x, y, width, height) => this.moveWindow(id, x, y, width, height),
+      MoveToWorkspace: (id, index) => this.moveToWorkspace(id, index),
+      MarkWorkspaceCached: (id, index) => this.session.markWorkspaceCached(id, index),
       MinimizeWindow: (id) => {
         if (!this.session.windows.has(id)) return false;
         this.host.minimize(id);
@@ -879,6 +883,16 @@ export default class AdrtExtension extends Extension {
   private moveWindow(id: number, x: number, y: number, width: number, height: number): boolean {
     if (!this.session.windows.has(id)) return false;
     this.host.applyFrame(id, { x, y, width, height });
+    return true;
+  }
+
+  /** Test trigger: move a window to another workspace the way the overview
+   * does — straight through Mutter, so the session sees a `workspace-changed`
+   * signal and must retile both the old and the new workspace. */
+  private moveToWorkspace(id: number, index: number): boolean {
+    if (!this.session.windows.has(id)) return false;
+    if (index < 0 || index >= global.workspace_manager.get_n_workspaces()) return false;
+    this.host.applyWorkspace(id, index);
     return true;
   }
 
