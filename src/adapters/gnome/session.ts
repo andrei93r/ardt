@@ -475,6 +475,20 @@ export class WindowSession {
       this.scheduleRetile(workspaceId, 'unfloat-lone');
       return;
     }
+    // A workspace that somehow holds more than a pair (e.g. a window was moved
+    // here in the overview) never leaves an extra floating/stacked: the newest
+    // extra floats centred over the pair, which also retiles the pair.
+    const wsTileables = this.tileables(workspaceId);
+    if (wsTileables.length > 2) {
+      const extra = wsTileables[wsTileables.length - 1];
+      const screen = this.screenFor(extra.surface.screenId);
+      if (screen !== null) {
+        this.floatOverPair(extra);
+        this.signatures.clearAll();
+        this.scheduleRetile(workspaceId, 'float-extra');
+      }
+      return;
+    }
     // §7.2 takes precedence over §6: a lone window stays maximized, not tiled.
     if (this.shouldLoneMaximize(workspaceId)) {
       const only = this.tileables(workspaceId)[0];
@@ -555,6 +569,30 @@ export class WindowSession {
       if (this.classify(tracked).tileable) out.push(tracked);
     }
     return out.sort((a, b) => a.id - b.id);
+  }
+
+  /** Centre a window over the tiled pair it cannot join (§7.3). */
+  private floatOverPair(tracked: TrackedWindow): void {
+    tracked.autoFloated = true;
+    tracked.surface.setFloating(true);
+    this.deps.tiling.noteSelfApply();
+    this.deps.host.applyLayer(tracked.id, Layer.FLOATING, 0);
+    // Keep it on top but do not hide the pair behind it: centre it with a
+    // margin so the tiled windows stay visible.
+    const screen = this.screenFor(tracked.surface.screenId);
+    if (screen === null) return;
+    const area = screenArea(screen);
+    const margin = Math.max(24, Math.round(Math.min(area.width, area.height) * 0.12));
+    const width = Math.max(1, area.width - 2 * margin);
+    const height = Math.max(1, area.height - 2 * margin);
+    this.deps.tiling.applyFrame(
+      tracked,
+      { x: area.x + Math.round((area.width - width) / 2), y: area.y + Math.round((area.height - height) / 2), width, height },
+      screen,
+      false,
+      'float-over-pair',
+      0,
+    );
   }
 
   /** Windows Adrt floated itself (float-over-pair, unmaximize-return), i.e.
@@ -887,27 +925,7 @@ export class WindowSession {
     // §7.3: a workspace that already holds a pair makes the newcomer float.
     // The incoming window is excluded: only two *others* make it a pair.
     if (this.tileables(previous).filter((t) => t.id !== tracked.id).length >= 2) {
-      tracked.autoFloated = true;
-      tracked.surface.setFloating(true);
-      this.deps.tiling.noteSelfApply();
-      this.deps.host.applyLayer(tracked.id, Layer.FLOATING, 0);
-      // Keep it on top but do not hide the pair behind it: centre it with a
-      // margin so the tiled windows stay visible.
-      const screen = this.screenFor(tracked.surface.screenId);
-      if (screen !== null) {
-        const area = screenArea(screen);
-        const margin = Math.max(24, Math.round(Math.min(area.width, area.height) * 0.12));
-        const width = Math.max(1, area.width - 2 * margin);
-        const height = Math.max(1, area.height - 2 * margin);
-        this.deps.tiling.applyFrame(
-          tracked,
-          { x: area.x + Math.round((area.width - width) / 2), y: area.y + Math.round((area.height - height) / 2), width, height },
-          screen,
-          false,
-          'float-over-pair',
-          0,
-        );
-      }
+      this.floatOverPair(tracked);
     }
     this.deps.history.log('ws_removed', { id: tracked.id, from: current, to: previous, reason: 'unmaximize' });
     this.signatures.clearAll();
@@ -1291,8 +1309,23 @@ export class WindowSession {
     const maximized = compat.isMaximized(tracked.win);
     if (maximized) {
       const siblings = this.tileables(tracked.surface.workspaceId).filter((t) => t.id !== tracked.id);
-      if (siblings.length > 0) this.moveToNewWorkspace(tracked, true);
-      else this.signatures.clearAll();
+      if (siblings.length > 0) {
+        // Move it to its own workspace *at its current size*, then maximize it
+        // there. Maximizing in place first would animate the window growing on
+        // the workspace it is about to leave.
+        this.suppress.add(tracked.id);
+        this.deps.tiling.noteSelfApply();
+        this.deps.host.unmaximize(tracked.id);
+        tracked.surface.refresh();
+        this.moveToNewWorkspace(tracked, true);
+        this.suppress.delete(tracked.id);
+        if (this.windows.has(tracked.id) && !compat.isMaximized(tracked.win)) {
+          this.deps.tiling.noteSelfApply();
+          this.deps.host.maximize(tracked.id);
+        }
+      } else {
+        this.signatures.clearAll();
+      }
       return;
     }
     if (tracked.previousWorkspaceIdx !== null) {

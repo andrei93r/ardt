@@ -252,9 +252,8 @@ print("coherent:", len(tiles), "tiled windows")
 
 session_cleanup() {
   close_tests
-  # The scenarios set per-app split ratios; clear them so a test run does not
-  # leave the user's pairs stuck on a test ratio.
-  adrt ResetLayoutState >/dev/null 2>&1 || true
+  # Note: the scenarios that set a split ratio undo it themselves; do NOT call
+  # ResetLayoutState here, it would wipe the ratios the user set by hand.
   adrt ActivateWorkspace "${USER_WS:-0}" >/dev/null 2>&1 || true
 }
 

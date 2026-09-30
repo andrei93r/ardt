@@ -111,6 +111,15 @@ code changes, MINOR for features, PATCH for fixes.
   a stacked split) even after a window is created or reordered out of id order.
   A pair the user marked *swapped* keeps the stable id order instead, so the
   two rules cannot fight and oscillate.
+- A workspace that ends up holding more than a pair (e.g. a window was dragged
+  here in the overview) never leaves an extra stacked: the newest extra floats
+  centred over the pair, which also retiles the pair. Both the origin and the
+  target workspace are retiled after such a move.
+- Maximizing a window with a sibling moves it to its own workspace at its
+  current size and maximizes it there, instead of animating the grow on the
+  workspace it is about to leave.
+- The live test suite no longer calls ResetLayoutState, which had been wiping
+  the split ratios the user set by hand.
 - A workspace reduced to a single tile plus an automatic float tiles both again
   (no floating leftover), ahead of the lone-maximize policy. A window the user
   floated themselves, and the 2-tiles-plus-1-float case, are left alone.
