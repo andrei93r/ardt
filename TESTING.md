@@ -109,6 +109,8 @@ those shortcuts.
 | A47 | Border vs workspace switch | hidden for the whole gesture/animation, returns after |
 | A48 | Periodic retile | plan re-runs on its own cadence; drift heals |
 | A50 | Unmaximize returns left | left workspace holds a pair → comes back floating on top |
+| A51 | Prune safety | only Adrt's workspaces are reaped; no churn |
+| A52 | Adaptation minimum | a refusal to grow does not record a bogus min |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

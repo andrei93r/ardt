@@ -162,6 +162,7 @@ export default class AdrtExtension extends Extension {
       onStubborn: (appId) => this.onStubborn(appId),
       onClosed: (id, rect) => this.onWindowClosed(id, rect),
       onDragChanged: (dragging) => this.onDragChanged(dragging),
+      onWindowMoving: () => this.suppressForWorkspaceSwitch(),
     });
 
     const injectedFailures = this.settings.int('debug-inject-verify-failure', 0);

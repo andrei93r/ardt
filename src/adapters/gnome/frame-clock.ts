@@ -38,6 +38,8 @@ interface Entry {
   durationMs: number;
   easing: (t: number) => number;
   onComplete: (() => void) | null;
+  /** Optional work area: the animated rect is kept inside it. */
+  bounds: Rect | null;
 }
 
 export class FrameClockAnimator {
@@ -49,7 +51,7 @@ export class FrameClockAnimator {
     return this.entries.size;
   }
 
-  animate(actor: any, id: number, from: Rect, to: Rect, durationMs: number, onComplete: (() => void) | null = null): void {
+  animate(actor: any, id: number, from: Rect, to: Rect, durationMs: number, onComplete: (() => void) | null = null, bounds: Rect | null = null): void {
     if (actor === null || durationMs <= 0) {
       this.hooks.apply(id, to);
       if (onComplete !== null) onComplete();
@@ -66,6 +68,7 @@ export class FrameClockAnimator {
       durationMs: safeDuration,
       easing: easingFor(safeDuration),
       onComplete,
+      bounds,
     };
     this.entries.set(id, entry);
     timeline.connect('new-frame', (_tl: any, msec: number) => this.onFrame(id, entry, msec));
@@ -100,6 +103,13 @@ export class FrameClockAnimator {
     entry.rect.y = entry.from.y + (entry.to.y - entry.from.y) * e;
     entry.rect.width = entry.from.width + (entry.to.width - entry.from.width) * e;
     entry.rect.height = entry.from.height + (entry.to.height - entry.from.height) * e;
+    const b = entry.bounds;
+    if (b !== null) {
+      entry.rect.width = Math.min(entry.rect.width, b.width);
+      entry.rect.height = Math.min(entry.rect.height, b.height);
+      entry.rect.x = Math.max(b.x, Math.min(entry.rect.x, b.x + b.width - entry.rect.width));
+      entry.rect.y = Math.max(b.y, Math.min(entry.rect.y, b.y + b.height - entry.rect.height));
+    }
     this.hooks.apply(id, entry.rect);
     if (this.hooks.onFrame !== undefined) this.hooks.onFrame(id, entry.durationMs / 60);
   }

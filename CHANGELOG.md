@@ -96,13 +96,27 @@ code changes, MINOR for features, PATCH for fixes.
 - A fresh pair splits 50/50 when the windows' minimum sizes allow it; the live
   suite clears the ratios it sets so a test run cannot leave your pairs on a
   test split.
+- The adaptation store no longer learns a minimum width from a window that
+  refused to *grow* (a max-size app): that recorded its current size as a
+  minimum, which pinned e.g. Chrome to 1477 px and made a 50/50 split
+  impossible. Only a window that refused to shrink teaches a minimum.
+- The border is hidden at once when Adrt moves a window to another workspace
+  (a third window going right), instead of being drawn at the old spot while
+  the window is pushed away.
+- Animation frames are clamped to the screen's work area and run shorter
+  (70-160 ms), so a reflow no longer looks harsh or leaves a window briefly
+  outside its tile.
 - An emptied workspace is reaped promptly: the post-close prune runs again once
   the asynchronous workspace switch has landed, and a debounced reconcile only
   records undo for user adjusts.
-- GNOME's dynamic workspaces re-create one empty workspace at the end. Adrt
-  reaps empty workspaces but, once it sees a removal re-created, stops reaping
-  the trailing one — so it no longer churns against the compositor while a
-  window is focused.
+- Only the workspaces Adrt itself creates (third-window, maximize-right and
+  minimize policies) are reaped when empty, and never one that holds any window
+  — tracked or not. Reaping a workspace out from under a window is what made
+  one "disappear", and reaping a workspace the user or the session owns caused
+  churn against GNOME's dynamic workspaces.
+- Unmaximizing is robust against a stale workspace index (workspaces reaped
+  since the maximize): it falls back to the nearest workspace that holds
+  windows instead of doing nothing.
 - Undo restores the split ratios along with the window rects, so the restored
   layout agrees with the plan and no later reconcile re-tiles over it. This was
   an existing inconsistency that the periodic tiling pass made visible.

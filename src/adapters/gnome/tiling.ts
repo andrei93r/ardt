@@ -10,7 +10,7 @@
 import GLib from 'gi://GLib';
 import St from 'gi://St';
 
-import { ratioKey } from '../../core/tiler.js';
+import { ratioKey, screenArea } from '../../core/tiler.js';
 import type { SplitAxis } from '../../core/tiler.js';
 import { clamp, rectEquals } from '../../core/types.js';
 import type { Rect, Screen, TilePlan } from '../../core/types.js';
@@ -172,7 +172,7 @@ export class Tiling {
   }
 
   /** Apply a single frame with the §11 pipeline. */
-  applyFrame(tracked: TrackedWindow, target: Rect, _screen: Screen, animate: boolean, reason: string, attempt: number): void {
+  applyFrame(tracked: TrackedWindow, target: Rect, screen: Screen, animate: boolean, reason: string, attempt: number): void {
     if (this.destroyed || this.deps.isPaused()) return;
     const win = tracked.win;
 
@@ -186,9 +186,9 @@ export class Tiling {
     }
 
     if (delay > 0) {
-      this.addTimeout(delay, () => this.performApply(tracked, target, animate, reason, attempt));
+      this.addTimeout(delay, () => this.performApply(tracked, target, screen, animate, reason, attempt));
     } else {
-      this.performApply(tracked, target, animate, reason, attempt);
+      this.performApply(tracked, target, screen, animate, reason, attempt);
     }
   }
 
@@ -212,7 +212,7 @@ export class Tiling {
     this.deps.animator.cancelAll();
   }
 
-  private performApply(tracked: TrackedWindow, target: Rect, animate: boolean, reason: string, attempt: number): void {
+  private performApply(tracked: TrackedWindow, target: Rect, screen: Screen, animate: boolean, reason: string, attempt: number): void {
     if (this.destroyed || this.deps.isPaused()) return;
     this.lastAppliedAtMs = Date.now();
     // Record the intended geometry immediately: a window counts as tiled from
@@ -225,7 +225,7 @@ export class Tiling {
       const from = { ...tracked.surface.frame };
       const duration = this.durationFor(from, target);
       this.deps.animator.animate(actor, tracked.id, from, target, duration, () =>
-        this.scheduleVerify(tracked, target, reason, attempt),
+        this.scheduleVerify(tracked, target, reason, attempt), screenArea(screen),
       );
     } else {
       this.deps.host.applyFrame(tracked.id, target);
@@ -270,7 +270,13 @@ export class Tiling {
       return;
     }
     tracked.refusals += 1;
-    this.deps.adaptation.observeRefusedMin(tracked.surface.appId, current.width, current.height);
+    // Only a window that refused to *shrink* has a minimum: it ended up larger
+    // than the rect we asked for. A window that stayed smaller than the target
+    // (a max-size app) must not teach us a minimum — doing so pinned, e.g.,
+    // Chrome to its current width and made a 50/50 split impossible.
+    if (current.width > target.width + VERIFY_TOLERANCE || current.height > target.height + VERIFY_TOLERANCE) {
+      this.deps.adaptation.observeRefusedMin(tracked.surface.appId, current.width, current.height);
+    }
     const stubborn = this.deps.adaptation.noteRefusal(tracked.surface.appId);
     this.deps.history.log('stubborn', { id: tracked.id, appId: tracked.surface.appId, refusals: tracked.refusals });
     if (stubborn) {
@@ -341,7 +347,7 @@ export class Tiling {
   private durationFor(from: Rect, to: Rect): number {
     const base = this.deps.settings.int('animation-duration', 180);
     const delta = Math.abs(from.x - to.x) + Math.abs(from.y - to.y) + Math.abs(from.width - to.width) + Math.abs(from.height - to.height);
-    return delta > 400 ? Math.min(250, base) : Math.max(100, Math.min(180, base));
+    return delta > 400 ? Math.min(160, base) : Math.max(70, Math.min(120, base));
   }
 
   private within(a: Rect, b: Rect): boolean {

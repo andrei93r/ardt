@@ -38,6 +38,8 @@ export interface SessionDeps {
   onStubborn(appId: string): void;
   onClosed(id: number, rect: Rect): void;
   onDragChanged(dragging: boolean): void;
+  /** The window is being moved to another workspace: hide the border now. */
+  onWindowMoving(): void;
 }
 
 interface WindowSignal {
@@ -58,8 +60,6 @@ export class WindowSession {
   private readonly timeoutSources = new Set<number>();
   /** Workspaces this extension created; empty ones are removed again (§16). */
   private readonly dynamicWorkspaces = new Set<number>();
-  /** Set once a pruned trailing workspace is seen to be re-created by Mutter. */
-  private avoidTrailingPrune = false;
   private reorderSignal = 0;
   private displaySignals: number[] = [];
   private managerSignals: number[] = [];
@@ -774,6 +774,10 @@ export class WindowSession {
     this.maybeNameWorkspace(index);
     this.suppress.add(tracked.id);
     this.deps.tiling.noteSelfApply();
+    // Hide the highlight straight away: the window is about to leave this
+    // workspace, and our own move would otherwise be ignored by the position
+    // watcher, leaving the border drawn at the old spot for a frame or two.
+    this.deps.onWindowMoving();
     this.deps.host.applyWorkspace(tracked.id, index);
     this.suppress.delete(tracked.id);
     tracked.surface.workspaceId = index;
@@ -813,7 +817,16 @@ export class WindowSession {
 
   /** §7.3: user unmaximized a window that had been sent to its own workspace. */
   private returnFromMaximize(tracked: TrackedWindow): void {
-    const previous = tracked.previousWorkspaceIdx;
+    const manager = global.workspace_manager;
+    let previous = tracked.previousWorkspaceIdx;
+    // A stale index (workspaces were reaped since the maximize) must not strand
+    // the window: fall back to the nearest workspace that still holds windows.
+    if (previous !== null && (previous < 0 || previous >= manager.get_n_workspaces() || previous === tracked.surface.workspaceId)) {
+      const here = tracked.surface.workspaceId;
+      let target = this.nearestWorkspaceWithWindows(here, -1);
+      if (target < 0) target = this.nearestExistingWorkspace(here, -1);
+      previous = target >= 0 ? target : null;
+    }
     if (previous === null) {
       const tileables = this.tileables(tracked.surface.workspaceId);
       if (tileables.length <= 1 && !compat.isMaximized(tracked.win)) {
@@ -824,6 +837,7 @@ export class WindowSession {
     }
     this.suppress.add(tracked.id);
     this.deps.tiling.noteSelfApply();
+    this.deps.onWindowMoving();
     this.deps.host.applyWorkspace(tracked.id, previous);
     this.suppress.delete(tracked.id);
     const current = tracked.surface.workspaceId;
@@ -886,27 +900,32 @@ export class WindowSession {
   }
 
   /**
-   * §16: reap empty workspaces. Any workspace (ours or the user's) that has no
-   * tracked windows is removed once the user is not on it, keeping at least
-   * one. Runs on the scan tick and shortly after a close/minimize/move.
+   * §16: reap the workspaces Adrt itself created (third-window and
+   * maximize-right policies) once they are empty and the user is not on them,
+   * keeping at least one workspace. Workspaces the user or the session created
+   * are left alone, and a workspace holding any window at all is kept — reaping
+   * a workspace out from under a window is what made one "disappear".
    */
   private pruneEmptyWorkspaces(): void {
     const manager = global.workspace_manager;
     if (manager.get_n_workspaces() <= 1) return;
-    const before = manager.get_n_workspaces();
     let active = manager.get_active_workspace_index();
     let changed = false;
-    for (let index = before - 1; index >= 0; index--) {
+    const candidates = [...this.dynamicWorkspaces].sort((a, b) => b - a);
+    for (const index of candidates) {
       if (manager.get_n_workspaces() <= 1) break;
+      if (index >= manager.get_n_workspaces()) {
+        this.dynamicWorkspaces.delete(index);
+        continue;
+      }
       if (index === active) continue;
-      // GNOME's dynamic workspaces re-create a trailing empty workspace the
-      // moment it is removed. Once we have seen that happen, leave the trailing
-      // one alone instead of churning against the compositor.
-      if (this.avoidTrailingPrune && index === manager.get_n_workspaces() - 1) continue;
       const workspace = manager.get_workspace_by_index(index);
-      if (workspace === null) continue;
-      const remaining = workspace.list_windows().filter((win: any) => this.windows.has(win.get_id()));
-      if (remaining.length > 0) continue;
+      if (workspace === null) {
+        this.dynamicWorkspaces.delete(index);
+        continue;
+      }
+      // Keep it if it holds any window, tracked or not.
+      if (workspace.list_windows().length > 0) continue;
 
       this.dynamicWorkspaces.delete(index);
       const shifted = new Set<number>();
@@ -921,9 +940,6 @@ export class WindowSession {
     if (changed) {
       this.realignWorkspaces();
       this.signatures.clearAll();
-      // If the count did not actually fall, the compositor re-created the
-      // trailing workspace; stop trying to reap it.
-      if (manager.get_n_workspaces() >= before) this.avoidTrailingPrune = true;
     }
   }
 
