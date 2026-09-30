@@ -957,9 +957,9 @@ export class WindowSession {
     const current = tracked.surface.workspaceId;
     tracked.surface.workspaceId = previous;
     tracked.previousWorkspaceIdx = null;
-    // The view follows the window back, exactly as it followed it right when
-    // it was maximized.
-    this.activateWorkspace(previous);
+    // The view follows the window back, with no switch clones and no slide that
+    // could overshoot: the window's own resize is applied instantly below.
+    this.instantSwitch(() => this.activateWorkspace(previous));
     // §7.3: a workspace that already holds a pair makes the newcomer float.
     // The incoming window is excluded: only two *others* make it a pair.
     if (this.tileables(previous).filter((t) => t.id !== tracked.id).length >= 2) {
@@ -968,7 +968,9 @@ export class WindowSession {
     this.deps.history.log('ws_removed', { id: tracked.id, from: current, to: previous, reason: 'unmaximize' });
     this.signatures.clearAll();
     this.schedulePrune();
-    this.scheduleRetile(previous, 'unmaximize-return');
+    // Snap the landing once the move has landed: animating a maximized rect
+    // down to a tile while the workspace changes is what reads as an overshoot.
+    this.addTimeout(120, () => this.retile(previous, 'unmaximize-return', false, false));
   }
 
   /** §7.4 minimize follows to the previous workspace. */
@@ -999,7 +1001,8 @@ export class WindowSession {
       // Follow the window. The empty workspace it left is pruned safely later.
       this.instantSwitch(() => this.activateWorkspace(left));
       this.schedulePrune();
-      this.scheduleRetile(left, 'minimize-return');
+      // Snap the landing on the workspace it slides into, once the move landed.
+      this.addTimeout(120, () => this.retile(left, 'minimize-return', false, false));
     }
     this.scheduleRetile(workspaceId, 'minimize');
   }

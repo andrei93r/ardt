@@ -55,7 +55,7 @@ else
   fail "window not tiled ($(state_expr "[(w['id'], w['layer'], w['maximized'], w['rect']) for w in d['windows'] if w['id'] == $B]"))"
 fi
 
-check_python "it fills the work area" '
+poll "it fills the work area" '
 import json, sys
 d = json.load(sys.stdin)
 area = d["monitors"][0].get("workArea") or d["monitors"][0]["geometry"]
@@ -64,7 +64,7 @@ if not w:
     print("window gone"); sys.exit(1)
 r = w[0]["rect"]
 sys.exit(0 if r["width"] >= area["width"] - 2 and r["height"] >= area["height"] - 2 else 1)
-'
+' 15
 
 ensure_clean
 summary

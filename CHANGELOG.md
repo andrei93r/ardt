@@ -130,6 +130,10 @@ code changes, MINOR for features, PATCH for fixes.
 - The coherence sweep also enforces the lone-window rule:
   a single tileable window is maximized on its workspace, even if the policy
   missed it (A58).
+- Returning from a maximize no longer overshoots: its workspace switch runs with
+  no slide/clones (like the maximize-right), and the landing is applied snapped
+  instead of animating a maximized rect down to a tile while the workspace
+  changes. The minimize-return snaps too.
 - A workspace-switch animation that never finishes leaves its clone group on
   screen, which is the doubled/frozen view seen in a screenshot. A watchdog now
   tears it down when it is still running after 1.5 s and no gesture owns it (a

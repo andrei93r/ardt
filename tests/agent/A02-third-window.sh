@@ -21,6 +21,7 @@ for _ in $(seq 1 40); do
     suppressed=1
     break
   fi
+  sleep 0.05
 done
 if [ "$suppressed" = "1" ]; then
   pass "the highlight is suppressed while the window is pushed right"
@@ -32,7 +33,7 @@ wait_count 3 15 || true
 wait_settled 12
 
 assert_eq "three windows are tracked" "3" "$(count_windows)"
-check_python "the third window is on its own workspace, one to the right, and focused" '
+poll "the third window is on its own workspace, one to the right, and focused" '
 import json, sys
 d = json.load(sys.stdin)
 pair_ws = int("'"$pair_ws"'")
@@ -45,7 +46,7 @@ if target != pair_ws + 1:
 if d["activeWorkspace"] != target:
     print("view did not follow: active", d["activeWorkspace"], "third ws", target); sys.exit(1)
 print("third window on ws", target, "active", d["activeWorkspace"])
-'
+' 20
 
 ensure_clean
 summary
