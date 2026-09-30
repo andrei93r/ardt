@@ -107,8 +107,10 @@ describe('computePlans — landscape pair', () => {
     const swapped = new Set([pairKey(1, 2)]);
     const plan = computePlans([window({ id: 1 }), window({ id: 2, appId: 'b' })], landscape, config({ swapPairs: swapped }));
     const normal = computePlans([window({ id: 1 }), window({ id: 2, appId: 'b' })], landscape, config());
-    expect(plan.placements[0].rect).toEqual(normal.placements[1].rect);
-    expect(plan.placements[1].rect).toEqual(normal.placements[0].rect);
+    const rectFor = (p: typeof plan, id: number) => p.placements.find((x) => x.surfaceId === id)!.rect;
+    // Swapping exchanges the two windows' sides.
+    expect(rectFor(plan, 1)).toEqual(rectFor(normal, 2));
+    expect(rectFor(plan, 2)).toEqual(rectFor(normal, 1));
   });
 });
 

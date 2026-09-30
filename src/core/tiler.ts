@@ -258,14 +258,14 @@ function byRelativePosition(a: TilerWindow, b: TilerWindow): number {
  * Callers guarantee at most two windows; extras are ignored.
  */
 export function computePlans(windows: readonly TilerWindow[], screen: Screen, config: TilerConfig): TilePlan {
-  const sorted = [...windows].sort(byRelativePosition);
-  if (sorted.length === 0) return { placements: [] };
+  const byId = [...windows].sort((a, b) => a.id - b.id);
+  if (byId.length === 0) return { placements: [] };
 
   const gap = effectiveGap(config, screen);
   const avail = inset(screenArea(screen), gap);
 
-  if (sorted.length === 1) {
-    const only = sorted[0];
+  if (byId.length === 1) {
+    const only = byId[0];
     // `reflow-keeps-edges` false: keep the outer edges where the user left them.
     if (config.reflowKeepsEdges === false && only.rect.width > 0 && only.rect.height > 0) {
       return { placements: [place(only.id, clampRect(only.rect, only.min, screenArea(screen)), screen, 0, only.max)] };
@@ -273,8 +273,14 @@ export function computePlans(windows: readonly TilerWindow[], screen: Screen, co
     return { placements: [place(only.id, fillRect(avail, only.min, screenArea(screen)), screen, 0, only.max)] };
   }
 
-  const w0 = sorted[0];
-  const w1 = sorted[1];
+  // Sides follow where the windows actually are, so the left window keeps the
+  // left tile. A pair the user marked *swapped* uses the stable id order
+  // instead: sides that followed position would flip again once the swap moved
+  // the windows, oscillating forever.
+  const swapped = config.swapPairs.has(pairKey(byId[0].id, byId[1].id));
+  const ordered = swapped ? [...byId].reverse() : [...windows].sort(byRelativePosition);
+  const w0 = ordered[0];
+  const w1 = ordered[1];
   const defaultAxis: SplitAxis = isPortrait(screen) ? 'vertical' : 'horizontal';
 
   const override = findRuleOverride([w0, w1], config.rules);
@@ -299,12 +305,8 @@ export function computePlans(windows: readonly TilerWindow[], screen: Screen, co
     }
   }
 
-  const swapped = config.swapPairs.has(pairKey(w0.id, w1.id));
-  const rect0 = swapped ? split.rect1 : split.rect0;
-  const rect1 = swapped ? split.rect0 : split.rect1;
-
   return {
-    placements: [place(w0.id, rect0, screen, 0, w0.max), place(w1.id, rect1, screen, 1, w1.max)],
+    placements: [place(w0.id, split.rect0, screen, 0, w0.max), place(w1.id, split.rect1, screen, 1, w1.max)],
   };
 }
 

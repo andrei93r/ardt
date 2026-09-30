@@ -109,6 +109,8 @@ code changes, MINOR for features, PATCH for fixes.
 - A pair is laid out by where its windows actually are, not by window id, so
   the window on the left stays the left tile (and the top one stays on top in
   a stacked split) even after a window is created or reordered out of id order.
+  A pair the user marked *swapped* keeps the stable id order instead, so the
+  two rules cannot fight and oscillate.
 - Maximize keeps the immediate view follow: delaying it so the window lands
   first was tried and Mutter drops the maximise while the window sits on a
   workspace the view has not reached. The border is hidden during the move
