@@ -1006,6 +1006,7 @@ export default class AdrtExtension extends Extension {
       overview: overview.visible,
       workspaceActors: this.workspaceActorSignals.length / 2,
       coherenceSweeps: this.session.coherenceSweepCount(),
+      coherenceFixes: this.session.coherenceFixCount(),
       wsSwitchEvents: this.wsSwitchEvents,
       motionSuppressions: this.motionSuppressions,
       motionRetiles: this.motionRetiles,

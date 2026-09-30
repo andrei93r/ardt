@@ -53,6 +53,11 @@ export class FrameClockAnimator {
     return this.entries.size;
   }
 
+  /** Whether a specific window is mid-animation. */
+  isAnimating(id: number): boolean {
+    return this.entries.has(id);
+  }
+
   animate(actor: any, id: number, from: Rect, to: Rect, durationMs: number, onComplete: (() => void) | null = null, bounds: Rect | null = null): void {
     if (actor === null || durationMs <= 0) {
       this.hooks.apply(id, to);

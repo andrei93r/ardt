@@ -119,7 +119,15 @@ code changes, MINOR for features, PATCH for fixes.
   All shortcuts are customisable (`kb-*` keys and the new Keys page in the
   preferences window); changing one re-registers it immediately. Core covers the
   directional picker (`pickDirectional`) and A57 covers the bindings.
-- The coherence sweep runs every 700 ms and also enforces the lone-window rule:
+- The coherence sweep walks the whole system every 700 ms: every workspace,
+  every monitor, every window. A single tileable window is maximized (there is
+  no such thing as an untiled single window), a pair is tiled, more than a pair
+  floats the extra, and an automatic float left alone is pulled back into the
+  tiling. It is no longer skipped while any animation runs — it skips only the
+  individual windows that are animating — and it retries a lone window at most
+  every 3 s so a refusing window is not hammered. `coherenceFixes` is exposed in
+  `DumpState` (A58/A59).
+- The coherence sweep also enforces the lone-window rule:
   a single tileable window is maximized on its workspace, even if the policy
   missed it (A58).
 - A periodic coherence sweep (every 2 s) guarantees a normal window is never

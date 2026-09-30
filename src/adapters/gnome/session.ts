@@ -368,6 +368,7 @@ export class WindowSession {
     // Only windows we actually tiled get a close ghost; popups, menus,
     // tooltips and other transient surfaces must not flash a border.
     const wasTiled = tracked.lastTarget !== null;
+    this.coherenceRetryAt.delete(id);
     this.disconnectWindow(id);
     this.windows.delete(id);
     this.deps.host.forgetSurface(id);
@@ -1518,32 +1519,58 @@ export class WindowSession {
   coherenceSweep(): void {
     if (this.deps.isPaused() || this.suspended) return;
     if (this.dragging || this.adjustId !== null) return;
-    if (this.deps.tiling.activeAnimations > 0) return;
     this.coherenceRuns += 1;
     const count = global.workspace_manager.get_n_workspaces();
     for (let index = 0; index < count; index++) {
       for (const screen of this.deps.host.screens()) {
-        const tileables = this.tileables(index).filter((t) => t.surface.screenId === screen.index);
-        if (tileables.length === 0) continue;
-        // A lone window is maximized on its workspace (§7.2). If the policy
-        // missed it, enforce it here — the model has no untiled lone window.
+        const onScreen = (t: TrackedWindow) => t.surface.screenId === screen.index;
+        const busy = (t: TrackedWindow) => this.deps.tiling.isAnimating(t.id);
+
+        const tileables = this.tileables(index).filter(onScreen).filter((t) => !busy(t));
+
+        // Nothing tiled here: an *automatic* float left alone has to come back
+        // into the tiling (a window the user floated themselves is kept).
+        if (tileables.length === 0) {
+          const floats = this.autoFloated(index).filter(onScreen).filter((t) => !busy(t));
+          for (const floater of floats) {
+            floater.surface.setFloating(false);
+            this.deps.host.applyLayer(floater.id, Layer.TILED, 0);
+          }
+          if (floats.length > 0) {
+            this.signatures.clearAll();
+            this.coherenceFixes += 1;
+            this.deps.history.log('tile', { reason: 'coherence-unfloat', id: floats[0].id, workspaceId: index });
+            this.scheduleRetile(index, 'coherence-unfloat');
+          }
+          continue;
+        }
+
+        // A lone window is maximized (§7.2): there is no such thing as a single
+        // window left untiled. Retry at most every 3 s per window so a window
+        // that genuinely refuses cannot be hammered every sweep.
         if (tileables.length === 1) {
           const only = tileables[0];
-          if (!compat.isMaximized(only.win) && !only.surface.flags.floating && !only.stubborn) {
+          const due = Date.now() >= (this.coherenceRetryAt.get(only.id) ?? 0);
+          if (!compat.isMaximized(only.win) && !only.surface.flags.floating && due) {
+            this.coherenceRetryAt.set(only.id, Date.now() + 3000);
+            only.stubborn = false;
             this.deps.tiling.noteSelfApply();
             this.deps.host.maximize(only.id);
+            this.coherenceFixes += 1;
             this.deps.history.log('tile', { reason: 'coherence-maximize', id: only.id, workspaceId: index });
           }
           continue;
         }
+
         // More than a pair is incoherent by itself: `retile` resolves it by
-        // floating the newest extra (the plan would otherwise ignore it and
-        // leave it stacked).
+        // floating the newest extra (the plan would otherwise ignore it).
         if (tileables.length > 2) {
           this.signatures.clearAll();
+          this.coherenceFixes += 1;
           this.retile(index, 'coherence');
           continue;
         }
+
         const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, this.tilerConfig());
         let offender = false;
         for (const placement of plan.placements) {
@@ -1567,6 +1594,7 @@ export class WindowSession {
         this.signatures.clearAll();
         this.ignoreMismatchUntilMs = 0;
         this.deps.tiling.applyPlan(plan, screen, 'coherence', false, false);
+        this.coherenceFixes += 1;
         this.deps.history.log('tile', { reason: 'coherence', workspaceId: index, screen: screen.index });
         this.deps.onStateChanged();
       }
@@ -1575,8 +1603,17 @@ export class WindowSession {
 
   /** How many periodic coherence sweeps have run (diagnostics). */
   private coherenceRuns = 0;
+  /** How many corrections the sweeps have made (diagnostics). */
+  private coherenceFixes = 0;
+  /** Per-window throttle for re-maximizing a lone window (ms epoch). */
+  private readonly coherenceRetryAt = new Map<number, number>();
   coherenceSweepCount(): number {
     return this.coherenceRuns;
+  }
+
+  /** How many corrections the sweeps have made (diagnostics). */
+  coherenceFixCount(): number {
+    return this.coherenceFixes;
   }
 
   /** §21: bounded state assertion. */

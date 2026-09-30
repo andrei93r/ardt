@@ -205,6 +205,10 @@ export class Tiling {
     return this.deps.animator.activeCount;
   }
 
+  isAnimating(id: number): boolean {
+    return this.deps.animator.isAnimating(id);
+  }
+
   destroy(): void {
     this.destroyed = true;
     for (const id of this.sources) GLib.source_remove(id);
