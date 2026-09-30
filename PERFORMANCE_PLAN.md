@@ -36,9 +36,9 @@ bash scripts/agent-test.sh              # 65 nested scenarios (A01-A65 + new)
 bash scripts/session-test.sh            # S01-S14 where the stage touches live paths
 ```
 
-## Baseline (measured 2026-09-30, live session, 5 windows / 4 workspaces)
+## Baseline (measured 2026-09-30, live session)
 
-Two `DumpState` samples 12 s apart:
+### Before the counters (two `DumpState` samples 12 s apart)
 
 | metric | delta / 12 s | rate |
 | --- | --- | --- |
@@ -47,14 +47,34 @@ Two `DumpState` samples 12 s apart:
 | `motionRetiles` | 0 | — |
 | windows / workspaces | 5 / 4 | — |
 
-History volume for the day: 1,134 lines (404 `tile`, 227 `register`, 203
-`close`), 504 KB across rotated parts.
+### With the Stage 0 counters (idle desktop, 3 windows, ~4.7 min since login, 406 sweeps)
 
-Qualitative: the sweep is `O(workspaces × screens × windows)` and rebuilds a
-classification config (4 settings reads + `JSON.parse`) and a title array per
-window per group; `classify()` builds both even when the cached classification
-is returned; `host.windowById()` scans `list_all_windows()` on every call and is
-on the animation path.
+| counter | total | per sweep | per second |
+| --- | --- | --- | --- |
+| `classifyCalls` | 8,248 | 20.32 | 29.02 |
+| `classifyMisses` | 45 | 0.11 | 0.16 |
+| `configBuilds` | 8,495 | 20.92 | 29.89 |
+| `rulesParses` | 8,495 | 20.92 | 29.89 |
+| `plansComputed` | 247 | 0.61 | 0.87 |
+| `sweepFrameReads` | 464 | 1.14 | 1.63 |
+| `hostLookups` | 41 | 0.10 | 0.14 |
+| `hostScans` | 41 | 0.10 | 0.14 |
+| `logEvents` | 19 | 0.05 | 0.07 |
+| `plansApplied` | 1 | 0.00 | 0.00 |
+
+`sweepMsAvg` 0.998 ms, `sweepMsMax` 3.487 ms → ~1.4 ms/s of main-loop time
+(cheap on its own), but **~30 config objects and ~30 `JSON.parse` calls per
+second** on an idle desktop: allocation and GC pressure rather than CPU burn.
+
+### What the baseline confirms
+
+| Evidence | Confirms |
+| --- | --- |
+| `configBuilds / classifyCalls` = **1.03** | a config is built even when the cached answer is returned → Stage 1 |
+| `rulesParses` = `configBuilds` | the rules JSON is parsed on every one of those calls → Stage 1.2 |
+| `classifyMisses` 45 of 8,248 (0.55%) | the classification cache works; the waste is constructing its *inputs* |
+| `hostScans / hostLookups` = **1.00** | every window lookup is a full `list_all_windows()` scan → Stage 2 |
+| `plansComputed` 0.61 + `sweepFrameReads` 1.14 per sweep, idle | the sweep computes plans and reads Mutter frames for nothing → Stage 3 |
 
 ## Counter contract (added by Stage 0)
 
