@@ -26,6 +26,12 @@ export interface TilerConfig {
   ratios: Readonly<Record<string, number>>;
   /** Pair keys (`min|max`) whose sides are swapped. */
   swapPairs: ReadonlySet<string>;
+  /**
+   * Orientation of the workspace layout (§6): with vertical workspaces the pair
+   * stacks top/bottom instead of left/right. Unset falls back to the monitor's
+   * own orientation.
+   */
+  workspaceAxis?: SplitAxis;
   rules: readonly Rule[];
   /**
    * §6/§19.1 `reflow-keeps-edges`. When false, a lone tiled window keeps the
@@ -281,7 +287,7 @@ export function computePlans(windows: readonly TilerWindow[], screen: Screen, co
   const ordered = swapped ? [...byId].reverse() : [...windows].sort(byRelativePosition);
   const w0 = ordered[0];
   const w1 = ordered[1];
-  const defaultAxis: SplitAxis = isPortrait(screen) ? 'vertical' : 'horizontal';
+  const defaultAxis: SplitAxis = config.workspaceAxis ?? (isPortrait(screen) ? 'vertical' : 'horizontal');
 
   const override = findRuleOverride([w0, w1], config.rules);
   if (override !== null) return applyRuleOverride(override, w0, w1, avail, gap, screen);

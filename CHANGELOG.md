@@ -111,6 +111,20 @@ code changes, MINOR for features, PATCH for fixes.
   a stacked split) even after a window is created or reordered out of id order.
   A pair the user marked *swapped* keeps the stable id order instead, so the
   two rules cannot fight and oscillate.
+- Maximizing a window with a sibling keeps its size and slides it onto its own
+  workspace (it arrives maximized) instead of unmaximizing and re-maximizing it.
+- Minimizing a window whose workspace empties slides it to the workspace on the
+  left; if that one already holds a pair it comes back floating on top of it,
+  otherwise it tiles with the window already there.
+- The active-window marker follows the focused window's geometry, including
+  during the animations Adrt runs (it used to keep the rect from focus time).
+- The preferences window works again: `indicator-color` is a plain string and
+  `entryRow` called `get_strv` on it, which returned null and aborted the whole
+  window.
+- Live scenario S14 walks the whole model on the real Shell.
+- With a vertical workspace layout (e.g. the Vertical Workspaces extension) a
+  pair splits 50/50 **top/bottom** instead of left/right; every other rule is
+  unchanged. `workspaceLayoutRows` is exposed in `DumpState`.
 - Moving a window to another workspace outside Adrt (the overview) now triggers
   a full recalculation of **every** workspace. Change detection compares
   against the index Adrt last recorded, because a per-frame `refresh()` copied

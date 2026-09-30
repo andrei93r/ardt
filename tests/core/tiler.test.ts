@@ -259,3 +259,29 @@ describe('computePlans — sides follow relative position', () => {
     expect(at(2).rect.y).toBeLessThan(at(1).rect.y);
   });
 });
+
+describe('computePlans — vertical workspaces', () => {
+  it('stacks a pair top/bottom on a landscape monitor when the workspace layout is vertical', () => {
+    const plan = computePlans(
+      [window({ id: 1 }), window({ id: 2, appId: 'b' })],
+      landscape,
+      config({ workspaceAxis: 'vertical' }),
+    );
+    const rectFor = (id: number) => plan.placements.find((p) => p.surfaceId === id)!.rect;
+    const top = rectFor(1);
+    const bottom = rectFor(2);
+    expect(top.y).toBeLessThan(bottom.y);
+    expect(top.width).toBe(1920);
+    expect(top.height).toBe(bottom.height);
+  });
+
+  it('keeps a horizontal pair when the workspace layout is horizontal', () => {
+    const plan = computePlans(
+      [window({ id: 1 }), window({ id: 2, appId: 'b' })],
+      landscape,
+      config({ workspaceAxis: 'horizontal' }),
+    );
+    const rectFor = (id: number) => plan.placements.find((p) => p.surfaceId === id)!.rect;
+    expect(rectFor(1).x).toBeLessThan(rectFor(2).x);
+  });
+});

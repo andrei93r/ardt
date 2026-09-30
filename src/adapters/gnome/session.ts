@@ -776,7 +776,11 @@ export class WindowSession {
   }
 
   private tilerConfig(): TilerConfig {
-    return this.deps.settings.tilerConfig(this.deps.tiling.getRatios(), new Set(this.deps.tiling.getSwapPairs()));
+    const config = this.deps.settings.tilerConfig(this.deps.tiling.getRatios(), new Set(this.deps.tiling.getSwapPairs()));
+    // §6: vertical workspaces (the workspace layout stacks workspaces) tile a
+    // pair top/bottom instead of left/right.
+    const rows = global.workspace_manager.layout_rows;
+    return { ...config, workspaceAxis: rows === -1 ? 'vertical' : 'horizontal' };
   }
 
   private toTilerWindow(tracked: TrackedWindow): TilerWindow {
@@ -952,15 +956,23 @@ export class WindowSession {
     const workspaceId = tracked.surface.workspaceId;
     const tileables = this.tileables(workspaceId);
     if (tileables.length === 0 && workspaceId > 0) {
+      const left = workspaceId - 1;
       this.suppress.add(tracked.id);
       this.deps.tiling.noteSelfApply();
-      this.deps.host.applyWorkspace(tracked.id, workspaceId - 1);
+      this.deps.host.applyWorkspace(tracked.id, left);
       this.suppress.delete(tracked.id);
-      tracked.surface.workspaceId = workspaceId - 1;
-      this.deps.history.log('new_ws', { id: tracked.id, workspaceId: workspaceId - 1, reason: 'minimize' });
+      tracked.surface.workspaceId = left;
+      this.deps.history.log('new_ws', { id: tracked.id, workspaceId: left, reason: 'minimize' });
+      // If the workspace it slides into already holds a pair, it comes back as
+      // a window floating on top of the pair instead of a third tile.
+      if (this.tileables(left).length >= 2) {
+        this.floatOverPair(tracked);
+        this.deps.history.log('ws_switch_empty', { id: tracked.id, to: left, reason: 'minimize-float' });
+      }
       // Follow the window. The empty workspace it left is pruned safely later.
-      this.activateWorkspace(workspaceId - 1);
+      this.activateWorkspace(left);
       this.schedulePrune();
+      this.scheduleRetile(left, 'minimize-return');
     }
     this.scheduleRetile(workspaceId, 'minimize');
   }
@@ -1319,19 +1331,10 @@ export class WindowSession {
     if (maximized) {
       const siblings = this.tileables(tracked.surface.workspaceId).filter((t) => t.id !== tracked.id);
       if (siblings.length > 0) {
-        // Move it to its own workspace *at its current size*, then maximize it
-        // there. Maximizing in place first would animate the window growing on
-        // the workspace it is about to leave.
-        this.suppress.add(tracked.id);
-        this.deps.tiling.noteSelfApply();
-        this.deps.host.unmaximize(tracked.id);
-        tracked.surface.refresh();
+        // Keep the window's size (it is already maximized) and slide it onto
+        // its own workspace to the right; it arrives maximized. Resizing it
+        // first would make the transition visibly jump.
         this.moveToNewWorkspace(tracked, true);
-        this.suppress.delete(tracked.id);
-        if (this.windows.has(tracked.id) && !compat.isMaximized(tracked.win)) {
-          this.deps.tiling.noteSelfApply();
-          this.deps.host.maximize(tracked.id);
-        }
       } else {
         this.signatures.clearAll();
       }

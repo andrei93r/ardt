@@ -135,7 +135,7 @@ export default class AdrtExtension extends Extension {
     this.animator = new FrameClockAnimator({
       isAlive: (id) => this.session.windows.has(id),
       apply: (id, rect) => this.host.applyFrame(id, rect),
-      onFrame: () => this.onFrameSample(),
+      onFrame: (id, rect) => this.onAnimatedFrame(id, rect),
     });
 
     this.tiling = new Tiling({
@@ -517,6 +517,13 @@ export default class AdrtExtension extends Extension {
   }
 
   private syncIndicator(): void {
+    // The marker follows the focused window's current geometry, not a stale
+    // rect captured when focus last changed.
+    const focused = this.session.focused();
+    if (focused !== null && this.border.focusedId === focused.id) {
+      focused.surface.refreshFrame();
+      this.border.updateRect(focused.surface.frame);
+    }
     const snapshot = this.border.snapshot();
     if (snapshot.visible && snapshot.rect !== null && !this.isPaused() && !overview.visible) {
       this.indicator.show(snapshot.rect);
@@ -567,6 +574,15 @@ export default class AdrtExtension extends Extension {
 
   private onStubborn(_appId: string): void {
     this.history.log('stubborn', { cooldownMs: this.adaptation.cooldownRemainingMs() });
+  }
+
+  /** Keep the active-window marker glued to the window as it animates. */
+  private onAnimatedFrame(id: number, rect: Rect): void {
+    this.onFrameSample();
+    if (this.border.focusedId === id) {
+      this.border.updateRect(rect);
+      this.syncIndicator();
+    }
   }
 
   private onFrameSample(): void {
@@ -926,6 +942,7 @@ export default class AdrtExtension extends Extension {
       paused: this.isPaused(),
       mode: this.sessionMachine.state.mode,
       activeWorkspace: this.host.activeWorkspaceId(),
+      workspaceLayoutRows: global.workspace_manager.layout_rows,
       focused: this.session.focused()?.id ?? null,
       workspaces: this.session.countWorkspaces(),
       monitors,

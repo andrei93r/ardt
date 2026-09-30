@@ -199,15 +199,37 @@ export default class AdrtPreferences extends ExtensionPreferences {
 
   private entryRow(settings: any, key: string, title: string, subtitle: string): any {
     const row = new Adw.EntryRow({ title });
-    row.text = settings.get_strv(key).join(',');
+    // Keys come in two shapes: string arrays (`as`, comma separated) and plain
+    // strings (`s`, e.g. indicator-color). Calling get_strv on a string key
+    // returns null and took the whole preferences window down with it.
+    const isStrv = this.keyIsStringArray(settings, key);
+    row.text = isStrv
+      ? (settings.get_strv(key) ?? []).join(',')
+      : (settings.get_string(key) ?? '');
     void subtitle;
     row.connect('changed', () => {
-      const parts = row.text
-        .split(',')
-        .map((part: string) => part.trim())
-        .filter((part: string) => part.length > 0);
-      settings.set_strv(key, parts);
+      if (isStrv) {
+        const parts = row.text
+          .split(',')
+          .map((part: string) => part.trim())
+          .filter((part: string) => part.length > 0);
+        settings.set_strv(key, parts);
+      } else {
+        settings.set_string(key, row.text);
+      }
     });
     return row;
+  }
+
+  /** Whether a GSettings key's type is an array of strings (`as`). */
+  private keyIsStringArray(settings: any, key: string): boolean {
+    try {
+      const schema = settings.settings_schema;
+      const valueType = schema.get_key(key).get_value_type();
+      const name = typeof valueType.dup_string === 'function' ? valueType.dup_string() : String(valueType);
+      return name.startsWith('a');
+    } catch {
+      return false;
+    }
   }
 }

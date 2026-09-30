@@ -29,7 +29,7 @@ export function easingFor(_durationMs: number): (t: number) => number {
 export interface AnimatorHooks {
   isAlive(id: number): boolean;
   apply(id: number, rect: Rect): void;
-  onFrame?(id: number, deltaMs: number): void;
+  onFrame?(id: number, rect: Rect): void;
 }
 
 interface Entry {
@@ -113,7 +113,7 @@ export class FrameClockAnimator {
       entry.rect.y = Math.max(b.y, Math.min(entry.rect.y, b.y + b.height - entry.rect.height));
     }
     this.hooks.apply(id, entry.rect);
-    if (this.hooks.onFrame !== undefined) this.hooks.onFrame(id, entry.durationMs / 60);
+    if (this.hooks.onFrame !== undefined) this.hooks.onFrame(id, entry.rect);
   }
 
   private onCompleted(id: number, entry: Entry): void {
