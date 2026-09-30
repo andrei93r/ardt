@@ -116,6 +116,7 @@ those shortcuts.
 | A55 | Overview move of a pair member | target tiles, origin survivor maximized |
 | A56 | Coherence sweep | an untiled window is retiled; the sweep runs periodically |
 | A57 | Keyboard focus system | directional focus/move, fullscreen, quit |
+| A58 | Lone window maximized | an untiled lone window is maximized again |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

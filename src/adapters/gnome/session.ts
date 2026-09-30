@@ -1017,6 +1017,13 @@ export class WindowSession {
       fn();
       return;
     }
+    // A switch animation already in flight would leave its clone groups on
+    // screen (the doubled/frozen view); tear it down before we move.
+    try {
+      if (typeof controller.cancelSwitchAnimation === 'function') controller.cancelSwitchAnimation();
+    } catch {
+      /* private API changed: carry on */
+    }
     controller.animateSwitch = function (_from: any, _to: any, _direction: any, onComplete: any) {
       if (typeof onComplete === 'function') onComplete();
     };
@@ -1517,7 +1524,18 @@ export class WindowSession {
     for (let index = 0; index < count; index++) {
       for (const screen of this.deps.host.screens()) {
         const tileables = this.tileables(index).filter((t) => t.surface.screenId === screen.index);
-        if (tileables.length < 2) continue;
+        if (tileables.length === 0) continue;
+        // A lone window is maximized on its workspace (§7.2). If the policy
+        // missed it, enforce it here — the model has no untiled lone window.
+        if (tileables.length === 1) {
+          const only = tileables[0];
+          if (!compat.isMaximized(only.win) && !only.surface.flags.floating && !only.stubborn) {
+            this.deps.tiling.noteSelfApply();
+            this.deps.host.maximize(only.id);
+            this.deps.history.log('tile', { reason: 'coherence-maximize', id: only.id, workspaceId: index });
+          }
+          continue;
+        }
         // More than a pair is incoherent by itself: `retile` resolves it by
         // floating the newest extra (the plan would otherwise ignore it and
         // leave it stacked).

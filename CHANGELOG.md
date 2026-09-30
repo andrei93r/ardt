@@ -119,6 +119,9 @@ code changes, MINOR for features, PATCH for fixes.
   All shortcuts are customisable (`kb-*` keys and the new Keys page in the
   preferences window); changing one re-registers it immediately. Core covers the
   directional picker (`pickDirectional`) and A57 covers the bindings.
+- The coherence sweep runs every 700 ms and also enforces the lone-window rule:
+  a single tileable window is maximized on its workspace, even if the policy
+  missed it (A58).
 - A periodic coherence sweep (every 2 s) guarantees a normal window is never
   left untiled beside a sibling: it compares every window against its plan,
   clears any refusal bookkeeping and re-applies. `coherenceSweeps` is exposed

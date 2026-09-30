@@ -32,11 +32,13 @@ print("rects", ws); sys.exit(1)
 '
 fi
 
-# A fresh split is 50/50 when the windows' minimum sizes allow it.
-check_python "a fresh pair splits evenly" '
+# A fresh split is 50/50 when the windows' minimum sizes allow it. It can take
+# a moment to settle (the pair forms while the lone window is still maximizing),
+# so poll for it.
+poll "a fresh pair splits evenly" '
 import json, sys
 d = json.load(sys.stdin)
-ws = [w["rect"] for w in d["windows"]]
+ws = [w["rect"] for w in d["windows"] if w["tileable"] and w["layer"] != 2]
 if len(ws) != 2:
     print("expected two windows"); sys.exit(1)
 total = sum(r["width"] for r in ws)
@@ -44,7 +46,7 @@ share = min(r["width"] for r in ws) / total
 if abs(share - 0.5) > 0.08:
     print("split is", round(share, 2), "not ~0.50", [r["width"] for r in ws]); sys.exit(1)
 print("split", round(share, 2))
-'
+' 15
 
 ensure_clean
 summary

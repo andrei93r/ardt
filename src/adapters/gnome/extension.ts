@@ -47,7 +47,7 @@ const MOTION_RETILE_TICKS = 10;
 /** Ignore movement for this long after we applied a plan ourselves. */
 const MOTION_SELF_MS = 200;
 /** §35: how often the coherence sweep guarantees every window is tiled. */
-const COHERENCE_SWEEP_MS = 2000;
+const COHERENCE_SWEEP_MS = 700;
 
 interface ExtraHandlers {
   ActivateWindow(id: number): boolean;
