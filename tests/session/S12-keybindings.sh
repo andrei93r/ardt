@@ -10,9 +10,12 @@ if ! command -v ydotool >/dev/null 2>&1 || ! pgrep -x ydotoold >/dev/null 2>&1; 
   exit 0
 fi
 
-spawn
+# The undo step needs a split-ratio change to be visible; an app with tight
+# size constraints (Chrome) clamps it, so pin this scenario to Files. Chrome is
+# exercised by the rotating scenarios.
+spawn "$FILES"
 wait_tests 1 12 || true
-spawn
+spawn "$FILES"
 wait_tests 2 15 || true
 sleep 1
 read -r A B <<<"$(test_pair_by_x)"
