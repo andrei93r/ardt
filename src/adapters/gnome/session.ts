@@ -395,31 +395,36 @@ export class WindowSession {
     if (this.deps.isPaused() || this.suspended) return;
     if (this.dragging || this.adjustId !== null) return;
     if (this.reconcileSource !== null) return;
+    // Only a genuine user adjust is undoable; a signal-driven reconcile is a
+    // safety net and must not push an entry that masks the user's own action.
+    const rememberUndo = reason === 'user-adjust';
     this.reconcileSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, RECONCILE_DEBOUNCE_MS, () => {
       this.reconcileSource = null;
-      this.reconcileAll(reason);
+      this.reconcileAll(reason, rememberUndo);
       return GLib.SOURCE_REMOVE;
     });
   }
 
-  /** Check every workspace on every screen and correct anything out of place. */
-  reconcileAll(reason: string): void {
+  /** Check every workspace on every screen and correct anything out of place.
+   * Full reconciles are safety nets: by default they do not record undo
+   * entries, so they can never mask the entry a user action pushed. */
+  reconcileAll(reason: string, rememberUndo = false): void {
     if (this.deps.isPaused() || this.suspended || this.dragging || this.adjustId !== null) return;
     const count = global.workspace_manager.get_n_workspaces();
     const seen = new Set<number>();
     for (let index = 0; index < count; index++) {
       seen.add(index);
-      this.retile(index, reason);
+      this.retile(index, reason, true, rememberUndo);
     }
     // A window can briefly report a workspace beyond the current count.
     for (const tracked of this.windows.values()) {
-      if (!seen.has(tracked.surface.workspaceId)) this.retile(tracked.surface.workspaceId, reason);
+      if (!seen.has(tracked.surface.workspaceId)) this.retile(tracked.surface.workspaceId, reason, true, rememberUndo);
     }
     this.deps.onStateChanged();
   }
 
-  retileAll(reason: string): void {
-    this.reconcileAll(reason);
+  retileAll(reason: string, rememberUndo = false): void {
+    this.reconcileAll(reason, rememberUndo);
   }
 
   /** §7.6: the user reordered workspaces; every index moved. */
@@ -939,6 +944,16 @@ export class WindowSession {
       }
     }
     this.schedulePrune();
+    // The workspace switch is asynchronous; by the time the first prune runs
+    // the emptied workspace can still be the active one, so it is skipped.
+    // Prune again once the switch has certainly landed.
+    this.addTimeout(900, () => this.pruneEmptyWorkspaces());
+  }
+
+  /** §16: reap empty workspaces now. Used by the periodic safety pass so a
+   * workspace that was just emptied does not linger until the scan backs off. */
+  pruneEmptyNow(): void {
+    this.pruneEmptyWorkspaces();
   }
 
   /** Nearest workspace in `step` direction that holds one of our windows. */

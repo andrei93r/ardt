@@ -96,12 +96,17 @@ code changes, MINOR for features, PATCH for fixes.
 - A fresh pair splits 50/50 when the windows' minimum sizes allow it; the live
   suite clears the ratios it sets so a test run cannot leave your pairs on a
   test split.
+- An emptied workspace is reaped promptly: the prune that follows a close or
+  minimize runs again once the (asynchronous) workspace switch has landed, and
+  the periodic safety pass prunes too, so a reap no longer waits for the
+  backed-off scan tick.
 - Undo restores the split ratios along with the window rects, so the restored
   layout agrees with the plan and no later reconcile re-tiles over it. This was
   an existing inconsistency that the periodic tiling pass made visible.
-- Safety-net passes (the scan tick and the periodic retile) do not record undo
-  entries and skip while an apply is animating, so they can never mask the
-  entry a user action pushed.
+- Safety-net passes (the scan tick, full reconciles on screens-changed/settings
+  and the periodic retile) never record undo entries, and a debounced reconcile
+  only does when it is a genuine user adjust. They also skip while an apply is
+  animating, so they can never mask the entry a user action pushed.
 - The nested harness closes the overview when its Shell comes up (a headless
   devkit Shell opens it during startup; a real session never does), and the
   live scenarios wait for a settled state instead of sampling once, so the

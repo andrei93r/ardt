@@ -7,6 +7,7 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 ensure_clean
 open_pair
+wait_settled 12
 ids=($(list_ids))
 before="$(window_field "${ids[0]}" rect)"
 adrt SimulateResize "${ids[0]}" "${ids[1]}" 0.25 >/dev/null
