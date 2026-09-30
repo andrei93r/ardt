@@ -111,6 +111,13 @@ code changes, MINOR for features, PATCH for fixes.
   a stacked split) even after a window is created or reordered out of id order.
   A pair the user marked *swapped* keeps the stable id order instead, so the
   two rules cannot fight and oscillate.
+- A periodic coherence sweep (every 2 s) guarantees a normal window is never
+  left untiled beside a sibling: it compares every window against its plan,
+  clears any refusal bookkeeping and re-applies. `coherenceSweeps` is exposed
+  in `DumpState`, and the live/nested suites cover it (A56).
+- Our frame animations no longer run for a window that is maximized or
+  minimized, and are cancelled when a window is minimized, so they cannot fight
+  Mutter's own transitions.
 - Maximizing a window with a sibling keeps its size and slides it onto its own
   workspace (it arrives maximized) instead of unmaximizing and re-maximizing it.
 - Minimizing a window whose workspace empties slides it to the workspace on the

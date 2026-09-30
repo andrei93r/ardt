@@ -46,6 +46,8 @@ const MOTION_STABLE_SAMPLES = 3;
 const MOTION_RETILE_TICKS = 10;
 /** Ignore movement for this long after we applied a plan ourselves. */
 const MOTION_SELF_MS = 200;
+/** §35: how often the coherence sweep guarantees every window is tiled. */
+const COHERENCE_SWEEP_MS = 2000;
 
 interface ExtraHandlers {
   ActivateWindow(id: number): boolean;
@@ -96,6 +98,7 @@ export default class AdrtExtension extends Extension {
   private workspaceActorSignals: { actor: any; id: number }[] = [];
   private layoutSignals: number[] = [];
   private motionSource: number | null = null;
+  private coherenceSource: number | null = null;
   private motionActor: any = null;
   private motionLastX = Number.NaN;
   private motionLastY = Number.NaN;
@@ -204,6 +207,12 @@ export default class AdrtExtension extends Extension {
     if (overview.visible) this.onOverviewChanged(true);
     this.registerKeybindings();
     this.session.setScanning(true);
+    // §35: a periodic guarantee, independent of signals: a normal window must
+    // never be left untiled next to a sibling.
+    this.coherenceSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, COHERENCE_SWEEP_MS, () => {
+      this.session.coherenceSweep();
+      return GLib.SOURCE_CONTINUE;
+    });
 
     this.onStateChanged();
     this.firstRun();
@@ -213,6 +222,10 @@ export default class AdrtExtension extends Extension {
   disable(): void {
     this.history.log('disable', {});
     this.stopMotionWatch();
+    if (this.coherenceSource !== null) {
+      GLib.source_remove(this.coherenceSource);
+      this.coherenceSource = null;
+    }
     if (this.sessionModeId !== 0) {
       sessionMode.disconnect(this.sessionModeId);
       this.sessionModeId = 0;
@@ -953,6 +966,7 @@ export default class AdrtExtension extends Extension {
       indicator: { ...this.indicator.describe(), visible: this.indicator.isVisible, ghosts: this.indicator.ghostCount, suppressed: this.border.activeSuppressions },
       overview: overview.visible,
       workspaceActors: this.workspaceActorSignals.length / 2,
+      coherenceSweeps: this.session.coherenceSweepCount(),
       wsSwitchEvents: this.wsSwitchEvents,
       motionSuppressions: this.motionSuppressions,
       motionRetiles: this.motionRetiles,

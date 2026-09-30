@@ -219,7 +219,12 @@ export class Tiling {
     // the moment we aim a plan at it, not only once verification succeeds.
     tracked.lastTarget = { ...target };
     const actor = compat.compositorActor(tracked.win);
-    const animationsEnabled = animate && actor !== null && this.animationsAllowed(tracked);
+    // Predictable: never animate a window that is (or is about to be)
+    // maximized, or one that is minimized — that transition is Mutter's, and
+    // running our own frame animation alongside it is what reads as rough.
+    const animationsEnabled =
+      animate && actor !== null && this.animationsAllowed(tracked) &&
+      !compat.isMaximized(tracked.win) && !tracked.surface.flags.minimized;
 
     if (animationsEnabled) {
       const from = { ...tracked.surface.frame };

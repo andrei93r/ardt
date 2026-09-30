@@ -114,6 +114,7 @@ those shortcuts.
 | A53 | No floating leftover | one tile + an auto-float re-tiles both |
 | A54 | Overview move onto a pair | both workspaces retile, newcomer not stacked |
 | A55 | Overview move of a pair member | target tiles, origin survivor maximized |
+| A56 | Coherence sweep | an untiled window is retiled; the sweep runs periodically |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

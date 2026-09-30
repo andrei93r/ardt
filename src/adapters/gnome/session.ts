@@ -953,6 +953,8 @@ export class WindowSession {
       return;
     }
     if (this.userMoveProtected(tracked)) return;
+    // Any frame animation still running would fight the minimize animation.
+    this.deps.tiling.cancel(tracked.id);
     const workspaceId = tracked.surface.workspaceId;
     const tileables = this.tileables(workspaceId);
     if (tileables.length === 0 && workspaceId > 0) {
@@ -1448,6 +1450,57 @@ export class WindowSession {
         });
       }
     }
+  }
+
+  /**
+   * §35: periodic coherence guarantee. A normal (non-floating, non-modal)
+   * window on a workspace with a sibling must be tiled. If one was left untiled
+   * — a refused apply, a missed signal, a `stubborn` record — push the plan
+   * through, clearing the refusal bookkeeping so it is retried.
+   */
+  coherenceSweep(): void {
+    if (this.deps.isPaused() || this.suspended) return;
+    if (this.dragging || this.adjustId !== null) return;
+    if (this.deps.tiling.activeAnimations > 0) return;
+    this.coherenceRuns += 1;
+    const count = global.workspace_manager.get_n_workspaces();
+    for (let index = 0; index < count; index++) {
+      for (const screen of this.deps.host.screens()) {
+        const tileables = this.tileables(index).filter((t) => t.surface.screenId === screen.index);
+        if (tileables.length < 2) continue;
+        const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, this.tilerConfig());
+        let offender = false;
+        for (const placement of plan.placements) {
+          const tracked = this.windows.get(placement.surfaceId);
+          if (tracked === undefined) continue;
+          tracked.surface.refreshFrame();
+          const r = tracked.surface.frame;
+          const off =
+            Math.abs(r.x - placement.rect.x) > 2 ||
+            Math.abs(r.y - placement.rect.y) > 2 ||
+            Math.abs(r.width - placement.rect.width) > 2 ||
+            Math.abs(r.height - placement.rect.height) > 2;
+          if (off) {
+            offender = true;
+            // A refused geometry must not exempt the window forever.
+            tracked.stubborn = false;
+            tracked.refusals = 0;
+          }
+        }
+        if (!offender) continue;
+        this.signatures.clearAll();
+        this.ignoreMismatchUntilMs = 0;
+        this.deps.tiling.applyPlan(plan, screen, 'coherence', false, false);
+        this.deps.history.log('tile', { reason: 'coherence', workspaceId: index, screen: screen.index });
+        this.deps.onStateChanged();
+      }
+    }
+  }
+
+  /** How many periodic coherence sweeps have run (diagnostics). */
+  private coherenceRuns = 0;
+  coherenceSweepCount(): number {
+    return this.coherenceRuns;
   }
 
   /** §21: bounded state assertion. */
