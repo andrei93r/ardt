@@ -199,6 +199,9 @@ ensure_clean() {
   close_all
   wait_for 20 bash -c "[ \"\$(bash '$NESTED' dbus DumpState | python3 '$PARSE' | python3 -c 'import json,sys;print(len(json.load(sys.stdin)[\"windows\"]))')\" = 0 ]" || true
   adrt ResetLayoutState >/dev/null 2>&1 || true
+  # A headless Shell starts in the overview, and tiling is suspended there by
+  # design; make sure every scenario starts with it closed.
+  adrt SimulateOverview false >/dev/null 2>&1 || true
   sleep 0.5
 }
 

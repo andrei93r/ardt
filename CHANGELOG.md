@@ -81,8 +81,16 @@ code changes, MINOR for features, PATCH for fixes.
   apply, an animation, a maximize/fullscreen/minimize state change, or a
   stubborn refusal) is treated as the user resizing.
 - `DumpState` reports `workspaceActors`, `wsSwitchEvents` and
-  `motionSuppressions` to diagnose border suppression on real hardware.- Tiling is suspended while the overview is open and resumed with a single
-  pass on close, which removes the reconcile churn that could stall the Shell.
+  `motionSuppressions` to diagnose border suppression on real hardware.
+- Tiling keeps running while the overview is open; only the border is hidden
+  there (and it returns when the overview closes). The overview never pauses
+  or suspends the tiler.
+- Undo restores the split ratios along with the window rects, so the restored
+  layout agrees with the plan and no later reconcile re-tiles over it. This was
+  an existing inconsistency that the periodic tiling pass made visible.
+- Safety-net passes (the scan tick and the periodic retile) do not record undo
+  entries and skip while an apply is animating, so they can never mask the
+  entry a user action pushed.
 - The border's workspace-switch suppression is driven by GNOME's
   `WorkspaceAnimationController`: the swipe tracker's `begin`/`update` hide it
   the instant a touchpad gesture starts, and the motion watcher polls

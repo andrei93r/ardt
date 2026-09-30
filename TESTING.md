@@ -29,7 +29,14 @@ ADRT_SESSION_SCENARIOS='S0[12]' bash scripts/session-test.sh
 
 They open their own test windows, close only those, restore the workspace they
 started on, and fail if the journal logs `[adrt] ERROR`. `S12` injects real
-`Super+…` keys via `ydotool`. Results are written to `TEST_RESULTS_SESSION.md`.
+`Super+…` keys via `ydotool`.
+
+Each scenario runs on a workspace that holds no windows (the lowest-index
+empty one), so your own tileable windows never take part in the layouts under
+test. The test client is `nautilus --new-window` — plain `nautilus` is
+single-instance and would silently reuse one window. If every workspace holds a
+window, the scenarios exit with a message asking you to free one. Results are
+written to `TEST_RESULTS_SESSION.md`.
 
 ### Keybindings need the interactive session
 
@@ -84,7 +91,7 @@ those shortcuts.
 | A34 | App opens maximized | `SpawnWindow('nautilus')`, assert it tiles with the sibling |
 | A35 | Minimize         | `MinimizeWindow`, assert return + empty workspace removed |
 | A36 | Close ghost      | tiled close fades a ghost, dialog close does not |
-| A37 | Overview suspend | tiling frozen while the overview is open, resumes on close |
+| A37 | Overview border | border hidden in the overview, tiling keeps running |
 | A38 | Indicator style  | border uses the system accent and configured width |
 | A39 | Keybinding conflicts | no Adrt accelerator collides with a GNOME binding |
 | A40 | Unmaximize onto a pair | floats on top, centred, pair still visible |

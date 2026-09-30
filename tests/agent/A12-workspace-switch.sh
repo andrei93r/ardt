@@ -9,8 +9,11 @@ ensure_clean
 open_pair
 ids=($(list_ids))
 adrt ActivateWindow "${ids[0]}" >/dev/null
-wait_border_visible 20 || true
-assert_true "border visible before switching" "$(border_visible)"
+if wait_border_visible 20; then
+  pass "border visible before switching"
+else
+  fail "border never became visible (suppressed: $(state_expr 'd["indicator"]["suppressed"]'))"
+fi
 
 adrt ActivateWorkspace 1 >/dev/null
 if wait_for 3 bash -c "bash '$NESTED' dbus DumpState | python3 '$PARSE' | python3 -c 'import json,sys; sys.exit(0 if \"workspace-switch\" in json.load(sys.stdin)[\"indicator\"][\"suppressed\"] else 1)'"; then

@@ -12,12 +12,13 @@ SESSION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SESSION_DIR/../.." && pwd)"
 PARSE="$ROOT_DIR/tests/agent/parse.py"
 
-TEST_CLIENT="${ADRT_SESSION_CLIENT:-nautilus}"
+TEST_CLIENT="${ADRT_SESSION_CLIENT:-nautilus --new-window}"
 
 checks=0
 failures=0
 BASE_IDS=""
 START_WS=0
+USER_WS=0
 
 log() { printf '%s\n' "$*"; }
 pass() { checks=$((checks + 1)); printf 'PASS  %s\n' "$*"; }
@@ -77,12 +78,41 @@ require_adrt() {
 }
 
 # Before: remember existing windows and the current workspace, so cleanup can
-# restore everything.
+# restore everything. The scenarios run on a workspace that holds no windows,
+# so the user's own tileable windows never take part in the layouts under test.
+# The lowest-index empty workspace is used, or the active one if it is empty.
+pick_sandbox_workspace() {
+  dump | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+n = d["workspaces"]
+active = d["activeWorkspace"]
+used = {w["workspace"] for w in d["windows"]}
+if active not in used:
+    print(active)
+else:
+    free = [i for i in range(n) if i not in used]
+    print(free[-1] if free else -1)
+'
+}
+
 session_begin() {
   require_adrt
+  USER_WS="$(state_expr 'd["activeWorkspace"]')"
+  export USER_WS
+  local sandbox
+  sandbox="$(pick_sandbox_workspace)"
+  if [ "$sandbox" = "-1" ]; then
+    echo "session: every workspace holds a window; move one to another workspace"
+    echo "session: and leave one free, then re-run the live suite."
+    exit 3
+  fi
+  START_WS="$sandbox"
+  export START_WS
+  adrt ActivateWorkspace "$START_WS" >/dev/null 2>&1 || true
+  sleep 1
   BASE_IDS="$(list_ids)"
   export BASE_IDS
-  START_WS="$(state_expr 'd["activeWorkspace"]')"
 }
 
 test_ids() {
@@ -144,7 +174,7 @@ close_tests() {
 
 session_cleanup() {
   close_tests
-  adrt ActivateWorkspace "$START_WS" >/dev/null 2>&1 || true
+  adrt ActivateWorkspace "${USER_WS:-0}" >/dev/null 2>&1 || true
 }
 
 summary() {

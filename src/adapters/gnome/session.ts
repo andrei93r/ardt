@@ -435,7 +435,7 @@ export class WindowSession {
   }
 
   /** Compute and apply the plan for every monitor of one workspace (§6). */
-  retile(workspaceId: number, reason: string, animate = true): void {
+  retile(workspaceId: number, reason: string, animate = true, rememberUndo = true): void {
     if (this.deps.isPaused() || this.suspended) return;
     // §11.3: no reflow while the user is dragging.
     if (this.dragging) return;
@@ -476,7 +476,7 @@ export class WindowSession {
         tileables: tileables.length,
         placements: plan.placements.length,
       });
-      this.deps.tiling.applyPlan(plan, screen, reason, animate);
+      this.deps.tiling.applyPlan(plan, screen, reason, animate, rememberUndo);
       // §36.14: one retile must complete well under 10ms.
       this.lastApplyMs = (GLib.get_monotonic_time() - startedUs) / 1000;
       this.lastApplyAtMs = Date.now();
@@ -614,6 +614,9 @@ export class WindowSession {
   undo(): boolean {
     const entry = this.deps.undo.pop();
     if (entry === null) return false;
+    // §15: restore the split ratios too, so the plan and the restored rects
+    // agree and no later reconcile re-tiles over the undo.
+    if (entry.ratios !== undefined) this.deps.tiling.restoreRatios(entry.ratios);
     if (this.deps.host.activeWorkspaceId() !== entry.workspaceId) {
       this.activateWorkspace(entry.workspaceId);
     }

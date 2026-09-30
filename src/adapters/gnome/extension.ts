@@ -194,6 +194,10 @@ export default class AdrtExtension extends Extension {
     this.layoutSignals.push(global.workspace_manager.connect('workspace-added', () => this.refreshWorkspaceActors()));
     this.layoutSignals.push(global.workspace_manager.connect('workspace-removed', () => this.refreshWorkspaceActors()));
     this.applySessionMode(this.currentMode(), true);
+    // §23: hide the border if the extension is enabled while the overview is
+    // already open (e.g. a headless shell that starts in it); the `showing`
+    // signal has already fired by then. Tiling itself keeps running.
+    if (overview.visible) this.onOverviewChanged(true);
     this.registerKeybindings();
     this.session.setScanning(true);
 
@@ -454,8 +458,8 @@ export default class AdrtExtension extends Extension {
       this.motionSkip = 'paused';
       return;
     }
-    if (this.session.isDragging) {
-      this.motionSkip = 'dragging';
+    if (this.session.isDragging || this.animator.activeCount > 0) {
+      this.motionSkip = this.session.isDragging ? 'dragging' : 'animating';
       return;
     }
     if (this.workspaceAnimationActive()) {
@@ -469,7 +473,8 @@ export default class AdrtExtension extends Extension {
     }
     this.motionSkip = '';
     this.motionRetiles += 1;
-    this.session.retile(focused.surface.workspaceId, 'motion-tick');
+    // A safety-net pass is not a user action: it must not push undo entries.
+    this.session.retile(focused.surface.workspaceId, 'motion-tick', true, false);
   }
 
   private syncIndicator(): void {
@@ -503,12 +508,11 @@ export default class AdrtExtension extends Extension {
     this.suppressForWorkspaceSwitch();
   }
 
-  /** §23: chrome must not show over the overview or the app grid. */
+  /** §23: chrome must not show over the overview or the app grid. Tiling keeps
+   * running in the workspace — only the border is hidden. */
   private onOverviewChanged(visible: boolean): void {
     if (visible) this.border.suppress('overview');
     else this.border.unsuppress('overview');
-    // Tiling during the overview cannot converge and just burns CPU.
-    this.session.setSuspended(visible);
     this.syncIndicator();
   }
 

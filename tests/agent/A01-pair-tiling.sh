@@ -9,21 +9,28 @@ ensure_clean
 open_pair
 
 assert_eq "two windows are tracked" "2" "$(count_windows)"
-check_python "tiles are non-overlapping and inside the monitor" '
+if wait_python 20 '
 import json, sys
 ws = [w["rect"] for w in json.load(sys.stdin)["windows"]]
 if len(ws) != 2:
-    print("expected two windows"); sys.exit(1)
+    sys.exit(1)
 for i in range(len(ws)):
     for j in range(i + 1, len(ws)):
         a, b = ws[i], ws[j]
         if a["x"] < b["x"] + b["width"] and b["x"] < a["x"] + a["width"] and a["y"] < b["y"] + b["height"] and b["y"] < a["y"] + a["height"]:
-            print("overlap"); sys.exit(1)
+            sys.exit(1)
     r = ws[i]
     if r["x"] < 0 or r["y"] < 0 or r["x"] + r["width"] > 1281 or r["y"] + r["height"] > 801:
-        print("out of bounds", r); sys.exit(1)
-print("side by side")
+        sys.exit(1)
+sys.exit(0)'; then
+  pass "tiles are non-overlapping and inside the monitor"
+else
+  check_python "tiles are non-overlapping and inside the monitor" '
+import json, sys
+ws = [w["rect"] for w in json.load(sys.stdin)["windows"]]
+print("rects", ws); sys.exit(1)
 '
+fi
 
 ensure_clean
 summary

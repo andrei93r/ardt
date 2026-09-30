@@ -24,6 +24,12 @@ export interface UndoEntry {
   workspaceId: number;
   trace: number;
   rects: { id: number; rect: Rect }[];
+  /**
+   * §15: the split ratios that produced `rects`. Undo must restore them too,
+   * otherwise the plan disagrees with the restored layout and the very next
+   * reconcile (scan tick, periodic pass) re-tiles over the undo.
+   */
+  ratios?: Record<string, number>;
 }
 
 function dayString(date: Date): string {
@@ -51,10 +57,12 @@ export class UndoStack {
   }
 
   /** §15: only a retile that actually moved a tileable window is undoable. */
-  push(workspaceId: number, rects: { id: number; rect: Rect }[], moved: boolean): boolean {
+  push(workspaceId: number, rects: { id: number; rect: Rect }[], moved: boolean, ratios?: Record<string, number>): boolean {
     if (!moved || rects.length === 0) return false;
     this.trace += 1;
-    this.entries.push({ workspaceId, trace: this.trace, rects });
+    const entry: UndoEntry = { workspaceId, trace: this.trace, rects };
+    if (ratios !== undefined) entry.ratios = { ...ratios };
+    this.entries.push(entry);
     this.trim();
     return true;
   }

@@ -26,8 +26,12 @@ else
   skip "SimulateOverview unsupported by the running build"
 fi
 
-# Workspace-switch suppression.
-adrt ActivateWorkspace "$((START_WS + 1))" >/dev/null 2>&1 || true
+# Workspace-switch suppression. Switch to any existing neighbour workspace
+# (the sandbox may be the last one).
+switch_to="$((START_WS + 1))"
+[ "$switch_to" -ge "$(state_expr 'd["workspaces"]')" ] && switch_to="$((START_WS - 1))"
+[ "$switch_to" -lt 0 ] && switch_to=0
+adrt ActivateWorkspace "$switch_to" >/dev/null 2>&1 || true
 if wait_python 4 'import json,sys
 sys.exit(0 if "workspace-switch" in json.load(sys.stdin)["indicator"]["suppressed"] else 1)'; then
   pass "border suppressed during the workspace switch"

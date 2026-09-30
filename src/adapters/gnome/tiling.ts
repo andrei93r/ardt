@@ -41,6 +41,9 @@ export interface TilingDeps {
 
 export class Tiling {
   private readonly ratios = new Map<string, number>();
+  /** §15: ratios as they were before the last user ratio change, consumed by
+   * the retile's undo entry. */
+  private ratiosBeforeChange: Record<string, number> | null = null;
   private readonly swapPairs = new Set<string>();
   private readonly sources = new Set<number>();
   private destroyed = false;
@@ -79,6 +82,7 @@ export class Tiling {
   }
 
   setRatio(key: string, ratio: number): boolean {
+    this.rememberRatiosBeforeChange();
     const clamped = clamp(ratio, 0.05, 0.95);
     this.ratios.set(key, clamped);
     this.deps.onRatiosChanged();
@@ -133,7 +137,7 @@ export class Tiling {
   /**
    * Apply a plan for a workspace. Returns true when at least one window moved.
    */
-  applyPlan(plan: TilePlan, screen: Screen, reason: string, animate: boolean): boolean {
+  applyPlan(plan: TilePlan, screen: Screen, reason: string, animate: boolean, rememberUndo = true): boolean {
     if (this.destroyed || this.deps.isPaused()) return false;
 
     const before: { id: number; rect: Rect }[] = [];
@@ -150,7 +154,14 @@ export class Tiling {
     if (!moved) return false;
 
     const workspaceId = plan.placements.length > 0 ? this.deps.windows().get(plan.placements[0].surfaceId)?.surface.workspaceId ?? 0 : 0;
-    this.deps.undo.push(workspaceId, before, moved);
+    // §15: capture the ratios the "before" rects came from, so undo restores a
+    // self-consistent layout. A safety-net pass (scan / periodic retile) is not
+    // a user action and must not push a masking entry over the real one.
+    if (rememberUndo) {
+      const ratios = this.ratiosBeforeChange ?? this.getRatios();
+      this.ratiosBeforeChange = null;
+      this.deps.undo.push(workspaceId, before, moved, ratios);
+    }
 
     for (const placement of plan.placements) {
       const tracked = this.deps.windows().get(placement.surfaceId);
@@ -287,12 +298,29 @@ export class Tiling {
   }
 
   private setRatioForPair(first: TrackedWindow, second: TrackedWindow, axis: SplitAxis, ratio: number): boolean {
+    this.rememberRatiosBeforeChange();
     const key = ratioKey(first.surface.appId, second.surface.appId, axis);
     const clamped = clamp(ratio, 0.05, 0.95);
     this.ratios.set(key, clamped);
     this.deps.onRatiosChanged();
     this.deps.history.log('split_resize', { axis, ratio: clamped, pair: key });
     return true;
+  }
+
+  /**
+   * §15: a ratio change is not itself an undo entry — the retile it triggers
+   * is. Remember the ratios as they were so that entry can restore them along
+   * with the rects.
+   */
+  private rememberRatiosBeforeChange(): void {
+    if (this.ratiosBeforeChange === null) this.ratiosBeforeChange = this.getRatios();
+  }
+
+  /** §15: restore the split ratios an undo entry was captured with. */
+  restoreRatios(ratios: Record<string, number>): void {
+    this.ratios.clear();
+    for (const [key, value] of Object.entries(ratios)) this.ratios.set(key, value);
+    this.deps.onRatiosChanged();
   }
 
   private screenFor(index: number): Screen | null {
