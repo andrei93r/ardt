@@ -10,7 +10,7 @@ scenarios in a nested GNOME Shell, and manual scenarios that need hardware
 npm run lint          # eslint src tests
 npm run build         # tsc
 npm run test:core     # Vitest, plain Node
-npm run test:agent    # 65 scenarios in a nested GNOME Shell
+npm run test:agent    # 69 scenarios in a nested GNOME Shell
 npm run test:all      # all of the above
 ```
 
@@ -29,7 +29,9 @@ ADRT_SESSION_SCENARIOS='S0[12]' bash scripts/session-test.sh
 
 They open their own test windows, close only those, restore the workspace they
 started on, and fail if the journal logs `[adrt] ERROR`. `S08` injects real
-`Super+…` keys via `ydotool`.
+`Super+…` keys via `ydotool`. `S15` covers multi-monitor tiling: it moves a test
+window to the non-primary monitor and asserts it stays tileable and tiled, then
+moves it back (it skips itself when the session has one monitor).
 
 Each scenario runs on a workspace that holds no windows (the lowest-index
 empty one), so your own tileable windows never take part in the layouts under
@@ -125,6 +127,10 @@ those shortcuts.
 | A64 | Vertical workspaces | top/bottom split and up/down swap (V-Shell) |
 | A65 | Logging and rotation | build marker reported; the log rotates and is pruned |
 | A66 | Performance counters | the counter block is present and advances as work happens |
+| A72 | Pinned vs monitor-implied | a pinned window is not tiled; a second-monitor window is |
+| A73 | Lost drag release | an abandoned drag is cleared and the layout restored |
+| A74 | Overview drop is a move | a scaled drop teaches no split ratio |
+| A75 | Overview patterns | open/close and an overview workspace move leave everything tiled |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

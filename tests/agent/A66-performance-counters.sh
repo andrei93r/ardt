@@ -40,14 +40,19 @@ assert_num "classification is counted" '>' "$(counter_delta classifyCalls 5)" 0
 assert_num "the sweep is timed" '>' "$(state_expr 'd["counters"]["sweepMsMax"]')" 0
 
 # A user-visible action is counted too: a split resize moves windows and logs.
+# Two opposite ratios guarantee the plan changes whichever ratio the pair is on,
+# and the counter is polled because a retile can land late under load.
 A="${ids[0]}"
 B="${ids[1]}"
 before_applied="$(counter plansApplied)"
 before_logged="$(counter logEvents)"
-adrt SimulateResize "$A" "$B" 0.35 >/dev/null
-sleep 2
-assert_num "a resize is counted as a plan applied" '>' \
-  "$(python3 -c "print($(counter plansApplied) - $before_applied)")" 0
+adrt SimulateResize "$A" "$B" 0.3 >/dev/null
+adrt SimulateResize "$A" "$B" 0.7 >/dev/null
+if wait_for 15 bash -c "[ \"\$(bash '$NESTED' dbus DumpState | python3 '$PARSE' | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"counters\"][\"plansApplied\"])')\" -gt '$before_applied' ]"; then
+  pass "a resize is counted as a plan applied"
+else
+  fail "a resize is counted as a plan applied (still $(counter plansApplied), was $before_applied)"
+fi
 assert_num "logging is counted" '>' \
   "$(python3 -c "print($(counter logEvents) - $before_logged)")" 0
 

@@ -148,6 +148,38 @@ code changes, MINOR for features, PATCH for fixes.
   the tiler all read the same signal V-Shell sets
   (`override_workspace_layout(rows = -1, columns = 1)`), so a pair splits 50/50
   top/bottom and moving a window up/down swaps it (A64).
+- **Multi-monitor: nothing on the second monitor could be tiled.** Mutter reports
+  `on-all-workspaces` for every window on a non-primary monitor while
+  `workspaces-only-on-primary` is set (GNOME's default, and this machine's), and
+  the classifier treated that flag as a hard skip — so those windows were never
+  tiled and simply stacked on top of each other. The skip now uses a `sticky`
+  flag computed the way Mutter does it (`workspaces-only-on-primary` plus the
+  window's monitor). Spec §5; A72 and the live S15.
+- A window that changed monitor kept a stale classification: the hot frame path
+  re-read only the rect and monitor, so a window moved from the secondary
+  monitor to the primary stayed "on all workspaces" (and the other way round).
+  `TrackedWindow.refreshFrame()` now re-reads the whole surface when the monitor
+  changes. S15.
+- Lone-maximize, the "more than a pair" rule and the unfloat pass were evaluated
+  per *workspace* while the tiler plans per *monitor*: with two monitors a pair
+  on one screen made a lone window on the other an "extra" — floated over the
+  pair or exiled to a new workspace. All three are scoped to one workspace and
+  one monitor now, matching §9. A72, A75, S15.
+- A drag whose release signal never arrived (an overview drag, a Shell restart, a
+  lost `grab-op-end`) froze every tiling path — reconcile, coherence sweep and
+  periodic retile all skip while a drag is in flight — so windows stayed stacked
+  until the next real drag. The sweep now abandons such a drag once it has been
+  quiet for 2.5 s with no mouse button held, and does not interpret the drop.
+  A73.
+- An overview drop scales the window as well as moving it, and the drop was read
+  as an inner-edge *resize*, saving a bogus split ratio for the app pair that
+  then persisted (the pair came back skewed instead of 50/50 for good). Move
+  versus resize is now decided by `core/adjust.ts`: a resize changes exactly one
+  axis, anything else is a move. Spec §12; A74 and 6 core tests.
+- New scenarios A72 (pinned versus monitor-implied), A73 (lost drag release), A74
+  (overview drop is a move), A75 (overview patterns stay tiled) and live S15
+  (multi-monitor tiling). A66's resize assertion no longer depends on the pair's
+  current ratio, and is polled instead of sampled once.
 - Performance work starts with measurement (stage 0 of `PERFORMANCE_PLAN.md`):
   `DumpState.counters` reports the per-call costs that matter — coherence sweeps
   and their timing, classify calls and cache misses, config builds, rules

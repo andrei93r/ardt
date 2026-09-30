@@ -59,7 +59,7 @@ describe('classify', () => {
   it.each([
     ['skip-taskbar', surface({ flags: { skipTaskbar: true } })],
     ['override-redirect', surface({ flags: { overrideRedirect: true } })],
-    ['on-all-workspaces', surface({ flags: { onAllWorkspaces: true } })],
+    ['on-all-workspaces', surface({ flags: { sticky: true } })],
     ['fullscreen', surface({ flags: { fullscreen: true } })],
     ['floating', surface({ flags: { floating: true } })],
     ['non-tileable-kind', surface({ kind: SurfaceKind.DIALOG })],
@@ -71,6 +71,16 @@ describe('classify', () => {
     const result = classify(input, config());
     expect(result.tileable).toBe(false);
     expect(result.reason).toBe(reason);
+  });
+
+  it('tiles a window whose on-all-workspaces flag comes from its monitor', () => {
+    // Mutter reports on-all-workspaces for every window on a secondary monitor
+    // when workspaces-only-on-primary is set (GNOME's default). That must not
+    // disqualify it: only a genuinely pinned window has no workspace of its own.
+    const result = classify(surface({ flags: { onAllWorkspaces: true } }), config());
+    expect(result.tileable).toBe(true);
+    expect(result.reason).toBeNull();
+    expect(result.layer).toBe(Layer.TILED);
   });
 
   it('rejects apps matched by the exception list (glob)', () => {

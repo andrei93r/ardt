@@ -71,6 +71,24 @@ export class TrackedWindow {
     return this.cached !== null;
   }
 
+  /**
+   * Cheap frame update for the hot frame path (§24 items 2 and 3). A window
+   * that changed monitor is re-read in full: `on-all-workspaces` (and the rest
+   * of the flags) depend on which monitor the window is on, so a cross-monitor
+   * move would otherwise leave a stale classification behind — the reason a
+   * window could stay untileable on a secondary monitor (or keep being skipped
+   * after moving to the primary one).
+   */
+  refreshFrame(): void {
+    const previousMonitor = this.surface.screenId;
+    this.surface.refreshFrame();
+    if (this.surface.screenId !== previousMonitor) {
+      this.surface.refresh();
+      this.cacheSizeHints();
+      this.invalidateClassification();
+    }
+  }
+
   /** §24 item 1: classify at most once per relevant signal. */
   classify(config: ClassifyConfig, context: HeuristicContext): Classification {
     if (this.cached === null) this.cached = classify(this.surface, config, context);

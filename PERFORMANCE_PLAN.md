@@ -382,6 +382,12 @@ primitive payloads.
 | --- | --- | --- | --- |
 | 0 | **done** | `3b7103f` | counters live; A66 6/6; 139 core tests; 65 nested scenarios, 0 failures, 3 skips (keybindings need the live session) |
 | 1 | not started | — | — |
+
+> Interlude (2026-09-30): between Stage 0 and Stage 1 the multi-monitor and
+> overview bugs were fixed first (see `CHANGELOG.md`): the `sticky` flag,
+> `TrackedWindow.refreshFrame`, per-monitor policies, the stale-drag watchdog and
+> `core/adjust.ts`. New tests A72-A75 and live S15. The Stage 0 counters made the
+> diagnosis possible and stay valid; Stage 1 resumes unchanged.
 | 2 | not started | — | — |
 | 3 | not started | — | — |
 | 4 | not started | — | — |

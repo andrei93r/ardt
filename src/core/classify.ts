@@ -105,7 +105,11 @@ export function classify(
 
   if (f.skipTaskbar) return fail('skip-taskbar');
   if (f.overrideRedirect) return fail('override-redirect');
-  if (f.onAllWorkspaces) return fail('on-all-workspaces');
+  // Mutter reports `on_all_workspaces` for every window on a secondary monitor
+  // when `workspaces-only-on-primary` is set (GNOME's default), so that flag
+  // must not disqualify a window: only a genuinely pinned window has no
+  // workspace of its own. `sticky` carries that distinction (§5).
+  if (f.sticky) return fail('on-all-workspaces');
   if (f.fullscreen) return fail('fullscreen');
   // Note: `above` ("always on top") deliberately does NOT disqualify a window.
   // Apps leave that flag set by accident, and the user's model is that a normal

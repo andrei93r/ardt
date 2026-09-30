@@ -43,6 +43,11 @@ are covered. Coverage references the harnesses:
 | D27 | Gesture | enabled/disabled × kind (3-h/3-v/4-h/4-v/pinch-in/pinch-out) × (begin/update/end/cancel) × above/below threshold × overlap | `core/gestures.ts` |
 | D28 | Gesture vs GNOME built-ins | matches (defer), differs (override) | `gesture-input.overridesBuiltin` |
 | D29 | Keybinding | each action; name=accelerator override; accelerator collision | `extension.registerKeybindings` |
+| D30 | Source of `on-all-workspaces` | genuinely pinned (`sticky`); implied by a non-primary monitor while `workspaces-only-on-primary` is set (not a skip) | `classify` (`on-all-workspaces`), `surface.sticky`, `host.flagContext` |
+| D31 | Drag intent | resize (exactly one axis changes); move (both axes, a translation, or a no-op) | `core/adjust.ts` |
+| D32 | Drag release | received (interpret the drop); never received (abandoned after 2.5 s quiet with no button held, drop not interpreted) | `session.dragIsStale`, `session.abandonDrag` |
+| D33 | Window changed monitor | re-read the whole surface (flags depend on the monitor) | `TrackedWindow.refreshFrame` |
+| D34 | Policy scope | per workspace **and** monitor: lone-maximize, "more than a pair", unfloat | `session.retile`, `session.evaluateLoneMaximize` |
 | D30 | Indicator style | accent vs hex; width 1–20; opacity 0–100; radius 0–32; pulse on/off | `indicator.ts` |
 | D31 | Close ghost | window was tiled, never tiled, override-redirect | `session.unregister` |
 | D32 | Config bundle | v3, v2; merge, replace; malformed; unknown keys | `core/config.ts` |

@@ -441,7 +441,7 @@ Every generated source file begins with:
 
 A window is **tileable** if all of:
 
-- Not skip-taskbar, not override-redirect, not on-all-workspaces, not fullscreen, not above.
+- Not skip-taskbar, not override-redirect, not sticky (pinned to every workspace; Mutter's `on-all-workspaces` alone does not count when it is implied by a window sitting on a non-primary monitor while `workspaces-only-on-primary` is set), not fullscreen, not above.
 - `appId` not in the exception list.
 - Not floating.
 - `kind` not in the non-tileable set (desktop, dock, popup menu, dropdown, tooltip, notification, splash, dialog, modal-dialog, attached-dialog).
@@ -674,6 +674,9 @@ User drags shared edge between a pair (inner edge only, one axis, outer edges fi
 
 - Detect axis, which window's inner edge moved.
 - Compute new ratio, clamped to minimums.
+- A gesture counts as a resize only when it changes exactly one axis; a change
+  on both axes (an overview drop, a compositor clamp) is a **move** and can
+  never teach a ratio (`core/adjust.ts`).
 - Apply instantly to both. Save under `appA|appB|axis`.
 
 Keyboard nudge: same, by configured step %, clamped, saved under same key.
@@ -1080,6 +1083,10 @@ Semver: MAJOR (Shell bump requiring code changes), MINOR (features), PATCH (fixe
 ## 35. Design Rationale
 
 - **Pairs only**: the layout algorithm, split-ratio learning, and workspace policy all assume two windows per monitor.
+- **Sticky means pinned, not "on a second monitor"**: Mutter reports `on-all-workspaces` for every window on a non-primary monitor while `workspaces-only-on-primary` is set (GNOME's default), so the skip decision uses the flags that are *not* implied by the monitor. Otherwise nothing on a second monitor can ever be tiled.
+- **Every per-monitor policy is evaluated per monitor**: lone-maximize, the "more than a pair" rule and the unfloat pass are scoped to one workspace **and** one monitor, so a pair on one screen cannot turn a lone window on another into an "extra".
+- **A window that changes monitor is re-read**: `on-all-workspaces` (and the rest of the flags) depend on the monitor, so a cross-monitor move refreshes the whole surface instead of leaving a stale classification.
+- **A drag that never ends must not disable tiling**: every path skips while a drag is in flight, so a lost `grab-op-end` is abandoned by the sweep once the gesture has been quiet and no button is held, and the drop is deliberately not interpreted.
 - **Per-app not per-version**: removes ~60% of learning code.
 - **Adaptation only on refusal**: invisible for well-behaved windows.
 - **No heuristics**: user-authored rules.

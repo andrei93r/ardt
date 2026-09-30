@@ -10,6 +10,7 @@
  */
 
 import { layoutManager } from 'resource:///org/gnome/shell/ui/main.js';
+import Gio from 'gi://Gio';
 
 import { Layer } from '../../core/types.js';
 import type { Rect, Screen, Size, Surface } from '../../core/types.js';
@@ -33,6 +34,9 @@ export class GnomeHost implements PlatformHost {
   private readonly connections: Connection[] = [];
   private readonly surfaceCache = new Map<number, GnomeSurface>();
   private screensCache: Screen[] = [];
+  /** `org.gnome.mutter`: whether workspaces exist only on the primary monitor. */
+  private mutter: any = null;
+  private primaryMonitorIndex = 0;
   /**
    * Diagnostics (§24): window lookups and full `list_all_windows()` scans. A
    * lookup must not cost a scan — the surface cache already holds the window.
@@ -56,6 +60,11 @@ export class GnomeHost implements PlatformHost {
 
   enable(): void {
     this.refreshScreens();
+    try {
+      this.mutter = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
+    } catch {
+      this.mutter = null;
+    }
     this.connect(global.display, 'window-created', (_display: any, win: any) => {
       this.emit({ type: 'surface-created', surface: this.ensureSurface(win) });
     });
@@ -116,10 +125,25 @@ export class GnomeHost implements PlatformHost {
     let surface = this.surfaceCache.get(id);
     if (surface === undefined) {
       const version = this.versions.detect(win, win.get_title() ?? '');
-      surface = new GnomeSurface(win, version);
+      surface = new GnomeSurface(win, version, () => this.flagContext());
       this.surfaceCache.set(id, surface);
     }
     return surface;
+  }
+
+  /**
+   * The context that decides whether `on-all-workspaces` means "pinned" or is
+   * simply implied by Mutter keeping a secondary monitor on every workspace
+   * while `workspaces-only-on-primary` is set (GNOME's default).
+   */
+  flagContext(): { workspacesOnlyOnPrimary: boolean; primaryMonitor: number } {
+    let only = false;
+    try {
+      only = this.mutter?.get_boolean('workspaces-only-on-primary') === true;
+    } catch {
+      only = false;
+    }
+    return { workspacesOnlyOnPrimary: only, primaryMonitor: this.primaryMonitorIndex };
   }
 
   forgetSurface(id: number): void {
@@ -224,6 +248,7 @@ export class GnomeHost implements PlatformHost {
   private refreshScreens(): void {
     const monitors: any[] = layoutManager.monitors;
     const connectors = this.monitorConnectors();
+    this.primaryMonitorIndex = layoutManager.primaryIndex ?? 0;
     const workspace = global.workspace_manager.get_active_workspace();
     this.screensCache = monitors.map((monitor, index) => {
       const monitorIndex = monitor.index ?? index;

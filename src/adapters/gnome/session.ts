@@ -13,6 +13,8 @@ import Meta from 'gi://Meta';
 import { wm } from 'resource:///org/gnome/shell/ui/main.js';
 
 import type { HeuristicContext } from '../../core/classify.js';
+import { classifyAdjust } from '../../core/adjust.js';
+import type { AdjustMode } from '../../core/adjust.js';
 import { checkPlan } from '../../core/invariants.js';
 import { SignatureCache, planSignature } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
@@ -54,6 +56,13 @@ interface WindowSignal {
 const ADJUST_SETTLE_MS = 150;
 /** Debounce before a global reconcile pass. */
 const RECONCILE_DEBOUNCE_MS = 60;
+/**
+ * A drag whose release never arrived must not disable tiling forever: every
+ * path (reconcile, sweep, periodic retile) skips while `dragging` is set. A
+ * lost `grab-op-end` — an overview drag, a Shell restart, a grab taken over by
+ * another actor — would otherwise freeze the layout until the next real drag.
+ */
+const DRAG_STALE_MS = 2500;
 
 export class WindowSession {
   readonly windows = new Map<number, TrackedWindow>();
@@ -71,6 +80,8 @@ export class WindowSession {
   private grabEndSignal = 0;
   private dragging = false;
   private dragStartRect: Rect | null = null;
+  /** When the dragged window last changed geometry (stale-drag watchdog). */
+  private dragLastActivityMs = 0;
   /** True while a compositor state makes tiling pointless (the overview). */
   private suspended = false;
   private adjustId: number | null = null;
@@ -178,9 +189,33 @@ export class WindowSession {
     if (tracked === undefined) return false;
     if (this.dragging) return true;
     this.dragging = true;
+    this.dragLastActivityMs = Date.now();
     this.dragStartRect = { ...tracked.surface.frame };
     this.deps.onDragChanged(true);
     return true;
+  }
+
+  /**
+   * A drag that never reported its release (a lost `grab-op-end`) disables every
+   * tiling path, so it is abandoned once it has been quiet for a while and no
+   * mouse button is held — the same test `isUserChange` uses to tell a user move
+   * from one of our own applies. The drop is deliberately not interpreted: a
+   * gesture we never saw the end of must not swap or resize anything.
+   */
+  private dragIsStale(): boolean {
+    if (!this.dragging) return false;
+    if (Date.now() - this.dragLastActivityMs < DRAG_STALE_MS) return false;
+    return compat.button1Pressed() === false;
+  }
+
+  private abandonDrag(reason: string): void {
+    this.dragging = false;
+    this.dragLastActivityMs = 0;
+    this.dragStartRect = null;
+    this.deps.onDragChanged(false);
+    this.deps.history.log('drag_abandoned', { reason });
+    this.signatures.clearAll();
+    this.reconcileAll('drag-abandoned', false);
   }
 
   /**
@@ -194,10 +229,11 @@ export class WindowSession {
     if (tracked === undefined) return false;
     const wasDragging = this.dragging;
     this.dragging = false;
+    this.dragLastActivityMs = 0;
     this.deps.onDragChanged(false);
     if (!wasDragging) return true;
 
-    tracked.surface.refreshFrame();
+    tracked.refreshFrame();
     this.interpretDrop(tracked, this.adjustMode(tracked));
     this.dragStartRect = null;
     this.signatures.clearAll();
@@ -474,35 +510,42 @@ export class WindowSession {
     if (this.deps.isPaused() || this.suspended) return;
     // §11.3: no reflow while the user is dragging.
     if (this.dragging) return;
-    // §7.2: a window maximized on its own was left maximized when a sibling
-    // arrived; unmaximize it and tile the pair.
-    if (this.unmaximizeStaleLone(workspaceId)) {
-      this.scheduleRetile(workspaceId, 'lone-unmaximize');
-      return;
-    }
-    // A workspace reduced to a single tile plus an automatic float tiles both
-    // again — no floating leftover once the pair loses a member. This runs
-    // before the lone-maximize policy, which would otherwise keep the one
-    // remaining tile maximized and leave the float alone.
-    const autoFloated = this.autoFloated(workspaceId);
-    if (autoFloated.length === 1 && this.tileables(workspaceId).length === 1) {
-      const floater = autoFloated[0];
-      floater.surface.setFloating(false);
-      this.deps.host.applyLayer(floater.id, Layer.TILED, 0);
-      this.signatures.clearAll();
-      this.deps.history.log('tile', { reason: 'unfloat-lone', id: floater.id, workspaceId });
-      this.scheduleRetile(workspaceId, 'unfloat-lone');
-      return;
-    }
-    // A workspace that somehow holds more than a pair must never leave an
-    // extra stacked. What to do with the extra depends on how it got here: a
-    // window the user dragged in (the overview) floats over the pair, while one
-    // that simply opened here goes to its own workspace (§7.1).
-    const wsTileables = this.tileables(workspaceId);
-    if (wsTileables.length > 2) {
-      const extra = wsTileables[wsTileables.length - 1];
-      const screen = this.screenFor(extra.surface.screenId);
-      if (screen !== null) {
+    // Every policy below is per monitor, matching the tiler (§9: a pair shares
+    // a monitor). Counting a workspace's windows across screens would make a
+    // pair on one monitor an "extra" — or a lone window — on another.
+    for (const screen of this.deps.host.screens()) {
+      const onScreen = (t: TrackedWindow): boolean => t.surface.screenId === screen.index;
+      const tileables = this.tileables(workspaceId).filter(onScreen);
+      if (tileables.length === 0) continue;
+      // §7.2: a window maximized on its own was left maximized when a sibling
+      // arrived on this monitor; unmaximize it and tile the pair.
+      if (this.unmaximizeStaleLone(tileables)) {
+        this.scheduleRetile(workspaceId, 'lone-unmaximize');
+        continue;
+      }
+      // A monitor reduced to a single tile plus an automatic float tiles both
+      // again — no floating leftover once the pair loses a member. This runs
+      // before the lone-maximize policy, which would otherwise keep the one
+      // remaining tile maximized and leave the float alone.
+      if (tileables.length === 1) {
+        const floats = this.autoFloated(workspaceId).filter(onScreen);
+        if (floats.length === 1) {
+          const floater = floats[0];
+          floater.surface.setFloating(false);
+          floater.autoFloated = false;
+          this.deps.host.applyLayer(floater.id, Layer.TILED, 0);
+          this.signatures.clearAll();
+          this.deps.history.log('tile', { reason: 'unfloat-lone', id: floater.id, workspaceId });
+          this.scheduleRetile(workspaceId, 'unfloat-lone');
+          continue;
+        }
+      }
+      // A monitor that somehow holds more than a pair must never leave an extra
+      // stacked. How it got here decides what happens to it: a window the user
+      // dragged in (the overview) floats over the pair, while one that simply
+      // opened here goes to its own workspace (§7.1).
+      if (tileables.length > 2) {
+        const extra = tileables[tileables.length - 1];
         if (this.userMoveProtected(extra)) {
           this.floatOverPair(extra);
         } else {
@@ -511,18 +554,14 @@ export class WindowSession {
         }
         this.signatures.clearAll();
         this.scheduleRetile(workspaceId, 'float-extra');
+        continue;
       }
-      return;
-    }
-    // §7.2 takes precedence over §6: a lone window stays maximized, not tiled.
-    if (this.shouldLoneMaximize(workspaceId)) {
-      const only = this.tileables(workspaceId)[0];
-      if (only !== undefined && !compat.isMaximized(only.win)) this.deps.host.maximize(only.id);
-      return;
-    }
-    for (const screen of this.deps.host.screens()) {
-      const tileables = this.tileables(workspaceId).filter((t) => t.surface.screenId === screen.index);
-      if (tileables.length === 0) continue;
+      // §7.2 takes precedence over §6: a lone window stays maximized, not tiled.
+      if (this.shouldLoneMaximize(tileables, this.nonTransient(workspaceId).filter(onScreen))) {
+        const only = tileables[0];
+        if (!compat.isMaximized(only.win)) this.deps.host.maximize(only.id);
+        continue;
+      }
       // A window we are about to tile must not stay "always on top", or it
       // would cover its sibling.
       for (const tracked of tileables) {
@@ -578,7 +617,7 @@ export class WindowSession {
       if (tracked === undefined) return true;
       // A window that demonstrably refuses geometry is not "stale".
       if (tracked.stubborn) continue;
-      tracked.surface.refreshFrame();
+      tracked.refreshFrame();
       const rect = tracked.surface.frame;
       if (
         Math.abs(rect.x - placement.rect.x) > 2 ||
@@ -648,8 +687,8 @@ export class WindowSession {
     return this.tileables(workspaceId).filter((t) => !t.surface.flags.transient);
   }
 
-  private shouldLoneMaximize(workspaceId: number): boolean {
-    return this.nonTransient(workspaceId).length === 1 && this.tileables(workspaceId).length === 1;
+  private shouldLoneMaximize(tileables: readonly TrackedWindow[], nonTransient: readonly TrackedWindow[]): boolean {
+    return nonTransient.length === 1 && tileables.length === 1;
   }
 
   /**
@@ -657,14 +696,13 @@ export class WindowSession {
    * must be unmaximized so the pair can tile. This covers apps that open
    * maximized (Files) and windows left maximized side by side.
    */
-  private unmaximizeStaleLone(workspaceId: number): boolean {
-    const tileables = this.tileables(workspaceId);
+  private unmaximizeStaleLone(tileables: readonly TrackedWindow[]): boolean {
     if (tileables.length < 2) return false;
     const maximized = tileables.filter((t) => compat.isMaximized(t.win));
     if (maximized.length === 0) return false;
     this.deps.tiling.noteSelfApply();
     for (const tracked of maximized) this.deps.host.unmaximize(tracked.id);
-    this.deps.history.log('tile', { reason: 'lone-unmaximize', workspaceId, count: maximized.length });
+    this.deps.history.log('tile', { reason: 'lone-unmaximize', workspaceId: tileables[0].surface.workspaceId, count: maximized.length });
     return true;
   }
 
@@ -740,7 +778,7 @@ export class WindowSession {
     for (const item of entry.rects) {
       const tracked = this.windows.get(item.id);
       if (tracked === undefined) continue;
-      tracked.surface.refreshFrame();
+      tracked.refreshFrame();
       this.deps.tiling.applyFrame(tracked, item.rect, this.screenFor(tracked.surface.screenId) ?? fallbackScreen(), false, 'undo', 0);
     }
     this.deps.history.log('undo', { workspaceId: entry.workspaceId, windows: entry.rects.length });
@@ -805,6 +843,23 @@ export class WindowSession {
     } catch {
       return false;
     }
+  }
+
+  /** Test hook: make a window genuinely sticky (pinned to every workspace). */
+  simulateSticky(id: number, sticky: boolean): boolean {
+    const tracked = this.windows.get(id);
+    if (tracked === undefined) return false;
+    try {
+      if (sticky) tracked.win.stick();
+      else tracked.win.unstick();
+    } catch {
+      return false;
+    }
+    tracked.surface.refresh();
+    tracked.invalidateClassification();
+    this.signatures.clearAll();
+    this.retileAll('sticky', false);
+    return true;
   }
 
   /** Toggle fullscreen on the focused window (customisable keybinding). */
@@ -912,23 +967,27 @@ export class WindowSession {
     return null;
   }
 
-  /** §7.2 lone-maximize policy. */
+  /** §7.2 lone-maximize policy, per monitor (a pair on one monitor must not
+   * turn a lone window on another into a "non-lone"). */
   private evaluateLoneMaximize(workspaceId: number): void {
-    const nonTransient = this.nonTransient(workspaceId);
-    const tileables = this.tileables(workspaceId);
-    if (nonTransient.length === 1 && tileables.length === 1) {
-      const only = tileables[0];
-      if (!compat.isMaximized(only.win)) {
-        this.deps.tiling.noteSelfApply();
-        this.deps.host.maximize(only.id);
-        this.deps.history.log('tile', { id: only.id, reason: 'lone-maximize' });
+    for (const screen of this.deps.host.screens()) {
+      const onScreen = (t: TrackedWindow): boolean => t.surface.screenId === screen.index;
+      const nonTransient = this.nonTransient(workspaceId).filter(onScreen);
+      const tileables = this.tileables(workspaceId).filter(onScreen);
+      if (nonTransient.length === 1 && tileables.length === 1) {
+        const only = tileables[0];
+        if (!compat.isMaximized(only.win)) {
+          this.deps.tiling.noteSelfApply();
+          this.deps.host.maximize(only.id);
+          this.deps.history.log('tile', { id: only.id, reason: 'lone-maximize' });
+        }
+        continue;
       }
-      return;
-    }
-    if (nonTransient.length > 1 && tileables.length === 1 && compat.isMaximized(tileables[0].win)) {
-      this.deps.tiling.noteSelfApply();
-      this.deps.host.unmaximize(tileables[0].id);
-      this.scheduleRetile(workspaceId, 'lone-unmaximize');
+      if (nonTransient.length > 1 && tileables.length === 1 && compat.isMaximized(tileables[0].win)) {
+        this.deps.tiling.noteSelfApply();
+        this.deps.host.unmaximize(tileables[0].id);
+        this.scheduleRetile(workspaceId, 'lone-unmaximize');
+      }
     }
   }
 
@@ -1308,10 +1367,11 @@ export class WindowSession {
   }
 
   private onFrameSignal(tracked: TrackedWindow): void {
-    tracked.surface.refreshFrame();
+    tracked.refreshFrame();
 
     // A server-side grab is in flight (Super+drag): follow, do not reflow.
     if (this.dragging) {
+      this.dragLastActivityMs = Date.now();
       this.deps.onStateChanged();
       return;
     }
@@ -1406,11 +1466,14 @@ export class WindowSession {
     this.scheduleRetile(tracked.surface.workspaceId, 'user-adjust');
   }
 
-  private adjustMode(tracked: TrackedWindow): 'move' | 'resize' {
+  private adjustMode(tracked: TrackedWindow): AdjustMode {
     const start = this.dragStartRect;
     if (start === null) return 'move';
-    const rect = tracked.surface.frame;
-    return Math.abs(rect.width - start.width) > 8 || Math.abs(rect.height - start.height) > 8 ? 'resize' : 'move';
+    // Geometry-only, and deliberately strict: a size change on both axes is a
+    // move (an overview drop scales the window to its target), never an
+    // inner-edge resize — reading it as one would save a bogus split ratio that
+    // then persists for that pair of apps.
+    return classifyAdjust(start, tracked.surface.frame);
   }
 
   /** Keep the sibling in step with the user's live resize. */
@@ -1446,7 +1509,7 @@ export class WindowSession {
     }
     if (rect.width <= 0 || rect.height <= 0) return;
     // Skip redundant applies when the sibling is already where it should be.
-    sibling.surface.refreshFrame();
+    sibling.refreshFrame();
     const current = sibling.surface.frame;
     if (
       Math.abs(current.x - rect.x) <= 2 &&
@@ -1610,6 +1673,12 @@ export class WindowSession {
    */
   coherenceSweep(): void {
     if (this.deps.isPaused() || this.suspended) return;
+    // A drag whose release never arrived must not disable the guarantee below:
+    // clear it first, then run the pass.
+    if (this.dragIsStale()) {
+      this.abandonDrag('stale');
+      return;
+    }
     if (this.dragging || this.adjustId !== null) return;
     this.coherenceRuns += 1;
     const sweepStartedUs = GLib.get_monotonic_time();
@@ -1671,7 +1740,7 @@ export class WindowSession {
           const tracked = this.windows.get(placement.surfaceId);
           if (tracked === undefined) continue;
           this.sweepFrameReads += 1;
-          tracked.surface.refreshFrame();
+          tracked.refreshFrame();
           const r = tracked.surface.frame;
           const off =
             Math.abs(r.x - placement.rect.x) > 2 ||

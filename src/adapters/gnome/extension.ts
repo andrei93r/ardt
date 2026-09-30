@@ -76,6 +76,7 @@ interface ExtraHandlers {
   ToggleFullscreen(id: number): boolean;
   QuitFocused(): boolean;
   SimulateAbove(id: number): boolean;
+  SimulateSticky(id: number, sticky: boolean): boolean;
   SimulateWorkspaceOrientation(vertical: boolean): boolean;
 }
 
@@ -594,7 +595,7 @@ export default class AdrtExtension extends Extension {
     // rect captured when focus last changed.
     const focused = this.session.focused();
     if (focused !== null && this.border.focusedId === focused.id) {
-      focused.surface.refreshFrame();
+      focused.refreshFrame();
       this.border.updateRect(focused.surface.frame);
     }
     const snapshot = this.border.snapshot();
@@ -959,6 +960,7 @@ export default class AdrtExtension extends Extension {
       ToggleFullscreen: (id) => this.session.toggleFullscreen(id),
       QuitFocused: () => this.session.closeFocused(),
       SimulateAbove: (id) => this.session.simulateAbove(id),
+      SimulateSticky: (id, sticky) => this.session.simulateSticky(id, sticky),
       SimulateWorkspaceOrientation: (vertical) => this.session.simulateWorkspaceOrientation(vertical),
       MinimizeWindow: (id) => {
         if (!this.session.windows.has(id)) return false;
@@ -1229,7 +1231,7 @@ export default class AdrtExtension extends Extension {
       case 'surface-frame-changed': {
         const tracked = this.session.windows.get(Number(data.id));
         if (tracked !== undefined) {
-          tracked.surface.refreshFrame();
+          tracked.refreshFrame();
           this.onStateChanged();
         }
         break;

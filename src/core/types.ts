@@ -56,7 +56,15 @@ export interface SurfaceFlags {
   floating: boolean;
   skipTaskbar: boolean;
   overrideRedirect: boolean;
+  /** Mutter's raw `on-all-workspaces`. May be implied by the monitor: see `sticky`. */
   onAllWorkspaces: boolean;
+  /**
+   * Genuinely pinned to every workspace. Mutter also reports `onAllWorkspaces`
+   * for windows on a non-primary monitor whenever `workspaces-only-on-primary`
+   * is set (the GNOME default), so only this flag may disqualify a window from
+   * tiling.
+   */
+  sticky: boolean;
 }
 
 export enum Layer {
@@ -120,6 +128,7 @@ export function emptyFlags(): SurfaceFlags {
     skipTaskbar: false,
     overrideRedirect: false,
     onAllWorkspaces: false,
+    sticky: false,
   };
 }
 

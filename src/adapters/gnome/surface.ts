@@ -36,7 +36,12 @@ export class GnomeSurface implements Surface {
   /** Session-side float state; Mutter has no "floating" flag (§9.3). */
   private floatingOverride = false;
 
-  constructor(win: any, appVersion: string) {
+  constructor(
+    win: any,
+    appVersion: string,
+    /** Answers whether `on-all-workspaces` is implied by the window's monitor. */
+    private readonly flagContext: () => { workspacesOnlyOnPrimary: boolean; primaryMonitor: number },
+  ) {
     this.win = win;
     this.id = win.get_id();
     this.appVersion = appVersion;
@@ -111,6 +116,7 @@ export class GnomeSurface implements Surface {
 
   private readFlags(): SurfaceFlags {
     const win = this.win;
+    const onAllWorkspaces = compat.isOnAllWorkspaces(win);
     return {
       ...emptyFlags(),
       transient: win.get_transient_for() !== null,
@@ -123,7 +129,24 @@ export class GnomeSurface implements Surface {
       floating: this.floatingOverride,
       skipTaskbar: compat.isSkipTaskbar(win),
       overrideRedirect: compat.isOverrideRedirect(win),
-      onAllWorkspaces: compat.isOnAllWorkspaces(win),
+      onAllWorkspaces,
+      // Mutter reports `on-all-workspaces` for every window on a non-primary
+      // monitor while `workspaces-only-on-primary` is set, which is GNOME's
+      // default. That is a property of the monitor, not a pinned window, so
+      // only the flags that are *not* implied by the monitor count as sticky
+      // (§5). Without this, nothing on a second monitor can ever be tiled.
+      sticky: onAllWorkspaces && !this.impliedByMonitor(),
     };
+  }
+
+  /** Mutter's own rule: on-all-workspaces because this window's monitor is not
+   * the primary one while workspaces live only on the primary monitor. */
+  private impliedByMonitor(): boolean {
+    try {
+      const context = this.flagContext();
+      return context.workspacesOnlyOnPrimary && this.win.get_monitor() !== context.primaryMonitor;
+    } catch {
+      return false;
+    }
   }
 }

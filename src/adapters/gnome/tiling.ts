@@ -168,7 +168,7 @@ export class Tiling {
     for (const placement of plan.placements) {
       const tracked = this.deps.windows().get(placement.surfaceId);
       if (tracked === undefined) continue;
-      tracked.surface.refreshFrame();
+      tracked.refreshFrame();
       const current = tracked.surface.frame;
       before.push({ id: tracked.id, rect: { ...current } });
       if (!rectEquals(current, placement.rect)) moved = true;
@@ -263,7 +263,7 @@ export class Tiling {
       );
     } else {
       this.deps.host.applyFrame(tracked.id, target);
-      tracked.surface.refreshFrame();
+      tracked.refreshFrame();
       this.scheduleVerify(tracked, target, reason, attempt);
     }
   }
@@ -275,7 +275,7 @@ export class Tiling {
 
   private verify(tracked: TrackedWindow, target: Rect, reason: string, attempt: number): void {
     if (this.destroyed || this.deps.isPaused()) return;
-    tracked.surface.refreshFrame();
+    tracked.refreshFrame();
     const current = tracked.surface.frame;
 
     if (this.verifyFailuresRemaining > 0) {
