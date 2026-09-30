@@ -136,6 +136,18 @@ code changes, MINOR for features, PATCH for fixes.
   the pair, while a newly opened third window goes to its own workspace, as the
   model requires. The sweep could previously float a fresh third window before
   the register policy moved it right.
+- The history log is a real append with size-based rotation: `append()` used to
+  read the whole file and rewrite it on *every* event, which is what turned a
+  200 MB log into an out-of-memory crash. It now appends through a stream,
+  rotates at `history-max-bytes` (default 8 MiB) into `<day>.N.jsonl`, keeps 5
+  parts per day and prunes the rest (core/rotation.ts, A65).
+- `DumpState.build` reports the running module (version + install-directory
+  mtime) so "is the running build the one I installed?" is one call away; the
+  enable log records it too (A65).
+- Vertical Workspaces (V-Shell) compatibility: the tile axis, `moveToward` and
+  the tiler all read the same signal V-Shell sets
+  (`override_workspace_layout(rows = -1, columns = 1)`), so a pair splits 50/50
+  top/bottom and moving a window up/down swaps it (A64).
 - Client text is bounded (core/text.ts): a window title is clipped at 256 chars
   and every history payload string at 512. A corrupted client title (a
   mojibake-doubling one reached 805 million characters) produced a 256 MB

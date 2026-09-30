@@ -214,6 +214,10 @@ ensure_clean() {
   # A headless Shell starts in the overview, and tiling is suspended there by
   # design; make sure every scenario starts with it closed.
   adrt SimulateOverview false >/dev/null 2>&1 || true
+  # Never leak a workspace orientation set by a scenario.
+  adrt SimulateWorkspaceOrientation false >/dev/null 2>&1 || true
+  # Nor a relaxed min-size policy.
+  set_setting min-size-policy respect >/dev/null 2>&1 || true
   sleep 0.5
 }
 

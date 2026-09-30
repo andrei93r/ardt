@@ -122,6 +122,8 @@ those shortcuts.
 | A61 | Above flag ignored | a normal window with "always on top" is still tiled |
 | A62 | Minimize onto a pair | it stays minimized, then floats when restored |
 | A63 | Client text bounded | titles are clipped, no oversized history lines |
+| A64 | Vertical workspaces | top/bottom split and up/down swap (V-Shell) |
+| A65 | Logging and rotation | build marker reported; the log rotates and is pruned |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

@@ -9,6 +9,7 @@
 
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import Meta from 'gi://Meta';
 import { wm } from 'resource:///org/gnome/shell/ui/main.js';
 
 import type { HeuristicContext } from '../../core/classify.js';
@@ -691,8 +692,7 @@ export class WindowSession {
       const sibling = peers.find((t) => t.id !== current.id);
       if (sibling === undefined) return;
       const horizontal = direction === 'left' || direction === 'right';
-      const screen = this.screenFor(current.surface.screenId);
-      const splitHorizontal = screen === null || screen.geometry.width >= screen.geometry.height;
+      const splitHorizontal = this.workspaceSplitHorizontal();
       if (horizontal === splitHorizontal) {
         this.deps.tiling.toggleSwap(current.id, sibling.id);
         this.signatures.clearAll();
@@ -759,6 +759,44 @@ export class WindowSession {
     if (tracked === undefined) return false;
     tracked.surface.workspaceId = index;
     return true;
+  }
+
+  /**
+   * Whether the workspace layout lays workspaces out sideways, so a pair splits
+   * left/right. Vertical Workspaces / V-Shell sets the layout with
+   * `override_workspace_layout(..., rows = -1, columns = 1)`, so reading
+   * `layout_rows` keeps us in step with it — and stacked tiles then split
+   * top/bottom instead.
+   */
+  private workspaceSplitHorizontal(): boolean {
+    const rows = global.workspace_manager.layout_rows;
+    if (rows === -1) return false;
+    if (rows > 0) return true;
+    const focused = this.focused();
+    const screen = focused === null ? null : this.screenFor(focused.surface.screenId);
+    return screen === null || screen.geometry.width >= screen.geometry.height;
+  }
+
+  /** Which way a pair splits, as the tiler will lay it out (diagnostics). */
+  tileAxis(): 'vertical' | 'horizontal' {
+    return this.workspaceSplitHorizontal() ? 'horizontal' : 'vertical';
+  }
+
+  /** Test hook: set the workspace orientation the way Vertical Workspaces does. */
+  simulateWorkspaceOrientation(vertical: boolean): boolean {
+    try {
+      global.workspace_manager.override_workspace_layout(
+        Meta.DisplayCorner.TOPLEFT,
+        false,
+        vertical ? -1 : 1,
+        vertical ? 1 : -1,
+      );
+      this.signatures.clearAll();
+      this.retileAll('orientation', false);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Toggle fullscreen on the focused window (customisable keybinding). */

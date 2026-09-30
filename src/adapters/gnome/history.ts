@@ -12,7 +12,13 @@ import Gio from 'gi://Gio';
 
 import type { Rect } from '../../core/types.js';
 import { clipPayload } from '../../core/text.js';
+import { partPath, partsToPrune, shouldRotate } from '../../core/rotation.js';
 import { dataDir, readText, writeAtomic } from './adapt.js';
+
+/** Rotated parts kept per day before the oldest is deleted. */
+const MAX_HISTORY_PARTS = 5;
+/** Default size of one part (bytes). */
+const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 
 export interface HistoryEvent {
   t: number;
@@ -38,6 +44,16 @@ function dayString(date: Date): string {
   const month = `${date.getMonth() + 1}`.padStart(2, '0');
   const day = `${date.getDate()}`.padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+/**
+ * UTF-8 encode one log line for a Gio stream. `TextEncoder` is present in the
+ * GJS that GNOME 45+ ships; if it ever is not, the caller falls back.
+ */
+function encodeText(text: string): Uint8Array {
+  const Encoder = (globalThis as { TextEncoder?: new () => { encode(input: string): Uint8Array } }).TextEncoder;
+  if (typeof Encoder !== 'function') throw new Error('TextEncoder unavailable');
+  return new Encoder().encode(text);
 }
 
 function historyDir(): string {
@@ -99,10 +115,18 @@ export class History {
   private dailyFolders: boolean;
   private tailMonitor: any = null;
 
-  constructor(enabled: boolean, retentionDays: number, dailyFolders: boolean) {
+  /** Size at which the live part rotates (bytes). */
+  private maxBytes = DEFAULT_MAX_BYTES;
+
+  constructor(enabled: boolean, retentionDays: number, dailyFolders: boolean, maxBytes = DEFAULT_MAX_BYTES) {
     this.enabled = enabled;
     this.retentionDays = retentionDays;
     this.dailyFolders = dailyFolders;
+    this.maxBytes = maxBytes > 0 ? maxBytes : DEFAULT_MAX_BYTES;
+  }
+
+  setMaxBytes(maxBytes: number): void {
+    if (maxBytes > 0) this.maxBytes = maxBytes;
   }
 
   setEnabled(enabled: boolean): void {
@@ -166,6 +190,7 @@ export class History {
     if (!file.query_exists(null)) file.create(Gio.FileCreateFlags.NONE, null);
     this.tailMonitor = file.monitor_file(Gio.FileMonitorFlags.NONE, null);
     this.tailMonitor.connect('changed', () => {
+      // Rotation keeps a part bounded, so reading it whole is safe here.
       const text = readText(file.get_path());
       if (text === null) return;
       for (const line of text.trimEnd().split('\n')) {
@@ -189,6 +214,17 @@ export class History {
       if (day >= cutoffDay) continue;
       const file = Gio.File.new_for_path(this.pathFor(day));
       file.delete(null);
+      for (const part of partsToPrune(MAX_HISTORY_PARTS, 1)) {
+        const extra = Gio.File.new_for_path(partPath(this.pathFor(day), part));
+        try {
+          if (extra.query_exists(null)) {
+            extra.delete(null);
+            removed += 1;
+          }
+        } catch {
+          /* already gone */
+        }
+      }
       removed += 1;
     }
     return removed;
@@ -215,9 +251,59 @@ export class History {
     return `${directory}/${day}.jsonl`;
   }
 
+  /**
+   * Append one JSON line. This must never read the file back: the old
+   * read-modify-write version loaded the whole file into a string per event,
+   * which is what turned a 200 MB log into an out-of-memory crash.
+   */
   private append(event: HistoryEvent): void {
-    const path = this.pathFor(dayString(new Date()));
-    const existing = readText(path) ?? '';
-    writeAtomic(path, `${existing}${JSON.stringify(event)}\n`);
+    const day = dayString(new Date());
+    const base = this.pathFor(day);
+    let path = base;
+    if (shouldRotate(this.sizeOf(base), this.maxBytes)) path = this.rotate(base);
+    const line = `${JSON.stringify(event)}\n`;
+    try {
+      const stream = Gio.File.new_for_path(path).append_to(Gio.FileCreateFlags.NONE, null);
+      stream.write_all(encodeText(line), null);
+      stream.close(null);
+    } catch {
+      // Last resort (unusual filesystem or no TextEncoder): the part is bounded
+      // by rotation, so a read-modify-write here is acceptable.
+      writeAtomic(path, `${readText(path) ?? ''}${line}`);
+    }
+  }
+
+  /** Size of a file in bytes, 0 when it does not exist. */
+  private sizeOf(path: string): number {
+    try {
+      const info = Gio.File.new_for_path(path).query_info('standard::size', Gio.FileQueryInfoFlags.NONE, null);
+      return info.get_size();
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Rotate the day's file: `day.jsonl` -> `day.2.jsonl`, parts shift down and
+   * the oldest part beyond MAX_HISTORY_PARTS is deleted. Returns the fresh path.
+   */
+  private rotate(base: string): string {
+    const oldest = partPath(base, MAX_HISTORY_PARTS);
+    try {
+      const file = Gio.File.new_for_path(oldest);
+      if (file.query_exists(null)) file.delete(null);
+    } catch {
+      /* nothing to delete */
+    }
+    for (let part = MAX_HISTORY_PARTS - 1; part >= 1; part--) {
+      const from = Gio.File.new_for_path(partPath(base, part));
+      const to = Gio.File.new_for_path(partPath(base, part + 1));
+      try {
+        if (from.query_exists(null)) from.move(to, Gio.FileCopyFlags.OVERWRITE, null, null);
+      } catch {
+        /* skip a part that cannot move */
+      }
+    }
+    return base;
   }
 }

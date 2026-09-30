@@ -262,6 +262,11 @@
       <summary>Keybinding overrides</summary>
       <description>Optional 'action=accelerator' overrides.</description>
     </key>
+    <key name="history-max-bytes" type="i">
+      <default>8388608</default>
+      <summary>History part size</summary>
+      <description>Rotate the event log when one part reaches this many bytes.</description>
+    </key>
     <key name="kb-undo" type="as">
       <default>['&lt;Super&gt;z']</default>
       <summary>Undo</summary>

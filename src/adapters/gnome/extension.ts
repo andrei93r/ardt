@@ -76,6 +76,7 @@ interface ExtraHandlers {
   ToggleFullscreen(id: number): boolean;
   QuitFocused(): boolean;
   SimulateAbove(id: number): boolean;
+  SimulateWorkspaceOrientation(vertical: boolean): boolean;
 }
 
 type Handlers = DbusHandlers & ExtraHandlers;
@@ -103,6 +104,8 @@ export default class AdrtExtension extends Extension {
   private layoutSignals: number[] = [];
   private motionSource: number | null = null;
   private coherenceSource: number | null = null;
+  /** What build is actually running (set at enable). */
+  private buildDirMtimeMs = 0;
   private motionActor: any = null;
   private motionLastX = Number.NaN;
   private motionLastY = Number.NaN;
@@ -120,12 +123,25 @@ export default class AdrtExtension extends Extension {
 
   enable(): void {
     const started = GLib.get_monotonic_time();
+    // Record which build is loaded: on Wayland a logout is needed to reload, so
+    // "is the running module the one I installed?" must be answerable at a glance.
+    try {
+      const dir = (this as unknown as { path?: string }).path;
+      if (typeof dir === 'string' && dir.length > 0) {
+        const info = Gio.File.new_for_path(dir).query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
+        const when = info.get_modification_date_time();
+        this.buildDirMtimeMs = when === null ? 0 : when.to_unix() * 1000;
+      }
+    } catch {
+      this.buildDirMtimeMs = 0;
+    }
     this.settings = new GnomeSettings(this.getSettings());
 
     this.history = new History(
       this.settings.boolean('history-enabled', true),
       this.settings.int('history-retention-days', 30),
       this.settings.boolean('history-daily-folders', false),
+      this.settings.int('history-max-bytes', 8388608),
     );
     this.migrate();
     this.adaptation = new AdaptationStore(this.settings.boolean('adaptation-enabled', true));
@@ -223,7 +239,12 @@ export default class AdrtExtension extends Extension {
     this.firstRun();
     // Swap pairs are keyed by window id, which does not survive a restart.
     this.tiling.pruneSwapPairs(new Set(this.session.windows.keys()));
-    this.history.log('tile', { event: 'enable', ms: Math.round((GLib.get_monotonic_time() - started) / 1000) });
+    this.history.log('tile', {
+      event: 'enable',
+      ms: Math.round((GLib.get_monotonic_time() - started) / 1000),
+      version: EXTENSION_VERSION,
+      buildDirMtimeMs: this.buildDirMtimeMs,
+    });
   }
 
   disable(): void {
@@ -688,6 +709,7 @@ export default class AdrtExtension extends Extension {
       ['indicator-corner-radius', () => this.syncIndicator()],
       ['indicator-animated-pulse', () => this.syncIndicator()],
       ['history-enabled', () => this.history.setEnabled(this.settings.boolean('history-enabled', true))],
+      ['history-max-bytes', () => this.history.setMaxBytes(this.settings.int('history-max-bytes', 8388608))],
       ['undo-stack-size', () => this.undo.setMaxSize(this.settings.int('undo-stack-size', 20))],
       // Changing a shortcut re-registers the bindings so it takes effect at once.
       ...[
@@ -937,6 +959,7 @@ export default class AdrtExtension extends Extension {
       ToggleFullscreen: (id) => this.session.toggleFullscreen(id),
       QuitFocused: () => this.session.closeFocused(),
       SimulateAbove: (id) => this.session.simulateAbove(id),
+      SimulateWorkspaceOrientation: (vertical) => this.session.simulateWorkspaceOrientation(vertical),
       MinimizeWindow: (id) => {
         if (!this.session.windows.has(id)) return false;
         this.host.minimize(id);
@@ -1034,6 +1057,8 @@ export default class AdrtExtension extends Extension {
       mode: this.sessionMachine.state.mode,
       activeWorkspace: this.host.activeWorkspaceId(),
       workspaceLayoutRows: global.workspace_manager.layout_rows,
+      build: { version: EXTENSION_VERSION, dirMtimeMs: this.buildDirMtimeMs },
+      tileAxis: this.session.tileAxis(),
       workspaceAnimating: this.workspaceAnimationActive(),
       focused: this.session.focused()?.id ?? null,
       workspaces: this.session.countWorkspaces(),
