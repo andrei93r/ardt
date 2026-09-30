@@ -1,265 +1,327 @@
-# Adrt v2 — implementation plan (staged)
+# Adrt v2 — staged checklist
 
-Companion to `docs/V2_MODEL.md`, which is the authority for *behaviour*. This file
-is the authority for *order of work* and for what each stage must prove.
+Companion to `docs/V2_MODEL.md` (**authority for behaviour**). This file is the
+**authority for order of work**, and it is the thing to follow: tick the boxes.
+Mirrored for the UI at `~/.opencode/plan/v2-plan.md`.
 
-Status: **awaiting the user's go/no-go.** Nothing in this plan has been started
-beyond the two completed infrastructure items noted in Stage 0.
+Status: **awaiting answers to Q1–Q7 at the bottom.** Items marked `PENDING (Qn)`
+depend on those answers.
 
-Branch: `perf/reduce-work` (rename to `v2` when the work starts).
+## Progress
 
-## Ground rules (every stage)
+| Stage | State | Commit | Evidence |
+| --- | --- | --- | --- |
+| 0 Grounding | not started | — | harness matrix + server script already landed (`fe0b2eb`) |
+| 1 Queue + records | not started | — | — |
+| 2 Model: slots/routing/maximise/emptiness | not started | — | — |
+| 3 User-driven interactions | not started | — | — |
+| 4 App registry + prefs + migration | not started | — | — |
+| 5 Displays + hotplug | not started | — | — |
+| 6 Undo + flags + replay | not started | — | — |
+| 7 Monitor matrix + vertical | not started | — | — |
+| 8 Docs, dead code, perf re-scope | not started | — | — |
 
-1. One stage = one commit series. A stage is done only when its tests pass.
-2. **Existing suites are the no-difference proof** for refactors and the regression
-   set for behaviour changes. A scenario that must change is rewritten *in the same
-   commit* as the behaviour, with the reason in the message.
-3. `DumpState` is **add-only per commit**: a key is removed or repurposed only by the
-   commit that updates every scenario reading it. `src/platform/dbus.ts` declares the
-   full trigger surface (this is repaired once, in Stage 0).
-4. Triggers are honest and **event-confirmed**: `Inject*` = real input through Mutter;
-   a plain command = a real Mutter API; `Simulate*` = extension state only. Every
-   Mutter signal handler writes to the **event journal**, and tests assert the event
-   fired, not just that our function ran.
-5. Core stays pure (`scripts/check-core-purity.sh`): all new planners, the queue, the
-   registry and the display memory are `core/` modules with unit tests.
-6. No policy ever runs inside a Mutter signal handler.
-7. Removals are announced in the CHANGELOG (settings keys, features, scenarios).
+## Rules of engagement
 
-## What retires (and what replaces it)
+- [ ] One stage = one commit series. A stage is done only when every box under it is
+      ticked, including its target runs.
+- [ ] **TDD for behaviour** (stages 2–6): write the failing scenarios **first**, run
+      them, confirm they fail *for the intended reason*, then implement. The test
+      commit precedes the implementation commit. *(PENDING Q3 for strictness.)*
+- [ ] **Bug fixes always get a regression scenario** that fails before and passes
+      after, on both targets.
+- [ ] **Refactors** (0, 1, 6–8) prove no difference by leaving the existing suite
+      unchanged and green.
+- [ ] **Every scenario runs on both targets** through one API: `headless` (VM, fast,
+      isolated, matrix, fault injection) and `session` (a real GNOME instance — the
+      VM's session-like target and/or the laptop). Capability gaps are explicit skips
+      with a recorded reason, never silent. *(PENDING Q1, Q2, Q5.)*
+- [ ] `DumpState` is **add-only per commit**: a key is removed or repurposed only by
+      the commit that updates every scenario reading it.
+- [ ] Triggers are honest: `Inject*` = real input through Mutter; a plain command =
+      a real Mutter API; `Simulate*` = extension state only. Every Mutter signal
+      handler writes to the **event journal**, and tests assert the *event*, not just
+      our function.
+- [ ] `core/` stays pure (`scripts/check-core-purity.sh`); new logic lands there with
+      unit tests.
+- [ ] No policy runs inside a Mutter signal handler — ever. Workspace mutations only
+      from the lane-2 drain.
+- [ ] Deletions (settings, features, scenarios) are listed in the CHANGELOG in the
+      commit that removes them.
 
-| Retires | Because | Replaced by |
-| --- | --- | --- |
-| `A15`, `A52` (adaptation correctness) | adaptation no longer touches geometry | A15 rewritten: a refusing client is accepted and **no minimum is learned** |
-| `A35`, `A43`, `A46`, `A51`, `A53`, `A59`, `A60`, `A62`, `A76` | they test eviction, the old reaping rules, the motion-watch/coherence timers and the spawn budget | A85–A93 (routing, maximise, unmaximise, emptiness, single-workspace) |
-| `A40`, `A45`, `A50` (maximise right / return left / float over a pair) | the machinery is deleted | A88–A91 |
-| `A48`, `S09` (periodic retile) | the timers are replaced by the queue | A84 (burst → one drain), queue perf assertions |
-| `A56`, A66's `sweeps`/`sweepFrameReads` counters | the coherence sweep is gone | A66 re-scoped to the surviving counters |
-| `S05`, `S11` | old minimise/reap and unmaximise-float behaviour | S02/S04/S05/S14 rewritten |
-| `core/budget.ts` + tests, `RetileScheduler`, `FloatStore` | deleted by v2 | the queue, the registry |
-| `adaptation.json`, `behavior.json` | merged into the registry | `state.json` registry with a real migration |
+## Targets and capabilities
+
+| Capability | `headless` (VM) | `session-like` (VM) | `session` (real) |
+| --- | --- | --- | --- |
+| isolated XDG + keyfile settings | yes | yes | no (real state) |
+| multi-worker sharding | yes | limited | no |
+| monitor matrix (≤4, mixed res/portrait) | yes | yes | real monitors only |
+| fault injection (`InjectVerifyFailure`, `SimulateScreens`) | yes | yes | partial |
+| perf counters | yes | yes | yes |
+| real apps (apt/flatpak/snap) | yes | yes | yes |
+| **key + pointer injection** | Stage 0 (in-process Clutter) | Stage 0 (RemoteDesktop) | real input / injection |
+| `ydotool` | **impossible** (no libinput/seat) | impossible | yes |
+| journal of the shell | `shell.log` grep | `journalctl --user` | `journalctl` |
+| hotplug / dock | no (fixtures + `SimulateScreens`) | no | **yes (physical)** |
+| real touchpad gestures, suspend, logind lock, GPU/fractional visuals | no | no | **yes** |
+
+`session-like` launcher (VM): isolated XDG tree + `dbus-run-session -- gnome-session`
+with `gnome-settings-daemon`, `xdg-desktop-portal{,-gnome}`, `polkitd`,
+`gnome-remote-desktop`; input via one long-lived `RemoteDesktop` client (peer-checked;
+`gdbus` cannot inject). *(PENDING Q1/Q2.)*
+
+## Parallel work policy (conflict minimisation)
+
+- [ ] **Serial backbone.** `src/adapters/gnome/extension.ts` is touched by every stage,
+      `host.ts` by seven; stages 1–3 all mutate the tiling/session/record path. Those
+      run **serially**, single writer, one worktree. *(PENDING Q6.)*
+- [ ] **Parallel-safe by construction**: research/verification (read-only agents);
+      **new** `core/` modules with their tests (`queue`, `record`, `placement`,
+      `workspaces`, `identity`, `appregistry`, `displays`, `replay`) — additive files,
+      no overlap; **new** scenario files (`A85…`, `S17…`); docs and the CHANGELOG.
+- [ ] One git worktree per parallel task: `git worktree add /tmp/opencode/wt-<name>
+      -b v2/<name>`; each runs with its own `ADRT_BASE_STATE`; each branch lives under
+      a day and merges in stage order.
+- [ ] Only one branch may touch a hot file at a time; before editing one, check no
+      unmerged branch touched it (ownership table below).
+- [ ] One committer at a time (shared `.git` index): merges and commits are serialised
+      even when work is parallel.
+- [ ] After every merge: run the full `headless` suite before starting the next merge.
+
+Hot files needing serialisation: `extension.ts` (all), `host.ts` (0,1,2,3,5,7,8),
+`session.ts` (0,1,2,4), `tiling.ts` (1,2,3,6), `settings.ts` (0,2,4,5,6), the
+gschema, `dbus.ts` + `platform/dbus.ts` (0,5,6), `core/config.ts` (2,4,6,8),
+`core/types.ts` (1,2,5,7), `core/tiler.ts` (2,3,7), `history.ts` (0,4,6),
+`surface.ts` (1,4,5,7), `prefs.ts` (4,5,6,8), `tests/agent/lib.sh` (0,4,5,6),
+`spec.md`/`README.md` (2,8).
 
 ## Stage 0 — Grounding and event-confirmed triggers (no behaviour change)
 
-Deliverables:
+Failing tests first (test infra, so these are new tests that fail until implemented):
 
-- `docs/platform-notes.md`: the public/private/never table for GNOME 48–50 (laters,
-  geometry, predicates, workspaces, `override_constraints` = Ubuntu-only,
-  `Meta.WindowConfig` = useless for tiles, virtual monitors), plus the documented
-  exception list (the `animateSwitch` override, reading `_swipeTracker`, accepting a
-  client's rect after one retry).
-- `ProbePlatform` D-Bus call: JSON capability report (laters + `BEFORE_REDRAW`,
-  monitor matrix, `layout_rows`, virtual input, RemoteDesktop/EIS), asserted by a
-  scenario.
-- Harness (partly done): `ADRT_MONITORS` matrix with mixed resolutions and portrait,
-  `ADRT_SOFTWARE_GL`, `ADRT_DEVKIT=0`, per-state Wayland socket, stale-lock cleanup,
-  `ADRT_START_TIMEOUT_S`; four virtual monitors verified.
-- Server prep (done): `scripts/setup-headless-server.sh` with its 15-point self-check;
-  add `scripts/server-test.sh` wrapping preflight + nested suite under the printed
-  environment.
-- **Event journal**: a ring buffer `{ seq, source, event, at }` written from the two
-  signal wrappers (`host.connect`, the per-window `on()` helper) and the history
-  funnel; one monotonic sequence, shared with the decision log (the dead `trace`
-  field finally means something); `DumpEvents(n, filter?)`.
-- **Real input injection**: `InjectKey`/`InjectPointerButton`/`InjectPointerMotion`
-  behind `debug-input` (default off, harness-only), in-process via
-  `Clutter.Seat.create_virtual_device()`; the RemoteDesktop path documented as the
-  external alternative (single long-lived client, peer-checked).
-- **Trigger hygiene**: `platform/dbus.ts` repaired to declare the full surface;
-  triggers named per rule 4 above, with old names kept as aliases for one commit.
-- Keybinding scenarios A22/A23/A24 un-skipped using injection; `ydotool` demoted to a
-  live-session fallback.
+- [ ] `A80-platform-probe` — fails today: no `ProbePlatform` call exists.
+- [ ] `A82-event-journal` — fails today: no `DumpEvents`.
+- [ ] `A83-injected-drag-is-event-confirmed` — fails today: real input cannot be
+      injected headlessly.
+- [ ] Un-skip `A22`/`A23`/`A24` by injection — they skip today for lack of a seat.
 
-Tests: `A80-platform-probe`, `A81-four-monitors`, `A82-event-journal` (every trigger
-leaves its expected entry), `A83-injected-drag-is-event-confirmed` (a real grab appears
-in the journal as `grab-op-begin` *and* the window moves), A22/A23/A24 un-skipped.
+Implementation:
 
-Risk: low. Injection is debug-gated; nothing in the tiler changes.
+- [ ] `docs/platform-notes.md`: public/private/never API table (GNOME 48–50) + the
+      documented exception list (`animateSwitch` override, `_swipeTracker` read,
+      accept-client-rect-after-one-retry).
+- [ ] `ProbePlatform` D-Bus: capability JSON (laters + `BEFORE_REDRAW`, monitor
+      matrix size, `layout_rows`, virtual input, RemoteDesktop/EIS).
+- [ ] **Event journal**: ring buffer `{seq, source, event, at}` written from the two
+      signal wrappers (`host.connect`, the per-window `on()` helper) and the history
+      funnel; one monotonic sequence shared with decisions (the dead `trace` field
+      gets a meaning); `DumpEvents(n, filter?)`.
+- [ ] **Input injection** behind `debug-input` (default off, harness only):
+      in-process `Clutter.Seat.create_virtual_device()`; plus a long-lived
+      `RemoteDesktop` client for the `session-like` target.
+- [ ] **Trigger hygiene**: `platform/dbus.ts` declares the whole surface (it is
+      missing every test trigger today); triggers named per the three-kind rule, old
+      names kept as aliases for one commit.
+- [ ] `scripts/server-test.sh`: preflight + suite under the printed server env.
+- [ ] Spec/CHANGELOG notes for the trigger rename.
+
+Target runs: `headless` (A80–A83, A22–A24) · `session-like` (A22–A24 + injection
+smoke) · `session` (A22–A24 unchanged via real input) — *(PENDING Q1/Q2)*.
 
 ## Stage 1 — Queue mechanism and records (behaviour identical)
 
-Deliverables:
+Failing test first:
 
-- `core/queue.ts`: `Map<lane, Map<key, event>>` — lanes 1 feedback, 2 layout,
-  3 maintenance; per-key coalescing; `push/drain/pending/depth`; the clock is a
-  parameter, so it is deterministic and unit-testable.
-- Adapter: one drain scheduled by `global.compositor.get_laters().add(BEFORE_REDRAW,
-  cb)`; later ids tracked and removed on `disable()`; a `mutatingWorkspaces` guard so
-  a workspace mutation can never re-enter the policy.
-- Convert the policy paths to pushes: `scheduleReconcile`, `scheduleRetile`,
-  `addTimeout` users, the motion watch, the coherence sweep, the drag watchdog. The
-  sweep survives only as a lane-3 periodic event with the same effect.
-- `core/record.ts`: `WindowRecord` as a plain object plus predicates
-  (`isTileable`, `isFloating`, `isMinimized`, `isMaximized`, `isSticky`,
-  `isUserMoving`); `TrackedWindow` deleted by strangler.
-- Decision records begin: every layout decision is a value (`{ lane, key, event,
-  input, decision, reason }`), even before the flags exist.
+- [ ] `A84-burst-single-drain` — a burst of frame signals produces exactly one drain
+      and the same final geometry.
 
-Tests: 12+ pure queue tests (per-lane FIFO, coalescing, push-during-drain is queued,
-starvation bound, budget, determinism); predicate tests; `A84-burst-single-drain`; the
-entire existing suite green with only the timers replaced.
+Implementation (parallelisable: the pure module by another agent):
 
-Risk: medium (touches every path) but mechanical; one commit to revert.
+- [ ] `core/queue.ts`: `Map<lane, Map<key, event>>` — lanes 1 feedback / 2 layout /
+      3 maintenance; per-key coalescing; `push/drain/pending/depth`; injected clock.
+- [ ] `core/record.ts`: `WindowRecord` plain object + predicates (`isTileable`,
+      `isFloating`, `isMinimized`, `isMaximized`, `isSticky`, `isUserMoving`);
+      `TrackedWindow` deleted (strangler).
+- [ ] Adapter: one drain on `global.compositor.get_laters().add(BEFORE_REDRAW, cb)`;
+      later ids tracked and removed on `disable()`; `mutatingWorkspaces` guard.
+- [ ] Convert `scheduleReconcile`, `scheduleRetile`, the `addTimeout` users, the motion
+      watch, the coherence sweep and the drag watchdog to pushes/drains.
+- [ ] `core/queue.test.ts` (12+), `core/record.test.ts` (10+).
 
-## Stage 2 — The model, part 1: slots, routing, maximise, emptiness
+Target runs: `headless` (whole existing suite + A84) · `session-like`/`session`
+(S01–S14 unchanged).
 
-Deliverables:
+## Stage 2 — The model: slots, routing, maximise, emptiness
 
-- `core/placement.ts`: `routeNewWindow(state, rec, env) → { workspace, slot }` (right
-  slot; else create-to-right with the window maximized) and
-  `canHostWorkspaces(env)`.
-- `core/workspaces.ts`: `workspaceOps(state, env) → { create, reap }` implementing the
-  single-trailing-spare invariant per screen.
-- Adapter: routing and reaping run **only** from the lane-2 drain.
-- Delete: the `>2` extra branch, `floatOverPair` as eviction, `unmaximizeStaleLone`,
-  `returnFromMaximize`, `previousWorkspaceIdx`, the minimise-slide, the old
-  `pruneEmptyWorkspaces` rules, `EXILE_COOLDOWN_MS`, the spawn budget and
-  `core/budget.ts`, `workspaceOpDepth` (replaced by the queue's guard).
-- Implement §4 (maximise on capable vs single-workspace screens with
-  `maximize-minimizes-others`; unmaximise joins the left slot, deletes the emptied
-  workspace, or minimises-and-moves if the left workspace is full).
-- Implement §7 (single-workspace screens: split while a slot is free, float when
-  full; persistent pair per screen).
-- Floats per §6: keybinding (session-scoped per app), modals/dialogs/popups, overflow.
-- Settings: add `maximize-new-workspace`, `maximize-minimizes-others`; remove
-  `workspace-auto-name`, `workspace-move-grace-seconds`, `respect-user-workspace-move`
-  (announced).
-- Spec/README sections rewritten in the same commits (§7, §9, §16, §35, §21 events).
+Failing scenarios first (all fail on today's build for the intended reason):
 
-Tests: pure placement/workspaces (~28: 1/2/3 windows, capable vs single-workspace,
-landscape/portrait/vertical, per-screen emptiness, invariant violations logged not
-enforced); nested A85 right-slot-and-split, A86 create-right-and-maximize, A87
-nothing-is-evicted, A88 maximise-owns-a-workspace, A89 maximise-in-place-minimises-
-others (single-workspace via `dynamic-workspaces=false` + `num-workspaces=1`), A90
-unmaximise-joins-left-and-deletes, A91 unmaximise-full-left-minimises, A92
-single-workspace-split-then-float, A93 empty-workspace-reaped; the rewritten/retired
-set from the table above; live S02/S04/S05/S14 rewritten, S15 extended.
+- [ ] `A85-right-slot-and-split` · `A86-create-right-and-maximise` ·
+      `A87-nothing-is-evicted` · `A88-maximise-owns-a-workspace` ·
+      `A89-maximise-in-place-minimises-others` (single-workspace via
+      `dynamic-workspaces=false` + `num-workspaces=1`) · `A90-unmaximise-joins-left-and-deletes`
+      · `A91-unmaximise-full-left-minimises` · `A92-single-workspace-split-then-float`
+      · `A93-empty-workspace-reaped` · `A106-no-cross-monitor-exile` (the observed bug).
 
-Risk: highest stage. Mitigation: Stage 1 landed the safety property; the pure planners
-are testable before the adapter is wired; the suites gate every commit.
+Implementation:
+
+- [ ] `core/placement.ts`: `routeNewWindow(state, rec, env) → { workspace, slot }`;
+      `canHostWorkspaces(env)`.
+- [ ] `core/workspaces.ts`: `workspaceOps(state, env) → { create, reap }` with the
+      single-trailing-spare invariant per screen.
+- [ ] Adapter: routing/reaping only from the lane-2 drain; windows on a
+      non-workspace screen are **not** given a workspace index.
+- [ ] Delete: the `>2` extra branch, `floatOverPair`-as-eviction, `unmaximizeStaleLone`,
+      `returnFromMaximize`, `previousWorkspaceIdx`, the minimise-slide, the old
+      `pruneEmptyWorkspaces` rules, `EXILE_COOLDOWN_MS`, the spawn budget +
+      `core/budget.ts`, `workspaceOpDepth`.
+- [ ] Maximise rules (§4), unmaximise rules (§4), single-workspace flow (§7), floats
+      (§6), settings `maximize-new-workspace` + `maximize-minimizes-others`; remove
+      `workspace-auto-name`, `workspace-move-grace-seconds`,
+      `respect-user-workspace-move`.
+- [ ] Rewrite/retire the scenario set (table in the CHANGELOG) and spec/README
+      sections §7, §9, §16, §35, §21 in the same commits.
+- [ ] `core/placement.test.ts` + `core/workspaces.test.ts` (~28 cases).
+
+Target runs: `headless` (new + rewritten) · `session-like` (S02/S04/S05/S14
+rewritten) · `session` — *(PENDING Q5)*.
 
 ## Stage 3 — User-driven interactions
 
-Deliverables: the real grab path for drags (from Stage 0 injection) driving the
-swap-on-perimeter-crossing rule; overview drop semantics (§6: split onto a
-single maximized window, float onto a full pair); a window restored onto a full
-workspace floats; the trailing spare cannot be reordered (revert + `Main.notify`
-toast).
+Failing scenarios first:
 
-Tests: A32/A74/A77 extended to use real grabs; A94 overview-drop-onto-full-floats,
-A95 restore-onto-full-floats, A96 spare-reorder-refused-toast, A97 drop-onto-single-
-maximised-splits; live S13 rewritten.
+- [ ] `A94-overview-drop-onto-full-floats` · `A95-restore-onto-full-floats` ·
+      `A96-spare-reorder-refused-with-toast` · `A97-drop-onto-single-maximised-splits`
+      · `A107-cross-monitor-drag-swaps-or-takes-slot` · `A108-maximised-drag-still-maximised-at-drop`.
 
-Risk: medium — reuses the existing swap-intent code with slot awareness.
+Implementation:
+
+- [ ] Real-grab drag path (Stage 0 injection) driving swap-on-perimeter-crossing, now
+      slot-aware; the slot decision uses the window's rect centre and a re-read frame.
+- [ ] Cross-monitor drops: monitor chosen by Mutter (centre rule); free slot → take
+      it; occupied slot → swap; the model's rules for a maximized drop and for a
+      single-workspace target. *(PENDING Q4.)*
+- [ ] Trailing spare cannot be reordered: revert + `Main.notify` toast.
+- [ ] Overview drop onto a single maximized window splits; onto a full pair floats.
+
+Target runs: `headless` (real grabs) · `session-like` · `session` (S13, real drags).
 
 ## Stage 4 — App registry, prefs, migration
 
-Deliverables: `core/identity.ts` (the fallback chain as a pure decision given the raw
-inputs: desktop id → sandboxed id → gtk id → AppImage ancestor → wm_class →
-session-only, with `.desktop`/suffix normalisation) and `core/appregistry.ts` (entry
-shape, neverTile precedence, ordinal assignment, migration from `adaptation.json` +
-`behavior.json` + `exception-apps`, TTL/pruning rules). Adapter: populate on every
-window; resolve at first frame; re-key on `tracked-windows-changed`/`notify::wm-class`;
-`neverTile` honoured by classification; adaptation kept but **timing-only** (no learned
-minimum ever reaches the tiler); placements recorded per instance id with the durable
-per-app ordinal roll-up; prefs page for the registry replacing the problem-windows
-page; settings migration with a real version bump and `EXTENSION_VERSION` bump.
+Failing scenarios first:
 
-Tests: pure identity/registry (~20: each packaging format incl. AppImage ancestor
-walk, provisional-key re-keying, precedence, migration, ordinals); A15 rewritten (a
-refusing client is accepted, no minimum learned), A98-registry-lists-every-app,
-A99-neverTile-floats, A100-placements-survive-recreation; A63 (text clipping) unchanged.
+- [ ] `A98-registry-lists-every-app` · `A99-neverTile-floats` ·
+      `A100-placements-survive-recreation` · `A15` rewritten (a refusing client is
+      accepted and **no minimum is learned**).
 
-Risk: medium — the identity chain is fiddly, but the facts are already gathered.
+Implementation (pure modules parallelisable):
+
+- [ ] `core/identity.ts`: the fallback chain (desktop id → sandboxed id → gtk id →
+      AppImage ancestor → wm_class → session-only) + normalisation.
+- [ ] `core/appregistry.ts`: entry shape, `neverTile` precedence, ordinal assignment,
+      migration from `adaptation.json` + `behavior.json` + `exception-apps`,
+      pruning/TTL.
+- [ ] Adapter: populate on every window; resolve at first frame; re-key on
+      `tracked-windows-changed`/`notify::wm-class`; adaptation kept **timing-only**;
+      placements per instance id (+ ordinal roll-up).
+- [ ] Prefs page for the registry (replaces the problem-windows page); settings
+      migration + `EXTENSION_VERSION` bump; `tile:` rule modes dropped.
+- [ ] Pure tests: identity per packaging format (incl. AppImage ancestors, Chromium's
+      zeroed environment), re-keying, precedence, migration, ordinals (~20).
+
+Target runs: `headless` · `session-like` (real apt/flatpak/snap apps) · `session`.
 
 ## Stage 5 — Displays and hotplug
 
-Deliverables: `core/displays.ts` (`displayPlan(prev, next, memory, env) → { moves,
-remember, forget }`); per-connector memory in the registry; disconnect routes windows
-to free slots on remaining screens; reconnect **replays the monitor's previous state**
-(slots, minimized, floats; clamped; never floats, never creates); TTL
-(`display-memory-minutes`); `SimulateScreens` hook; `startup-complete` gating so
-enable-time layout waits for settled geometry; primary changes handled, never set.
+Failing scenarios first:
 
-Tests: pure `displayPlan` (12+: disconnect, reconnect, connector swap, resolution
-change, portrait↔landscape, two externals, primary change, expired memory,
-user-moved-meantime, single-workspace screen); nested A88–A91 of the display set
-(decisions asserted from the journal) plus work-area-change and primary-change
-scenarios; live S17-dock-drill (assisted, `ADRT_DOCK_TEST=1`) and S15 extended.
+- [ ] `A109-disconnect-routes` · `A110-reconnect-replays-state` ·
+      `A111-primary-change-keeps-slots` · `A112-workarea-change-replans-one-monitor`.
 
-Risk: medium; the live drill is manual, the policy is pure-tested.
+Implementation:
+
+- [ ] `core/displays.ts`: `displayPlan(prev, next, memory, env) → { moves, remember,
+      forget }`; disconnect routing; reconnect replays the monitor's previous state;
+      TTL; never sets the primary.
+- [ ] Adapter: `monitors-changed`/`workareas-changed` → lane 2;
+      `SimulateScreens` fixture; `startup-complete` gating.
+- [ ] Live `S17-dock-drill` (assisted, `ADRT_DOCK_TEST=1`); S15 extended.
+- [ ] Pure `displayPlan` tests (12+).
+
+Target runs: `headless` (fixtures) · `session-like` · `session` (**physical** hotplug).
 
 ## Stage 6 — Undo, flags, replay
 
-Deliverables: undo holds **one** in-memory change, per instance and configuration
-(workspace, slot, rect, maximized, floating) plus ratios; all instances validated
-before anything moves; a toast when it cannot be reverted; `undo-stack-size` and the
-persisted stack dropped. Flags completed: `debug.*` per subsystem, `record` (journal
-+ decisions into a replayable trace), `perf.*` (queue depth, drain time, apply latency,
-p50/p95), `DumpDecisions`, `DumpEvents`.
+Failing scenarios first:
 
-Tests: pure replay determinism (a recorded trace replayed through the planners gives
-identical decisions); A101-undo-restores-instance-and-config, A102-undo-toasts-when-
-impossible, A103-record-trace-shape, A104-queue-depth-returns-to-zero; live S03 revised.
+- [ ] `A101-undo-restores-instance-and-config` · `A102-undo-toasts-when-impossible` ·
+      `A103-record-trace-shape` · `A104-queue-depth-returns-to-zero`.
 
-Risk: low-medium — replay is the only subtle part.
+Implementation:
+
+- [ ] Undo: one in-memory entry, per instance + configuration + ratios; validate all
+      before applying; toast on impossibility; drop `undo-stack-size` and the
+      persisted stack.
+- [ ] Flags: `debug.*` per subsystem; `record` (journal + decisions → replayable
+      trace); `perf.*` (queue depth, drain time, apply latency, p50/p95);
+      `DumpDecisions`.
+- [ ] `core/replay.ts` + a determinism test (a recorded trace replayed through the
+      planners gives identical decisions).
+
+Target runs: `headless` · `session-like` · `session` (S03).
 
 ## Stage 7 — Monitor matrix and vertical hardening
 
-Deliverables: run everything across the matrix — 1 monitor (landscape, portrait), 2–4
-monitors with mixed resolutions/orientations/order, each monitor primary in turn,
-vertical workspaces (`layout_rows === -1`) combined with portrait, work-area changes
-(panel toggle), hotplug fixtures. Fix what the audit listed: geometry-based
-`moveToAdjacentMonitor`, per-screen split axis, no hard-coded `fallbackScreen`/
-`dummyScreen`, full surface refresh + classification invalidation on `screens-changed`,
-host connector/primary keying by real index, and the scenarios that assume
-`monitors[0]` or `1281x801`.
+Failing scenarios first:
 
-Tests: the matrix as a CI matrix over `ADRT_MONITORS`; A01/A14/A64 made matrix-clean;
-A105-per-screen-axis (portrait and landscape together); work-area and hotplug suites on
-two and four monitors.
+- [ ] `A105-per-screen-axis` (portrait and landscape in one session) plus the matrix
+      runs of A01/A14/A64 rewritten to derive bounds from the actual monitors.
 
-Risk: medium — this is where deferred bugs surface, which is the point.
+Implementation (fix the audit's list):
+
+- [ ] Geometry-based `moveToAdjacentMonitor`; per-screen split axis; remove the
+      hard-coded `fallbackScreen`/`dummyScreen`; full surface refresh +
+      classification invalidation on `screens-changed`; host connector/primary keyed
+      by real index; `monitors[0]`/`1281x801` literals removed from scenarios.
+- [ ] CI matrix over `ADRT_MONITORS` variants (1 landscape, 1 portrait, 2 mixed,
+      4 mixed, each primary in turn) plus `layout_rows=-1`.
+
+Target runs: matrix on `headless` · `session-like` · `session` (real monitors).
 
 ## Stage 8 — Docs, dead code, perf re-scope
 
-Deliverables: `spec.md` + `README.md` superseded sections deleted (§0, §7, §9, §16,
-§17, §21, §22, §24, §31.3, §32.4, §35, §36) with a pointer to `V2_MODEL.md`; metadata
-description and version updated; CHANGELOG/TESTING/TEST_MATRIX; the inventory's dead
-code and dead settings removed; the float representation unification finished. Then
-**re-scope the performance plan**: carry forward Stage 1 (stop rebuilding configs per
-call) and Stage 2 (O(1) host window lookup) onto the new code, delete Stage 3 (sweep
-gating) and the sweep back-off, re-measure with the existing counters, and rewrite
-`PERFORMANCE_PLAN.md` to match.
+- [ ] `spec.md`/`README.md` superseded sections deleted with a pointer to
+      `V2_MODEL.md`; metadata description/version updated.
+- [ ] Dead code and dead settings from the inventory removed; float representation
+      unification finished.
+- [ ] `PERFORMANCE_PLAN.md` re-scoped: carry Stage 1 (config caching) and Stage 2
+      (O(1) host lookup) onto the new code; delete Stage 3 and the sweep back-off;
+      re-measure with the existing counters.
+- [ ] A long mixed run asserting no `invariant_violated` entries in the journal.
 
-Tests: full suite on nested, live and matrix; a long mixed run asserting no
-`invariant_violated` entries in the journal.
+## Open decisions (answering these finalises the plan)
 
-## Test surface summary
-
-| Stage | Pure core (new) | Nested (new) | Live |
-| --- | --- | --- | --- |
-| 0 | probe helpers | A80–A83, A22/A23/A24 un-skipped | — |
-| 1 | queue 12+, predicates 10+ | A84 | S01–S14 |
-| 2 | placement/workspaces 28+ | A85–A93 + rewritten set | S02/S04/S05/S14, S15 |
-| 3 | — | A94–A97, A32/A74/A77 | S13 |
-| 4 | identity/registry 20+ | A98–A100, A15 | S03 |
-| 5 | displays 12+ | display set + hotplug fixtures | S15, S17 dock drill |
-| 6 | replay 6+ | A101–A104 | S03 |
-| 7 | — | matrix runs, A105 | matrix live |
-| 8 | — | full suite | full suite |
-
-Never mark a test passed without running it. Skips are recorded and justified.
-
-## Standing risks
-
-- **Stage 2 is the one that can go wrong.** The empty-workspace invariant is enforced
-  by deletion, which is a workspace mutation — so it must only ever run in the lane-2
-  drain, and the journal must show the create/delete ordering. A regression test
-  (A93) plus the log-only invariant assertion are the tripwire.
-- **The identity chain can never be perfect** for portable apps (an unintegrated
-  AppImage that zeroes its environment degrades to `wmclass:`). It is documented, and
-  the registry shows the source of each key so the user can see what happened.
-- **Hotplug cannot be truly simulated nested** (runtime monitor add/remove is private
-  API); the policy is pure-tested, the decisions are journal-asserted, and the physical
-  behaviour is verified by the opt-in live dock drill.
+- **Q1 — target set.** Three targets (`headless`, `session-like` on the VM, `session`
+  on your laptop) with capability gating, or two (`headless` + `session`) with
+  `session-like` added later?
+- **Q2 — what "real GNOME instance" must mean.** Is a `session-like` VM target
+  (gnome-session + gsd + journal + injection) an acceptable stand-in for everything
+  except the hardware-only classes (real gestures, suspend, physical hotplug, logind
+  lock, GPU/fractional visuals)? Or must every scenario be verifiable on the VM,
+  which is impossible for those classes?
+- **Q3 — TDD strictness.** Test-commit-then-implementation-commit per behaviour stage
+  (I show the scenarios failing first), or tests in the same commit with failure
+  evidence recorded for bug fixes only?
+- **Q4 — cross-monitor drag rules.** Confirm: the monitor is Mutter's choice (rect
+  centre); a free target slot takes the window; an **occupied** target slot swaps the
+  two windows across monitors (my default, consistent with the perimeter rule) or
+  floats the dropped one; a target with no room (single-workspace screen, both slots
+  taken) floats; a maximized window still maximized at drop is unmaximized and tiled
+  in the target slot.
+- **Q5 — per-stage session gate.** Hard: a stage is not done until its scenarios also
+  pass on the real session (you run them when convenient; the checklist shows
+  pending). Soft: the real-session run is required before a *release*, not per stage.
+- **Q6 — parallel code policy.** Parallelise only research, new `core/` modules and
+  new scenario files (worktrees, merged in stage order, hot files single-writer), or
+  single writer throughout?
+- **Q7 — where the checklist lives.** Repo `docs/V2_PLAN.md` as the authority with a
+  UI mirror at `~/.opencode/plan/v2-plan.md`, or the mirror only?
