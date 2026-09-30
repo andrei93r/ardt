@@ -1661,7 +1661,7 @@ would implement live in `src/platform/`.
 ```bash
 npm run lint            # eslint src tests
 npm run test:core       # core unit tests
-npm run test:agent      # 45 scenarios in a nested GNOME Shell
+npm run test:agent      # 49 scenarios in a nested GNOME Shell
 npm run test:all        # lint + build + core + agent
 ```
 

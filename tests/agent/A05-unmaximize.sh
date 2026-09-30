@@ -28,7 +28,11 @@ if any(w["maximized"] for w in d["windows"]):
     sys.exit(1)'; then
   pass "unmaximized window returned to the pair workspace"
 else
-  fail "window did not return to the pair workspace"
+  check_python "unmaximized window returned to the pair workspace" '
+import json, sys
+d = json.load(sys.stdin)
+print("workspaces", {w["id"]: w["workspace"] for w in d["windows"]}, "max", [w["id"] for w in d["windows"] if w["maximized"]], "active", d["activeWorkspace"]); sys.exit(1)
+'
 fi
 
 ensure_clean

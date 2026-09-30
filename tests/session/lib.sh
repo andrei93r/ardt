@@ -200,12 +200,48 @@ close_tests() {
   for id in $(test_ids); do adrt CloseWindow "$id" >/dev/null 2>&1 || true; done
 }
 
+# Every scenario ends by checking the tiling it produced is actually coherent:
+# each tiled test window is inside its work area and no two tiled windows on the
+# same workspace overlap. Floating windows (layer 2) legitimately sit above the
+# tiles and are exempt. This is what stops a stacked/non-tiled result from being
+# reported as a success just because the scenario's own assertion was narrow.
+assert_tiling_coherent() {
+  TEST_IDS="$(test_ids)" poll "the tiling is coherent (no stacked tiles)" '
+import os, json, sys
+ids = set(int(x) for x in os.environ["TEST_IDS"].split())
+d = json.load(sys.stdin)
+area = {m["index"]: (m.get("workArea") or m["geometry"]) for m in d["monitors"]}
+tiles = [w for w in d["windows"]
+         if w["id"] in ids and w.get("tileable") and not w.get("minimized") and w.get("layer") != 2]
+byws = {}
+for w in tiles:
+    byws.setdefault((w["monitor"], w["workspace"]), []).append(w)
+for key, group in byws.items():
+    a = area[key[0]]
+    for w in group:
+        r = w["rect"]
+        if r["x"] < a["x"] - 2 or r["y"] < a["y"] - 2 or r["x"] + r["width"] > a["x"] + a["width"] + 2 or r["y"] + r["height"] > a["y"] + a["height"] + 2:
+            print("out of area", w["id"], r, a); sys.exit(1)
+    for i in range(len(group)):
+        for j in range(i + 1, len(group)):
+            x, y = group[i]["rect"], group[j]["rect"]
+            if x["x"] < y["x"] + y["width"] - 2 and y["x"] < x["x"] + x["width"] - 2 \
+               and x["y"] < y["y"] + y["height"] - 2 and y["y"] < x["y"] + x["height"] - 2:
+                print("stacked", group[i]["id"], x, group[j]["id"], y); sys.exit(1)
+print("coherent:", len(tiles), "tiled windows")
+' 12
+}
+
 session_cleanup() {
   close_tests
+  # The scenarios set per-app split ratios; clear them so a test run does not
+  # leave the user's pairs stuck on a test ratio.
+  adrt ResetLayoutState >/dev/null 2>&1 || true
   adrt ActivateWorkspace "${USER_WS:-0}" >/dev/null 2>&1 || true
 }
 
 summary() {
+  assert_tiling_coherent
   session_cleanup
   echo
   echo "checks=$checks failures=$failures"

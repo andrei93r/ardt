@@ -47,7 +47,7 @@ interface WindowSignal {
 /** Quiet period after the last user frame change before a drop is interpreted. */
 const ADJUST_SETTLE_MS = 150;
 /** Debounce before a global reconcile pass. */
-const RECONCILE_DEBOUNCE_MS = 120;
+const RECONCILE_DEBOUNCE_MS = 60;
 
 export class WindowSession {
   readonly windows = new Map<number, TrackedWindow>();
@@ -188,7 +188,9 @@ export class WindowSession {
     this.interpretDrop(tracked, this.adjustMode(tracked));
     this.dragStartRect = null;
     this.signatures.clearAll();
-    this.scheduleRetile(tracked.surface.workspaceId, 'drag-end');
+    // A drop must take effect at once: the swap flag was just set, so retile
+    // immediately rather than waiting out the reconcile debounce.
+    this.retile(tracked.surface.workspaceId, 'drag-end');
     return true;
   }
 
@@ -327,6 +329,12 @@ export class WindowSession {
 
     const workspaceId = tracked.surface.workspaceId;
     const siblings = this.tileables(workspaceId).filter((t) => t.id !== tracked.id);
+    // A workspace holds at most one pair. A third tileable always gets its own
+    // workspace, however it opened — including an app that opens maximized.
+    if (siblings.length >= 2) {
+      this.moveToNewWorkspace(tracked, false);
+      return;
+    }
     if (compat.isFullyMaximized(tracked.win) && siblings.length > 0) {
       // An app that opens maximized (Nautilus, Files, …) is tiled with the
       // siblings instead of being exiled. A user-initiated maximize still gets
@@ -813,6 +821,9 @@ export class WindowSession {
     const current = tracked.surface.workspaceId;
     tracked.surface.workspaceId = previous;
     tracked.previousWorkspaceIdx = null;
+    // The view follows the window back, exactly as it followed it right when
+    // it was maximized.
+    this.activateWorkspace(previous);
     // §7.3: a workspace that already holds a pair makes the newcomer float.
     // The incoming window is excluded: only two *others* make it a pair.
     if (this.tileables(previous).filter((t) => t.id !== tracked.id).length >= 2) {
@@ -1203,8 +1214,20 @@ export class WindowSession {
       else this.signatures.clearAll();
       return;
     }
-    if (tracked.previousWorkspaceIdx !== null) this.returnFromMaximize(tracked);
-    else this.scheduleRetile(tracked.surface.workspaceId, 'unmaximize');
+    if (tracked.previousWorkspaceIdx !== null) {
+      this.returnFromMaximize(tracked);
+      return;
+    }
+    // Not sent right by the maximize policy (e.g. a lone window that was
+    // maximized on its own workspace). If the workspace to the *left* already
+    // holds a pair, "finish" by returning there — floating on top, not tiled.
+    const left = tracked.surface.workspaceId - 1;
+    if (left >= 0 && this.tileables(left).length >= 2) {
+      tracked.previousWorkspaceIdx = left;
+      this.returnFromMaximize(tracked);
+      return;
+    }
+    this.scheduleRetile(tracked.surface.workspaceId, 'unmaximize');
   }
 
   private onWorkspaceSignal(tracked: TrackedWindow): void {

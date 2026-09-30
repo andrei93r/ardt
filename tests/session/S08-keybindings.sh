@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Generated with AI for personal use.
-# S12 Keybindings on the live session via ydotool.
+# S08 Keybindings on the live session via ydotool.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 session_begin
 

@@ -85,6 +85,17 @@ code changes, MINOR for features, PATCH for fixes.
 - Tiling keeps running while the overview is open; only the border is hidden
   there (and it returns when the overview closes). The overview never pauses
   or suspends the tiler.
+- Unmaximizing a window whose **left** workspace already holds a pair returns it
+  there floating on top of the pair (not tiled, not re-maximized in place), and
+  the view follows it back — finishing never strands you on an empty workspace.
+  Scenario A50.
+- The active-window highlight is suppressed while the focused tile is covered
+  by a floating window, so it can no longer be drawn over a window above it.
+- A drag swap takes effect as soon as the window is dropped instead of waiting
+  out the reconcile debounce (now 60 ms). Scenario A32 asserts the latency.
+- A fresh pair splits 50/50 when the windows' minimum sizes allow it; the live
+  suite clears the ratios it sets so a test run cannot leave your pairs on a
+  test split.
 - Undo restores the split ratios along with the window rects, so the restored
   layout agrees with the plan and no later reconcile re-tiles over it. This was
   an existing inconsistency that the periodic tiling pass made visible.

@@ -101,6 +101,7 @@ export default class AdrtExtension extends Extension {
   private motionTicks = 0;
   private motionRetiles = 0;
   private motionSkip = '';
+  private occluded = false;
   private wsSwitchEvents = 0;
   private motionSuppressions = 0;
   private settingWatchers: (() => void)[] = [];
@@ -444,7 +445,39 @@ export default class AdrtExtension extends Extension {
       this.motionTicks = 0;
       this.periodicRetile();
     }
+    this.refreshOcclusion();
     return GLib.SOURCE_CONTINUE;
+  }
+
+  /**
+   * §23.2: the border must not be drawn over a window that is on top of the
+   * focused one. A floating window (a user-forced float, or a window that
+   * returned onto a full pair) sits above the tiles, so if it covers the
+   * focused tile's centre the highlight is suppressed until it is revealed.
+   */
+  private refreshOcclusion(): void {
+    const focused = this.session.focused();
+    let occluded = false;
+    if (focused !== null && this.session.classify(focused).tileable && !focused.surface.flags.floating) {
+      const r = focused.surface.frame;
+      const cx = r.x + r.width / 2;
+      const cy = r.y + r.height / 2;
+      for (const other of this.session.windows.values()) {
+        if (other.id === focused.id) continue;
+        if (!other.surface.flags.floating || other.surface.flags.minimized) continue;
+        if (other.surface.workspaceId !== focused.surface.workspaceId) continue;
+        const o = other.surface.frame;
+        if (cx >= o.x && cx <= o.x + o.width && cy >= o.y && cy <= o.y + o.height) {
+          occluded = true;
+          break;
+        }
+      }
+    }
+    if (occluded === this.occluded) return;
+    this.occluded = occluded;
+    if (occluded) this.border.suppress('occluded');
+    else this.border.unsuppress('occluded');
+    this.syncIndicator();
   }
 
   /**
@@ -522,6 +555,7 @@ export default class AdrtExtension extends Extension {
       this.border.setFocus(focused.id, focused.surface.frame);
       this.startMotionWatch();
     }
+    this.refreshOcclusion();
     this.syncIndicator();
   }
 
@@ -874,6 +908,7 @@ export default class AdrtExtension extends Extension {
       paused: this.isPaused(),
       mode: this.sessionMachine.state.mode,
       activeWorkspace: this.host.activeWorkspaceId(),
+      focused: this.session.focused()?.id ?? null,
       workspaces: this.session.countWorkspaces(),
       monitors,
       windows,

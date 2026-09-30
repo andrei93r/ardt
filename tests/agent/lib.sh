@@ -263,6 +263,42 @@ keyboard_injection_ready() {
 }
 
 summary() {
+  # A scenario that still has windows must have left them tiled coherently:
+  # no two tiled windows stacked, each inside its work area. Floating windows
+  # (layer 2) legitimately sit above the tiles. This is what stops a
+  # stacked/untiled result from passing on a narrow assertion.
+  if [ "$(count_windows)" -gt 0 ]; then
+    if wait_python 10 '
+import json, sys
+d = json.load(sys.stdin)
+area = {m["index"]: (m.get("workArea") or m["geometry"]) for m in d["monitors"]}
+tiles = [w for w in d["windows"] if w["tileable"] and not w["minimized"] and w["layer"] != 2]
+byws = {}
+for w in tiles:
+    byws.setdefault((w["monitor"], w["workspace"]), []).append(w)
+for key, group in byws.items():
+    a = area[key[0]]
+    for w in group:
+        r = w["rect"]
+        if r["x"] < a["x"] - 2 or r["y"] < a["y"] - 2 or r["x"] + r["width"] > a["x"] + a["width"] + 2 or r["y"] + r["height"] > a["y"] + a["height"] + 2:
+            sys.exit(1)
+    for i in range(len(group)):
+        for j in range(i + 1, len(group)):
+            x, y = group[i]["rect"], group[j]["rect"]
+            if x["x"] < y["x"] + y["width"] - 2 and y["x"] < x["x"] + x["width"] - 2 \
+               and x["y"] < y["y"] + y["height"] - 2 and y["y"] < x["y"] + x["height"] - 2:
+                sys.exit(1)
+sys.exit(0)'; then
+      pass "the tiling is coherent (no stacked tiles)"
+    else
+      check_python "the tiling is coherent (no stacked tiles)" '
+import json, sys
+d = json.load(sys.stdin)
+tiles = [w for w in d["windows"] if w["tileable"] and not w["minimized"] and w["layer"] != 2]
+print("tiled:", [(w["id"], w["rect"]) for w in tiles]); sys.exit(1)
+'
+    fi
+  fi
   echo
   echo "checks=$checks failures=$failures"
   [ "$failures" -eq 0 ]

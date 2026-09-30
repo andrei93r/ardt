@@ -36,6 +36,24 @@ if d["activeWorkspace"] != b[0]["workspace"]:
 print("ws", b[0]["workspace"])
 '
 
+# The maximize must not be undone by Mutter's transient unmaximize while the
+# window settles: the window and the view stay put, still maximized.
+sleep 2
+check_python "the maximize stayed put (no unmaximize oscillation)" '
+import json, sys
+d = json.load(sys.stdin)
+b = [w for w in d["windows"] if w["id"] == int("'"$B"'")]
+if not b:
+    print("window gone"); sys.exit(1)
+if not b[0]["maximized"]:
+    print("no longer maximized"); sys.exit(1)
+if b[0]["workspace"] != int("'"$pair_ws"'") + 1:
+    print("moved back to ws", b[0]["workspace"]); sys.exit(1)
+if d["activeWorkspace"] != b[0]["workspace"]:
+    print("view left the window (active", d["activeWorkspace"], ")"); sys.exit(1)
+print("still on ws", b[0]["workspace"])
+'
+
 # Done: closing it returns you to the left (the pair's workspace) and the
 # workspace it used is reaped.
 before="$(state_expr 'd["workspaces"]')"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Generated with AI for personal use.
-# S15 Focus direction fallback on the live session: no window on the requested
+# S12 Focus direction fallback on the live session: no window on the requested
 # side focuses the other side; no neighbour at all does nothing.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 session_begin

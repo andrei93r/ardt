@@ -10,7 +10,7 @@ scenarios in a nested GNOME Shell, and manual scenarios that need hardware
 npm run lint          # eslint src tests
 npm run build         # tsc
 npm run test:core     # Vitest, plain Node
-npm run test:agent    # 45 scenarios in a nested GNOME Shell
+npm run test:agent    # 49 scenarios in a nested GNOME Shell
 npm run test:all      # all of the above
 ```
 
@@ -28,7 +28,7 @@ ADRT_SESSION_SCENARIOS='S0[12]' bash scripts/session-test.sh
 ```
 
 They open their own test windows, close only those, restore the workspace they
-started on, and fail if the journal logs `[adrt] ERROR`. `S12` injects real
+started on, and fail if the journal logs `[adrt] ERROR`. `S08` injects real
 `Super+…` keys via `ydotool`.
 
 Each scenario runs on a workspace that holds no windows (the lowest-index
@@ -108,6 +108,7 @@ those shortcuts.
 | A46 | Finish focus target | nearest left workspace with windows, else right |
 | A47 | Border vs workspace switch | hidden for the whole gesture/animation, returns after |
 | A48 | Periodic retile | plan re-runs on its own cadence; drift heals |
+| A50 | Unmaximize returns left | left workspace holds a pair → comes back floating on top |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

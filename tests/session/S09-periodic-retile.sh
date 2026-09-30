@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Generated with AI for personal use.
-# S18 The tiling plan is re-run on its own slow cadence, and a window that
+# S09 The tiling plan is re-run on its own slow cadence, and a window that
 # drifted out of the layout is put back without any further user action.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 session_begin
