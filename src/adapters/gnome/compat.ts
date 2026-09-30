@@ -63,7 +63,12 @@ export function isOnAllWorkspaces(win: any): boolean {
 
 /** Compositor actor for a window, or null while unmapping (§26). */
 export function compositorActor(win: any): any | null {
-  return win.get_compositor_private() ?? null;
+  try {
+    const actor = win.get_compositor_private() ?? null;
+    return actor !== null && actorAlive(actor) ? actor : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -92,8 +97,24 @@ export const MOVE_OP: number = Meta.GrabOp.MOVING_UNCONSTRAINED;
 
 /** Stage-space position of an actor, including any moving parent (workspace). */
 export function actorStagePosition(actor: any): [number, number] {
-  const [x, y] = actor.get_transformed_position();
-  return [x, y];
+  // A window actor can be disposed while we still hold a reference (the window
+  // closed); touching it throws. Report "no position" instead of raising.
+  try {
+    const [x, y] = actor.get_transformed_position();
+    return [x, y];
+  } catch {
+    return [Number.NaN, Number.NaN];
+  }
+}
+
+/** Whether a compositor actor reference is still usable (not disposed). */
+export function actorAlive(actor: any): boolean {
+  if (actor === null || actor === undefined) return false;
+  try {
+    return actor.get_stage() !== null;
+  } catch {
+    return false;
+  }
 }
 
 /**

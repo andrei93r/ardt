@@ -391,10 +391,13 @@ export default class AdrtExtension extends Extension {
     const focused = this.session.focused();
     if (focused !== null) {
       const actor = compat.compositorActor(focused.win);
-      if (actor !== null) this.motionActor = actor;
+      if (actor !== null && compat.actorAlive(actor)) this.motionActor = actor;
     }
     const actor = this.motionActor;
-    if (actor === null || actor === undefined) {
+    if (actor === null || actor === undefined || !compat.actorAlive(actor)) {
+      // The cached actor was disposed (its window closed): stop watching
+      // instead of throwing a stack trace on every tick.
+      this.motionActor = null;
       this.stopMotionWatch();
       return GLib.SOURCE_REMOVE;
     }
