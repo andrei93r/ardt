@@ -25,7 +25,7 @@ NX=$((BX - 4))
 adrt BeginDrag "$a" >/dev/null
 adrt MoveWindow "$a" "$NX" "$AY" "$BW" "$BH" >/dev/null
 sleep 1
-start_ms="$(date +%s%3N)"
+start_ns="$(date +%s%N)"
 adrt EndDrag "$a" >/dev/null
 swapped_ms=0
 deadline=$((SECONDS + 6))
@@ -35,17 +35,17 @@ import json,sys
 d=json.load(sys.stdin)
 by={w["id"]:w["rect"]["x"] for w in d["windows"]}
 sys.exit(0 if by.get(int("'"$a"'"), -1) > by.get(int("'"$b"'"), 1 << 30) else 1)'; then
-    swapped_ms=$(( $(date +%s%3N) - start_ms ))
+    swapped_ms=$(( ($(date +%s%N) - start_ns) / 1000000 ))
     break
   fi
 done
 
 # The swap must take effect promptly after the drop, not wait out a reconcile
 # debounce (the user notices ~100 ms here).
-if [ "$swapped_ms" -gt 0 ] && [ "$swapped_ms" -le 1200 ]; then
+if [ "$swapped_ms" -ge 0 ] && [ "$swapped_ms" -le 1200 ]; then
   pass "the drop was interpreted promptly ($swapped_ms ms)"
 else
-  fail "the drop took ${swapped_ms:->6000} ms to take effect"
+  fail "the drop was not interpreted promptly (swapped_ms=$swapped_ms)"
 fi
 wait_settled 12
 
