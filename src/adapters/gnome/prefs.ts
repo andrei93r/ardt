@@ -22,6 +22,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
     window.add(this.rulesPage(settings));
     window.add(this.indicatorPage(settings));
     window.add(this.gesturePage(settings));
+    window.add(this.keysPage(settings));
     window.add(this.problemWindowsPage());
     window.add(this.aboutPage(settings));
   }
@@ -193,6 +194,45 @@ export default class AdrtPreferences extends ExtensionPreferences {
     row.selected = index < 0 ? 0 : index;
     row.connect('notify::selected', () => {
       settings.set_string(key, values[row.selected]);
+    });
+    return row;
+  }
+
+  /** Editable accelerators, one row per action (writes the `kb-*` keys). */
+  private keysPage(settings: any): any {
+    const page = new Adw.PreferencesPage({ title: 'Keys', icon_name: 'input-keyboard-symbolic' });
+    const group = new Adw.PreferencesGroup({
+      title: 'Shortcuts',
+      description: 'Accelerator such as <Super><Alt>h. Leave empty to disable.',
+    });
+    const actions: [string, string][] = [
+      ['kb-focus-left', 'Focus left'],
+      ['kb-focus-right', 'Focus right'],
+      ['kb-focus-up', 'Focus up'],
+      ['kb-focus-down', 'Focus down'],
+      ['kb-focus-next', 'Focus next (cycle)'],
+      ['kb-move-left', 'Move window left'],
+      ['kb-move-right', 'Move window right'],
+      ['kb-move-up', 'Move window up'],
+      ['kb-move-down', 'Move window down'],
+      ['kb-toggle-float', 'Toggle float'],
+      ['kb-toggle-fullscreen', 'Toggle fullscreen'],
+      ['kb-quit', 'Quit window'],
+      ['kb-nudge-left', 'Nudge split left'],
+      ['kb-nudge-right', 'Nudge split right'],
+      ['kb-undo', 'Undo'],
+    ];
+    for (const [key, title] of actions) group.add(this.acceleratorRow(settings, key, title));
+    page.add(group);
+    return page;
+  }
+
+  private acceleratorRow(settings: any, key: string, title: string): any {
+    const row = new Adw.EntryRow({ title });
+    row.text = (settings.get_strv(key) ?? [])[0] ?? '';
+    row.connect('changed', () => {
+      const text = row.text.trim();
+      settings.set_strv(key, text.length > 0 ? [text] : []);
     });
     return row;
   }

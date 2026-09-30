@@ -16,6 +16,8 @@ import { checkPlan } from '../../core/invariants.js';
 import { SignatureCache, planSignature } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
 import { computePlans, pairKey, ratioKey, screenArea } from '../../core/tiler.js';
+import type { FocusDirection } from '../../core/focus.js';
+import { pickDirectional } from '../../core/focus.js';
 import { Layer } from '../../core/types.js';
 import type { Rect, Screen, TilePlan } from '../../core/types.js';
 import type { AdaptationStore, FloatStore } from './adapt.js';
@@ -722,6 +724,26 @@ export class WindowSession {
     const tracked = this.windows.get(id);
     if (tracked === undefined) return false;
     tracked.surface.workspaceId = index;
+    return true;
+  }
+
+  /** Toggle fullscreen on the focused window (customisable keybinding). */
+  toggleFullscreen(id: number): boolean {
+    const tracked = this.windows.get(id);
+    if (tracked === undefined) return false;
+    this.deps.tiling.cancel(id);
+    if (tracked.win.is_fullscreen()) tracked.win.unmake_fullscreen();
+    else tracked.win.make_fullscreen();
+    this.signatures.clearAll();
+    this.scheduleRetile(tracked.surface.workspaceId, 'fullscreen');
+    return true;
+  }
+
+  /** Close the focused window (customisable keybinding). */
+  closeFocused(): boolean {
+    const focused = this.focused();
+    if (focused === null) return false;
+    focused.win.delete(global.get_current_time());
     return true;
   }
 
@@ -1569,30 +1591,19 @@ export class WindowSession {
     this.focusClosest(current, opposite);
   }
 
-  /** Focus the closest tile in `direction`; returns whether one was found. */
+  /**
+   * Focus the nearest tile in `direction`, relative to the focused window.
+   * Only the current workspace is considered: focus never navigates to another
+   * workspace, it only reaches what is on screen (including other monitors).
+   */
   private focusClosest(current: TrackedWindow, direction: string): boolean {
-    const peers = this.tileables(current.surface.workspaceId).filter((t) => t.id !== current.id);
-    const originX = current.surface.frame.x + current.surface.frame.width / 2;
-    const originY = current.surface.frame.y + current.surface.frame.height / 2;
-    let best: TrackedWindow | null = null;
-    let bestDistance = Number.POSITIVE_INFINITY;
-    for (const peer of peers) {
-      const cx = peer.surface.frame.x + peer.surface.frame.width / 2;
-      const cy = peer.surface.frame.y + peer.surface.frame.height / 2;
-      const inDirection =
-        (direction === 'left' && cx < originX) ||
-        (direction === 'right' && cx > originX) ||
-        (direction === 'up' && cy < originY) ||
-        (direction === 'down' && cy > originY);
-      if (!inDirection) continue;
-      const distance = Math.hypot(cx - originX, cy - originY);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        best = peer;
-      }
-    }
-    if (best === null) return false;
-    this.focus(best.id);
+    const r = current.surface.frame;
+    const candidates = this.tileables(current.surface.workspaceId)
+      .filter((t) => t.id !== current.id)
+      .map((t) => ({ id: t.id, rect: t.surface.frame }));
+    const next = pickDirectional(r, candidates, direction as FocusDirection);
+    if (next === null) return false;
+    this.focus(next);
     return true;
   }
 }

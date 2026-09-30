@@ -111,6 +111,14 @@ code changes, MINOR for features, PATCH for fixes.
   a stacked split) even after a window is created or reordered out of id order.
   A pair the user marked *swapped* keeps the stable id order instead, so the
   two rules cannot fight and oscillate.
+- Keyboard-driven focus system: directional focus (left/right/up/down) relative
+  to the selected window, following the layout — side-by-side for a horizontal
+  pair, stacked for a vertical one — and reaching other monitors. It only ever
+  considers the current workspace: focusing never switches or navigates to
+  another workspace. Directional move, fullscreen toggle and quit are bound too.
+  All shortcuts are customisable (`kb-*` keys and the new Keys page in the
+  preferences window); changing one re-registers it immediately. Core covers the
+  directional picker (`pickDirectional`) and A57 covers the bindings.
 - A periodic coherence sweep (every 2 s) guarantees a normal window is never
   left untiled beside a sibling: it compares every window against its plan,
   clears any refusal bookkeeping and re-applies. `coherenceSweeps` is exposed

@@ -76,6 +76,9 @@ const INTERFACE_XML = `
     <method name="SimulateWorkspaceSwitch"><arg type="i" direction="in"/><arg type="b" direction="out"/></method>
     <method name="MoveToWorkspace"><arg type="u" direction="in"/><arg type="i" direction="in"/><arg type="b" direction="out"/></method>
     <method name="MarkWorkspaceCached"><arg type="u" direction="in"/><arg type="i" direction="in"/><arg type="b" direction="out"/></method>
+    <method name="MoveDirection"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
+    <method name="ToggleFullscreen"><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
+    <method name="QuitFocused"><arg type="b" direction="out"/></method>
   </interface>
 </node>`;
 

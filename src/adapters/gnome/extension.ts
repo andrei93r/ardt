@@ -72,6 +72,9 @@ interface ExtraHandlers {
   SimulateWorkspaceSwitch(holdMs: number): boolean;
   MoveToWorkspace(id: number, index: number): boolean;
   MarkWorkspaceCached(id: number, index: number): boolean;
+  MoveDirection(direction: string): boolean;
+  ToggleFullscreen(id: number): boolean;
+  QuitFocused(): boolean;
 }
 
 type Handlers = DbusHandlers & ExtraHandlers;
@@ -650,6 +653,15 @@ export default class AdrtExtension extends Extension {
       ['indicator-animated-pulse', () => this.syncIndicator()],
       ['history-enabled', () => this.history.setEnabled(this.settings.boolean('history-enabled', true))],
       ['undo-stack-size', () => this.undo.setMaxSize(this.settings.int('undo-stack-size', 20))],
+      // Changing a shortcut re-registers the bindings so it takes effect at once.
+      ...[
+        'kb-undo', 'kb-focus-next', 'kb-focus-left', 'kb-focus-right', 'kb-focus-up', 'kb-focus-down',
+        'kb-move-left', 'kb-move-right', 'kb-move-up', 'kb-move-down', 'kb-toggle-float',
+        'kb-toggle-fullscreen', 'kb-quit', 'kb-nudge-left', 'kb-nudge-right',
+      ].map((key): [string, () => void] => [key, () => {
+        this.unregisterKeybindings();
+        this.registerKeybindings();
+      }]),
     ];
     for (const [key, cb] of reactive) this.settingWatchers.push(this.settings.onChanged(key, cb));
   }
@@ -667,6 +679,10 @@ export default class AdrtExtension extends Extension {
       'kb-nudge-right',
       'kb-move-left',
       'kb-move-right',
+      'kb-move-up',
+      'kb-move-down',
+      'kb-toggle-fullscreen',
+      'kb-quit',
     ];
     // §19.1 `keybindings`: "name=accelerator" entries override the defaults.
     for (const entry of this.settings.strv('keybindings')) {
@@ -715,6 +731,18 @@ export default class AdrtExtension extends Extension {
       case 'kb-move-right':
         this.session.moveToward('right');
         break;
+      case 'kb-move-up':
+        this.session.moveToward('up');
+        break;
+      case 'kb-move-down':
+        this.session.moveToward('down');
+        break;
+      case 'kb-toggle-fullscreen':
+        this.toggleFocusedFullscreen();
+        break;
+      case 'kb-quit':
+        this.session.closeFocused();
+        break;
       default:
         break;
     }
@@ -723,6 +751,11 @@ export default class AdrtExtension extends Extension {
   private unregisterKeybindings(): void {
     for (const name of this.keybindings) wm.removeKeybinding(name);
     this.keybindings = [];
+  }
+
+  private toggleFocusedFullscreen(): void {
+    const focused = this.session.focused();
+    if (focused !== null) this.session.toggleFullscreen(focused.id);
   }
 
   private toggleFocusedFloat(): void {
@@ -861,6 +894,12 @@ export default class AdrtExtension extends Extension {
       MoveWindow: (id, x, y, width, height) => this.moveWindow(id, x, y, width, height),
       MoveToWorkspace: (id, index) => this.moveToWorkspace(id, index),
       MarkWorkspaceCached: (id, index) => this.session.markWorkspaceCached(id, index),
+      MoveDirection: (direction) => {
+        this.session.moveToward(direction);
+        return true;
+      },
+      ToggleFullscreen: (id) => this.session.toggleFullscreen(id),
+      QuitFocused: () => this.session.closeFocused(),
       MinimizeWindow: (id) => {
         if (!this.session.windows.has(id)) return false;
         this.host.minimize(id);

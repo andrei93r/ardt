@@ -317,6 +317,26 @@
       <summary>Move tile right</summary>
       <description>Swap with the sibling or move to the right monitor.</description>
     </key>
+    <key name="kb-move-up" type="as">
+      <default>['&lt;Super&gt;&lt;Shift&gt;k']</default>
+      <summary>Move tile up</summary>
+      <description>Swap with the sibling above or move to the upper monitor.</description>
+    </key>
+    <key name="kb-move-down" type="as">
+      <default>['&lt;Super&gt;&lt;Shift&gt;j']</default>
+      <summary>Move tile down</summary>
+      <description>Swap with the sibling below or move to the lower monitor.</description>
+    </key>
+    <key name="kb-toggle-fullscreen" type="as">
+      <default>['&lt;Super&gt;&lt;Alt&gt;f']</default>
+      <summary>Toggle fullscreen</summary>
+      <description>Make the focused window fullscreen or restore it.</description>
+    </key>
+    <key name="kb-quit" type="as">
+      <default>['&lt;Super&gt;&lt;Alt&gt;q']</default>
+      <summary>Quit window</summary>
+      <description>Close the focused window.</description>
+    </key>
 
     <!-- Internal state -->
     <key name="settings-version" type="i">
