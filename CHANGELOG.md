@@ -130,6 +130,11 @@ code changes, MINOR for features, PATCH for fixes.
 - The coherence sweep also enforces the lone-window rule:
   a single tileable window is maximized on its workspace, even if the policy
   missed it (A58).
+- A workspace-switch animation that never finishes leaves its clone group on
+  screen, which is the doubled/frozen view seen in a screenshot. A watchdog now
+  tears it down when it is still running after 1.5 s and no gesture owns it (a
+  live swipe is left alone). `workspaceAnimating` is exposed in `DumpState`;
+  A60 covers it.
 - A periodic coherence sweep (every 2 s) guarantees a normal window is never
   left untiled beside a sibling: it compares every window against its plan,
   clears any refusal bookkeeping and re-applies. `coherenceSweeps` is exposed

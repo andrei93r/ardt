@@ -118,6 +118,7 @@ those shortcuts.
 | A57 | Keyboard focus system | directional focus/move, fullscreen, quit |
 | A58 | Lone window maximized | an untiled lone window is maximized again |
 | A59 | Auto-float pulled back | a lone auto-float returns to the tiling |
+| A60 | Switch watchdog | a stuck workspace animation is torn down |
 
 Extra D-Bus test triggers beyond §40.4: `SpawnWindow`, `CloseWindow`,
 `BeginDrag`, `BeginResize`, `EndDrag`, `MoveWindow`, `MaximizeWindow`,

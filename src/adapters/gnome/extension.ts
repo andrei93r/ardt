@@ -214,6 +214,7 @@ export default class AdrtExtension extends Extension {
     // never be left untiled next to a sibling.
     this.coherenceSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, COHERENCE_SWEEP_MS, () => {
       this.session.coherenceSweep();
+      this.watchWorkspaceAnimation();
       return GLib.SOURCE_CONTINUE;
     });
 
@@ -321,6 +322,38 @@ export default class AdrtExtension extends Extension {
     this.wsSwitchEvents += 1;
     this.suppressForWorkspaceSwitch();
     this.history.log('ws_switch_empty', { from: payload.from, to: payload.to, reason: 'switch' });
+  }
+
+  /**
+   * §23.2: a workspace-switch animation that never finishes leaves its clone
+   * group on screen — the whole desktop appears doubled, frozen mid-slide.
+   * A live swipe is left alone (it finishes when the fingers lift); anything
+   * else still running after a second and a half is torn down.
+   */
+  private switchWatchStart = 0;
+  private watchWorkspaceAnimation(): void {
+    const controller = (wm as { _workspaceAnimation?: any })._workspaceAnimation;
+    if (controller === undefined || controller === null) return;
+    // A live gesture owns the animation: during the swipe `gestureActive` is
+    // still false, so check the tracker's touchpad state too.
+    const touchpadState = controller._swipeTracker?._touchpadGesture?._state;
+    const gesturing = controller.gestureActive === true || touchpadState === 1 || touchpadState === 2;
+    if (controller._switchData == null || gesturing) {
+      this.switchWatchStart = 0;
+      return;
+    }
+    if (this.switchWatchStart === 0) {
+      this.switchWatchStart = Date.now();
+      return;
+    }
+    if (Date.now() - this.switchWatchStart < 1500) return;
+    this.switchWatchStart = 0;
+    try {
+      controller.cancelSwitchAnimation();
+      this.history.log('ws_removed', { reason: 'switch-watchdog' });
+    } catch {
+      /* private API changed: nothing to do */
+    }
   }
 
   /**
@@ -995,6 +1028,7 @@ export default class AdrtExtension extends Extension {
       mode: this.sessionMachine.state.mode,
       activeWorkspace: this.host.activeWorkspaceId(),
       workspaceLayoutRows: global.workspace_manager.layout_rows,
+      workspaceAnimating: this.workspaceAnimationActive(),
       focused: this.session.focused()?.id ?? null,
       workspaces: this.session.countWorkspaces(),
       monitors,
