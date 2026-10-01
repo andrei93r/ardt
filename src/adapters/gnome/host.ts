@@ -12,7 +12,6 @@
 import { layoutManager } from 'resource:///org/gnome/shell/ui/main.js';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
-import Clutter from 'gi://Clutter';
 
 import { Layer } from '../../core/types.js';
 import type { Rect, Screen, Size, Surface } from '../../core/types.js';
@@ -427,7 +426,7 @@ export class GnomeHost implements PlatformHost {
         /* fall through to the seat */
       }
       try {
-        const seat = Clutter.get_default_backend().get_default_seat();
+        const seat = compat.defaultSeat();
         if (typeof seat?.warp_pointer === 'function') {
           seat.warp_pointer(px, py);
           return true;

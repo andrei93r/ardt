@@ -2,7 +2,7 @@
   "uuid": "adrt@adrt.dev",
   "name": "Adrt",
   "description": "Tiles windows into pairs per monitor on each screen's own axis: packed workspaces, explicit floats, one-change undo.",
-  "shell-version": ["48", "49", "50"],
+  "shell-version": ["48", "49", "50", "51"],
   "session-modes": ["user", "unlock-dialog"],
   "settings-schema": "org.gnome.shell.extensions.adrt",
   "version-name": "0.2.0",
