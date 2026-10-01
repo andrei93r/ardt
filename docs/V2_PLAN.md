@@ -14,7 +14,7 @@ ticked and its target runs pass.
 <!-- plan-status -->
 | Stage | State | Done | Commit |
 | --- | --- | --- | --- |
-| 0 Grounding and event-confirmed triggers | in progress | 7/18 | — |
+| 0 Grounding and event-confirmed triggers | in progress | 10/18 | — |
 | 1 Queue mechanism and records | not started | 0/8 | — |
 | 2 The model: slots, routing, maximise, emptiness | not started | 0/18 | — |
 | 3 User-driven interactions | not started | 0/8 | — |
@@ -38,15 +38,15 @@ ticked and its target runs pass.
 Notes (baseline green 2026-10-01: build, lint, 151 core tests, 71 scenarios, 3 skips, no journal errors). Nested harness only tonight; the live session stays yours. No reloads, no logout,
 and the laptop stays awake while a run is in flight.
 
-## Stage 0 — Grounding and event-confirmed triggers (no behaviour change) (7/18)
+## Stage 0 — Grounding and event-confirmed triggers (no behaviour change) (10/18)
 
 **Failing tests first**
 
 - [x] `A80-platform-probe` — fails today: no `ProbePlatform` call exists
-- [ ] `A81-four-monitors` — fails today on the hard-coded `1281x801`/`monitors[0]`
+- [x] `A81-four-monitors` — fails today on the hard-coded `1281x801`/`monitors[0]`
 - [x] `A82-event-journal` — fails today: no `DumpEvents`
 - [x] `A83-injected-drag-is-event-confirmed` — fails today: no injection
-- [ ] `A22`/`A23`/`A24` un-skipped by injection (they skip today for lack of a seat)
+- [x] `A22`/`A23`/`A24` un-skipped by injection (they skip today for lack of a seat)
 
 **Implementation**
 
@@ -65,7 +65,7 @@ and the laptop stays awake while a run is in flight.
 - [ ] **Trigger hygiene**: `platform/dbus.ts` declares the whole surface; names per the
       three-kind rule with one-commit aliases
 - [ ] `scripts/server-test.sh`: preflight + suite under the printed server env
-- [ ] **Debug notification catalogue** (model §21): one checkbox per decision, phrased as
+- [x] **Debug notification catalogue** (model §21): one checkbox per decision, phrased as
       the decision, deduplicated and rate-limited
 - [ ] **Harness**: one shared `tests/lib/common.sh` plus a **manifest** of every scenario
       with its per-target capabilities and recorded skips — no silent skips
