@@ -31,5 +31,6 @@ A109-disconnect-routes
 A110-reconnect-replays-state
 A111-primary-change-keeps-slots-and-the-extra-window-floats
 A122-rescue-side-and-order
+A143-float-restore-exact
 A124-screen-side-rule
 A81-four-monitors

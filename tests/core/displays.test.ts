@@ -211,12 +211,34 @@ describe('disconnect: rescue to the primary (§9)', () => {
     expect(plan.moves).toEqual([
       { id: 2, create: { key: -1, anchor: 10, side: 'right', screen: 0 }, slot: 0, maximize: true, fullscreen: true },
       { id: 3, create: { key: -1, anchor: 10, side: 'right', screen: 0 }, minimize: true },
-      { id: 4, create: { key: -1, anchor: 10, side: 'right', screen: 0 }, float: true },
+      { id: 4, create: { key: -1, anchor: 10, side: 'right', screen: 0 }, float: true, rect: rect(10, 20, 300, 200) },
     ]);
     expect(plan.remember[0]?.windows).toEqual([
       remembered(2, { workspace: 0, slot: 0, maximized: false, fullscreen: true }),
       remembered(3, { workspace: 0, minimized: true }),
       remembered(4, { workspace: 0, floating: true, rect: rect(10, 20, 300, 200) }),
+    ]);
+  });
+
+  it('carries a rescued float frame and stacking into the plan and memory', () => {
+    const prev = state(
+      [primary, right],
+      [
+        ws(10, 0, [win(1), null]),
+        ws(20, 1, [null, null], [], [win(4, { rect: rect(10, 20, 300, 200), z: 5 })]),
+      ],
+      10,
+    );
+    const next = state([primary], [ws(10, 0, [win(1), null]), ws(11, 0)], 10);
+
+    const plan = displayPlan(prev, next, [], NO_TTL);
+
+    // A float's frame and stacking travel with the rescue move, exactly.
+    expect(plan.moves).toEqual([
+      { id: 4, create: { key: -1, anchor: 10, side: 'right', screen: 0 }, float: true, rect: rect(10, 20, 300, 200), z: 5 },
+    ]);
+    expect(plan.remember[0]?.windows).toEqual([
+      remembered(4, { workspace: 0, floating: true, rect: rect(10, 20, 300, 200), z: 5 }),
     ]);
   });
 
@@ -274,10 +296,10 @@ describe('reconnect: replay a remembered connector (§9, decision 66)', () => {
     const plan = displayPlan(prev, next, memory, { now: 500, ttlMs: 30 * 60 * 1000, alive: [2, 3, 4, 5] });
 
     expect(plan.moves).toEqual([
-      { id: 2, workspace: 20, slot: 0 },
-      { id: 3, workspace: 20, slot: 1, fullscreen: true },
-      { id: 4, workspace: 20, minimize: true },
-      { id: 5, workspace: 20, float: true },
+      { id: 2, workspace: 20, screen: 1, slot: 0 },
+      { id: 3, workspace: 20, screen: 1, slot: 1, fullscreen: true },
+      { id: 4, workspace: 20, screen: 1, minimize: true },
+      { id: 5, workspace: 20, screen: 1, float: true, rect: rect(100, 100, 400, 300) },
     ]);
     // Never floats a window that was not floating, never creates.
     expect(plan.moves.some((move) => move.create !== undefined)).toBe(false);
@@ -326,6 +348,20 @@ describe('reconnect: replay a remembered connector (§9, decision 66)', () => {
     const plan = displayPlan(prev, next, memory, { now: 500, ttlMs: 30 * 60 * 1000, alive: [2] });
 
     expect(plan.moves).toEqual([]);
+  });
+
+  it('replays a float to its exact frame and stacking, on the reconnected screen', () => {
+    const memory = [
+      entry('DP-1', 0, [remembered(5, { floating: true, rect: rect(100, 100, 400, 300), z: 7 })]),
+    ];
+
+    const plan = displayPlan(prev, next, memory, { now: 500, ttlMs: 30 * 60 * 1000, alive: [5] });
+
+    // The frame and stacking are carried verbatim; `screen` routes it back onto
+    // the connector that reconnected, never onto the primary.
+    expect(plan.moves).toEqual([
+      { id: 5, workspace: 20, screen: 1, float: true, rect: rect(100, 100, 400, 300), z: 7 },
+    ]);
   });
 });
 

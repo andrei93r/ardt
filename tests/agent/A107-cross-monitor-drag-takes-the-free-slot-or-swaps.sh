@@ -16,11 +16,8 @@ if [ "${monitors:-1}" -lt 2 ]; then
 fi
 
 send_right() {
-  local id="$1"
-  adrt ActivateWindow "$id" >/dev/null
-  sleep 0.5
-  adrt MoveDirection right >/dev/null
-  wait_python 15 "import json,sys; d=json.load(sys.stdin); sys.exit(0 if [w for w in d['windows'] if w['id']==$id and w['monitor']==1] else 1)" || true
+  # The shared helper waits for focus and for the arrival, and retries.
+  move_to_monitor "$1" 1 right
 }
 
 spawn_window >/dev/null
@@ -58,9 +55,6 @@ before_ids="$(list_ids)"
 spawn_window >/dev/null
 wait_count 3 15 || true
 C="$(comm -13 <(echo "$before_ids" | tr ' ' '\n' | sort) <(list_ids | tr ' ' '\n' | sort) | tr -d '\n' | xargs)"
-adrt ActivateWindow "$A" >/dev/null
-sleep 0.5
-adrt MoveDirection right >/dev/null
 send_right "$C"
 wait_settled 20
 

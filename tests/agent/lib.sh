@@ -266,13 +266,25 @@ print(json.dumps(out))
 }
 
 # Move a window to another monitor with a directional move. `MoveDirection` acts
-# on the focused window, so focus is re-derived as a property first; the move
-# itself is confirmed by the caller's own poll, not by a clock here.
+# on the focused window, so focus is re-derived as a property first. `move_to_monitor`
+# is asynchronous and the arrival is confirmed by the drain when the window
+# actually lands, so wait for it here and retry: under the 8-worker smoke a fixed
+# sleep or a single attempt leaves the window on the source screen, which is a
+# setup race, not the behaviour the display scenarios are testing.
 move_to_monitor() {
-  local id="$1" target="$2" direction="${3:-right}"
-  adrt ActivateWindow "$id" >/dev/null
-  wait_python 10 "import json,sys; sys.exit(0 if json.load(sys.stdin).get('focused') == $id else 1)" || true
-  adrt MoveDirection "$direction" >/dev/null
+  local id="$1" target="$2" direction="${3:-right}" tries=0
+  while [ "$tries" -lt 3 ]; do
+    # A settled move is never repeated: re-issuing it would cross back.
+    if [ "$(window_field "$id" monitor)" = "$target" ]; then return 0; fi
+    adrt ActivateWindow "$id" >/dev/null
+    wait_python 10 "import json,sys; sys.exit(0 if json.load(sys.stdin).get('focused') == $id else 1)" || true
+    adrt MoveDirection "$direction" >/dev/null
+    if wait_python 12 "import json,sys; d=json.load(sys.stdin); sys.exit(0 if [w for w in d['windows'] if w['id']==$id and w['monitor']==$target] else 1)"; then
+      return 0
+    fi
+    tries=$((tries + 1))
+  done
+  return 1
 }
 
 # Run a python snippet against the current DumpState; exit non-zero to fail.
