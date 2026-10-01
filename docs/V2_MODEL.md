@@ -570,6 +570,11 @@ happens. All default off, deduplicated and rate-limited per event.
     parks the window minimized left, else right, else in place; and a workspace
     emptied by the last close is reaped with the view moving to the nearest
     workspace that holds windows.
+32. **Enable-time normalisation is two-branch** (§20): a dominating window (at least
+    three quarters of the work area) is maximized with every other managed window on
+    its workspace minimized; otherwise the **two** largest by visible surface become
+    the pair and the rest are minimized. A single window is maximized, and fullscreen
+    windows and floats are left untouched at enable.
 33. **Slots are held only while a window is visible** (§5): minimizing releases the
     slot, a new window takes it and splits with the visible partner, and restoring
     with no free slot floats. This replaces the earlier "a minimized window still
@@ -581,11 +586,11 @@ happens. All default off, deduplicated and rate-limited per event.
 35. **Both the unmaximize park and the alone-minimized relocation target a
     neighbour that holds windows** (§4) — a free slot is not required, and an empty
     neighbour is never a target, since the window would be alone there.
-32. **Enable-time normalisation is two-branch** (§20): a dominating window (at least
-    three quarters of the work area) is maximized with every other managed window on
-    its workspace minimized; otherwise the **two** largest by visible surface become
-    the pair and the rest are minimized. A single window is maximized, and fullscreen
-    windows and floats are left untouched at enable.
+
+36. **A disconnect rescue preserves the vanished screen's arrangement** (the test
+    scenario confirmed it): its windows come back as workspaces inserted immediately
+    right of the current one, keeping their order and pairing, and never scavenge free
+    slots on workspaces that were not theirs; the view does not move.
 
 ## Deliberate non-goals
 
