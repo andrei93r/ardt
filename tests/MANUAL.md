@@ -289,6 +289,67 @@ Collect these for any item that did not behave as expected:
 A single mismatch is a release blocker; the hardware-only sections are the
 acceptance gate for the release.
 
+---
+
+## 12. Fast smoke check (the one-configuration "is the build sane" signal)
+
+The full nested suite is the release gate; it now runs in ~80 s and must stay
+green. For day-to-day work there is a separate, curated smoke run:
+
+```bash
+npm run test:smoke            # == ADRT_SMOKE=1 bash scripts/agent-test.sh
+ADRT_SMOKE=1 ADRT_SMOKE_WORKERS=6 bash scripts/agent-test.sh
+ADRT_SMOKE=1 ADRT_SMOKE_LIST=/tmp/my.list bash scripts/agent-test.sh
+```
+
+`ADRT_SMOKE=1` replaces the `A[0-9][0-9]*` scenario glob with the ordered list
+in `tests/agent/smoke.list`, in **one configuration only** — a single 1280x800
+screen with dynamic workspaces (the harness default). It runs the same
+scenarios, so no assertion is weakened and there is no second copy of a feature
+test to rot: the smoke set is a subset of the maintained suite. With the flag
+absent the normal path is unchanged (`npm run test:agent` still runs all 123).
+`ADRT_SMOKE_WORKERS` overrides the smoke default of 10 nested Shells;
+`ADRT_WORKERS` wins over both. Concurrent runs are still serialised by the
+shared worker budget, so run one suite at a time.
+
+**It cannot silently drop a scenario.** Every id in `smoke.list` must resolve to
+a real `tests/agent/<id>.sh`; a renamed or deleted scenario aborts the run before
+the preflight and names the offending entry on stderr. That is what keeps the
+list honest as scenarios move.
+
+The list covers every feature area with at least one scenario each (a couple of
+areas get two or three); the mapping is kept as comments in
+`tests/agent/smoke.list` and summarised here:
+
+| area | scenario(s) |
+| --- | --- |
+| tiling / split / axis | `A01-pair-tiling`, `A64-vertical-workspaces` |
+| arrival routing (third window gets its own workspace) | `A02-third-window` |
+| focus (cycle + direction) | `A121-focus-cycle-order`, `A57-keyboard-focus-system` |
+| move (toward, onto a full workspace → float) | `A127-swap-is-invertible`, `A54-overview-move-onto-pair` |
+| resize ratio + undo | `A09-undo` |
+| swap (invertible) + undo | `A127-swap-is-invertible`, `A101-undo-restores-instance-and-config` |
+| maximize / unmaximize ladders | `A04-maximized-window`, `A90-unmaximise-joins-pair-forming-left`, `A91-unmaximise-parks-when-no-neighbour-can-pair` |
+| fullscreen | `A57-keyboard-focus-system`, `A131-fullscreen-hides-highlight` |
+| float / above-floats | `A11-float-toggle`, `A61-above-floats` |
+| minimize / reap | `A35-minimize-removes-workspace` |
+| lone-window maximize | `A58-lone-window-maximized` |
+| workspaces (create / reorder / move / sticky) | `A96-reorder-is-honoured-and-an-empty-workspace-is-pruned`, `A117-arrival-side-rule`, `A72-sticky-window-untiled` |
+| overview (coherence + drop-is-a-move) | `A56-coherence-sweep`, `A74-overview-drop-is-a-move` |
+| registry / identity | `A98-registry-lists-every-app` |
+| displays (plan / rescue / replay) | `A112-workarea-change-replans-one-monitor` |
+| session modes (pause/lock hide the border) | `A13-lock-screen` |
+| highlight (occlusion, fullscreen) | `A130-occlusion-hides-highlight`, `A131-fullscreen-hides-highlight` |
+| undo (swap, un-float) | `A101-undo-restores-instance-and-config` |
+| flags / trace / `DumpState` shape | `A103-record-trace-shape` |
+
+Legitimately out of scope for a one-configuration smoke, and therefore left to
+the full suite: multi-monitor routing, cross-screen drags, disconnect rescue and
+reconnect replay (`A105`–`A111`, `A122`, `A124`), the four-monitor matrix
+(`A81`), and the opt-in long churn run (`A125`). A cursor-follows-focus line is
+deliberately not listed yet: that feature lives on the unmerged
+`v2/cursor-centre` branch, so the smoke stays valid before and after it lands.
+
 > Note on versions: `metadata.json` carries `version-name` **0.2.0** while
 > `DumpState.build.version` is the internal module build (`1`), and `package.json`
 > still says `0.1.0`. Use the `dirMtimeMs` to match the running module to the
