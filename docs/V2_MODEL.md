@@ -87,9 +87,13 @@ Any workspace emptied by the move is reaped (§5).
 
 **Minimize** never navigates the view and never moves another window. The window
 keeps its slot, and while its partner is minimized the visible window fills the
-monitor; restoring re-splits. If a workspace would be left holding only minimized
-windows, that window is moved to the **left** workspace, or, if it cannot go left, to
-the **right** one, so the workspace can be reaped.
+monitor; restoring re-splits. If a workspace would be left holding **only minimized
+windows**, its occupant is relocated in this order: the **left** workspace if it has a
+free slot, otherwise the **right** workspace if it has one, and otherwise the window
+**stays where it is** and the workspace is allowed to persist holding only minimized
+windows. That last branch is the one case where a workspace that looks empty is legal
+(there is nowhere to put its window), and it is the normal case on a
+single-workspace-capable screen, which has no neighbours at all.
 
 **A lone managed window is always maximized** — there is no un-maximized lone window
 anywhere except §7's single-workspace-capable pair rule.
@@ -97,8 +101,9 @@ anywhere except §7's single-workspace-capable pair rule.
 ## 5. Emptiness and packing
 
 - Every workspace holds a **maximized single** or a **full pair** — counting
-  occupancy, so a minimized window still counts. The only empty workspace is the
-  **spare**.
+  occupancy, so a minimized window still counts. The only *empty* workspace is the
+  **spare**; the only workspace that may *look* empty is one whose single window is
+  minimized with no neighbour able to take it (§4).
 - **Reaping is a property, not an event**: at every drain, any empty workspace other
   than the spare is reaped, whoever emptied it — a close, a move, a drop, a routing,
   a reconnect. A workspace holding any window, including one on another screen, is not
@@ -440,6 +445,7 @@ happens. All default off, deduplicated and rate-limited per event.
 | *"No room on this screen → floating"* | single-workspace / fixed-workspace overflow |
 | *"Maximizing → moving it to its own workspace"* | §4 |
 | *"Minimizing the other windows on this screen"* | §4, single-workspace maximise |
+| *"Only a minimized window left → moved to the left workspace"* (or *… to the right one*, or *… nowhere to move it, the workspace stays*) | §4 |
 | *"Empty workspace reaped"* | §5 |
 | *"Undo is no longer possible: the window is gone"* | §13 (also a user-facing toast) |
 | *"Highlight suppressed: <reason>"* / *"Highlight released"* | §11 |
@@ -530,4 +536,8 @@ happens. All default off, deduplicated and rate-limited per event.
     the rest minimized, per workspace.
 29. **Debug notifications** are per-decision checkboxes phrased as the decision (§21),
     and the journal is append-only per day with 30-day retention (§22).
+30. **A minimized window left alone** is relocated left, else right, else left where it
+    is — and the workspace is then allowed to persist holding only minimized windows,
+    because there is nowhere to put it. This is the second exception to §5's packing
+    rule (the first being the spare).
 
