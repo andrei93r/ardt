@@ -208,6 +208,8 @@ gschema, `dbus.ts` + `platform/dbus.ts` (0,5,6), `core/config.ts` (2,4,6,8),
 Failing tests first (test infra, so these are new tests that fail until implemented):
 
 - [ ] `A80-platform-probe` — fails today: no `ProbePlatform` call exists.
+- [ ] `A81-four-monitors` — the four-screen matrix of the basic placements; fails today
+      on the hard-coded `1281x801`/`monitors[0]` literals.
 - [ ] `A82-event-journal` — fails today: no `DumpEvents`.
 - [ ] `A83-injected-drag-is-event-confirmed` — fails today: real input cannot be
       injected headlessly.
@@ -237,6 +239,13 @@ Implementation:
 - [ ] **Journal format**: append-only, one file per day, 30-day retention, numbered
       parts rotated by size, in-memory tail for `DumpEvents`, monotonic sequence shared
       with the decision log.
+- [ ] **Harness**: one shared `tests/lib/common.sh` for both runners, plus a **manifest**
+      listing every scenario with its per-target capabilities and its recorded skips —
+      no silent skips anywhere.
+- [ ] **`DumpState` instrumentation**: per window the `slot`, `screenAxis`, `gaps`, the
+      suppression set and `focusedReason`; `SimulateScreens` + `SimulateWorkArea`;
+      `DumpDecisions`; a tiny PyGObject refusing test client and a notification capture
+      (so the toast policy is testable).
 - [ ] Spec/CHANGELOG notes for the trigger rename.
 
 Target runs: `headless` (A80–A83, A22–A24) · `session-like` (A22–A24 + injection
@@ -261,6 +270,9 @@ Implementation (parallelisable: the pure module by another agent):
 - [ ] Convert `scheduleReconcile`, `scheduleRetile`, the `addTimeout` users, the motion
       watch, the coherence sweep and the drag watchdog to pushes/drains.
 - [ ] `core/queue.test.ts` (12+), `core/record.test.ts` (10+).
+- [ ] **Config caching** (the performance prerequisite carried from
+      `PERFORMANCE_PLAN.md`): one resolved settings snapshot per drain, invalidated on
+      change.
 
 Target runs: `headless` (whole existing suite + A84) · `session-like`/`session`
 (S01–S14 unchanged).
@@ -275,12 +287,24 @@ Failing scenarios first (all fail on today's build for the intended reason):
       `dynamic-workspaces=false` + `num-workspaces=1`) · `A90-unmaximise-joins-pair-forming-left`
       · `A91-unmaximise-parks-when-no-neighbour-can-pair` (both neighbours full or
       empty) · `A92-single-workspace-split-then-float`
-      · `A93-empty-workspace-reaped` · `A106-no-cross-monitor-exile` (the observed bug).
+      · `A93-empty-workspace-reaped` · `A106-no-cross-monitor-exile` (the observed bug)
+      · `A113-trigger-wins-and-trades` · `A114-fullscreen-in-place-minimises` ·
+      `A115-look-empty-workspace-is-free` · `A116-escape-clamped-own-workspace` ·
+      `A117-arrival-side-rule` (across screens and workspaces) ·
+      `A118-nothing-happened-toasts`.
 
 Implementation:
 
 - [ ] `core/placement.ts`: `routeNewWindow(state, rec, env) → { workspace, slot }`;
-      `canHostWorkspaces(env)`.
+      `canHostWorkspaces(env)` (the screen's state read from GNOME — dynamic, one
+      workspace, or static — never from internal vs external).
+- [ ] The **arrival rules** (§3): slot 1 by default; the slot on the side it came from
+      for a screen or workspace move; a lone arrival still maximizes.
+- [ ] The **view policy** (§3): the view follows the app the action is about, and only
+      while that app is on the viewed workspace; a window that merely reacts never moves
+      it.
+- [ ] The **toast policy** (§21): a request that changes nothing toasts with its reason;
+      a direction with nothing stays silent.
 - [ ] `core/workspaces.ts`: `workspaceOps(state, env) → { create, reap }` with the
       single-trailing-spare invariant per screen.
 - [ ] Adapter: routing/reaping only from the lane-2 drain; windows on a
@@ -293,6 +317,8 @@ Implementation:
       (§6); remove
       `workspace-auto-name`, `workspace-move-grace-seconds`,
       `respect-user-workspace-move`.
+- [ ] Keybindings (§17) and the gschema they need: the workspace-move shortcuts, the
+      float key, nudge on both axes, `follow-moved-window`.
 - [ ] Rewrite/retire the scenario set (table in the CHANGELOG) and spec/README
       sections §7, §9, §16, §35, §21 in the same commits.
 - [ ] `core/placement.test.ts` + `core/workspaces.test.ts` (~28 cases).
@@ -312,18 +338,29 @@ rewritten) · `session`.
 Failing scenarios first:
 
 - [ ] `A94-overview-drop-onto-full-floats` · `A95-restore-onto-full-floats` ·
-      `A96-spare-reorder-refused-with-toast` · `A97-drop-onto-single-maximised-splits`
-      · `A107-cross-monitor-drag-swaps-or-takes-slot` · `A108-maximised-drag-still-maximised-at-drop`.
+      `A96-reorder-is-honoured-and-an-empty-workspace-is-pruned` ·
+      `A97-drop-onto-single-maximised-splits`
+      · `A107-cross-monitor-drag-takes-the-free-slot-or-swaps` ·
+      `A108-maximised-drag-still-maximised-at-drop` ·
+      `A119-float-key-leaves-in-place` · `A120-dialog-centred-and-raised` ·
+      `A121-focus-cycle-order`.
 
 Implementation:
 
 - [ ] Real-grab drag path (Stage 0 injection) driving swap-on-perimeter-crossing, now
       slot-aware; the slot decision uses the window's rect centre and a re-read frame.
-- [ ] Cross-monitor drops: monitor chosen by Mutter (centre rule); free slot → take
-      it; occupied slot → swap; the model's rules for a maximized drop and for a
-      single-workspace target.
-- [ ] Trailing spare cannot be reordered: revert + `Main.notify` toast.
-- [ ] Overview drop onto a single maximized window splits; onto a full pair floats.
+- [ ] Cross-monitor drops: monitor chosen by Mutter (centre rule); **a free slot wins**
+      (on the side it came from), a crossing swaps only when there is no free slot, no
+      room floats it there; a maximized window is un-maximized at the drop.
+- [ ] A user reorder is **honoured exactly** — no correction, no tagging, no toast;
+      reaping is a property, so an empty workspace is pruned wherever it sits and the
+      spare is never removed.
+- [ ] Overview drop onto a single maximized window splits; onto a full pair floats;
+      onto the empty trailing workspace it maximizes there and GNOME adds a new one.
+- [ ] The **focus cycle** and the float cycle order (managed in slot order, then floats
+      left to right, perfect overlaps by stacking order; minimized skipped).
+- [ ] Animation pass (§18): clone-free slides, no doubles, the reference
+      maximise → workspace-switch behaviour.
 
 Target runs: `headless` (real grabs) · `session-like` · `session` (S13, real drags).
 
@@ -347,13 +384,16 @@ Implementation (pure modules parallelisable):
       placements per instance id (+ ordinal roll-up).
 - [ ] Prefs page for the registry (replaces the problem-windows page); settings
       migration + `EXTENSION_VERSION` bump; `tile:` rule modes dropped.
+- [ ] **State migration**: `BUNDLE_VERSION` 3→4 with a reader for the old bundle,
+      copy-verify-delete, no destructive downgrade.
+- [ ] Disabling leaves every window exactly as it is; enabling normalises (§20).
 - [ ] **New settings**: `follow-moved-window` (default on), `float-pins-workspace`
       (default on), per-side gaps plus the between-window gap, `disable-animations`
       extended to switch off GNOME's animations too, and the `debug` notification
       checkboxes; `undo-stack-size`, `workspace-auto-name`,
       `workspace-move-grace-seconds` and `respect-user-workspace-move` are removed.
 - [ ] **Enable-time normalisation** (§20): per workspace, three branches — a single
-      window maximized; a window covering at least three quarters of the work area
+      window maximized; a window covering at least 70% of the work area
       maximized with the rest minimized; otherwise the top two by visible surface
       paired and the rest minimized — on every enable including mid-session, with
       floats and fullscreen windows untouched.
@@ -367,7 +407,8 @@ Target runs: `headless` · `session-like` (real apt/flatpak/snap apps) · `sessi
 Failing scenarios first:
 
 - [ ] `A109-disconnect-routes` · `A110-reconnect-replays-state` ·
-      `A111-primary-change-keeps-slots` · `A112-workarea-change-replans-one-monitor`.
+      `A111-primary-change-keeps-slots-and-the-extra-window-floats` ·
+      `A112-workarea-change-replans-one-monitor` · `A122-rescue-side-and-order`.
 
 Implementation:
 
@@ -376,6 +417,10 @@ Implementation:
       TTL; never sets the primary.
 - [ ] Adapter: `monitors-changed`/`workareas-changed` → lane 2;
       `SimulateScreens` fixture; `startup-complete` gating.
+- [ ] Rescue rules (§9): as many workspaces as needed, inserted on the physical side the
+      screen was on; a reconnect replays the arrangement; a screen without workspaces
+      ignores a workspace switch, silently; the primary and the screen classes are read
+      from GNOME, never inferred from the connector.
 - [ ] Live `S17-dock-drill` (assisted, `ADRT_DOCK_TEST=1`); S15 extended.
 - [ ] Pure `displayPlan` tests (12+).
 
@@ -386,13 +431,17 @@ Target runs: `headless` (fixtures) · `session-like` · `session` (**physical** 
 Failing scenarios first:
 
 - [ ] `A101-undo-restores-instance-and-config` · `A102-undo-toasts-when-impossible` ·
-      `A103-record-trace-shape` · `A104-queue-depth-returns-to-zero`.
+      `A103-record-trace-shape` · `A104-queue-depth-returns-to-zero` ·
+      `A123-session-modes`.
 
 Implementation:
 
-- [ ] Undo: one in-memory entry, per instance + configuration + ratios; validate all
-      before applying; toast on impossibility; drop `undo-stack-size` and the
-      persisted stack.
+- [ ] Undo: one in-memory entry, per instance + configuration + ratios — including a
+      **swap** (two instances) and an **un-float** (the float flag); validate all before
+      applying; toast on impossibility; drop `undo-stack-size` and the persisted stack;
+      a routed new window is not an undoable change.
+- [ ] Session modes (§19): lock/unlock pauses new work, lets the queue finish, then
+      retiles once; sharing keeps tiling and hides the highlight; suspend is lock.
 - [ ] Flags: `debug.*` per subsystem; `record` (journal + decisions → replayable
       trace); `perf.*` (queue depth, drain time, apply latency, p50/p95);
       `DumpDecisions`.
@@ -416,6 +465,8 @@ Implementation (fix the audit's list):
       by real index; `monitors[0]`/`1281x801` literals removed from scenarios.
 - [ ] CI matrix over `ADRT_MONITORS` variants (1 landscape, 1 portrait, 2 mixed,
       4 mixed, each primary in turn) plus `layout_rows=-1`.
+- [ ] The pair axis under `layout_rows=-1` (stacked), the focus cycle order, the float
+      cycle order, and the animation pass on real hardware.
 
 Target runs: matrix on `headless` · `session-like` · `session` (real monitors).
 
