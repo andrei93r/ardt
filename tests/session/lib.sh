@@ -242,6 +242,16 @@ print("coherent:", len(tiles), "tiled windows")
 
 session_cleanup() {
   close_tests
+  # Wait for the test windows to actually disappear before the next scenario
+  # starts. `test_ids` is derived from the window list, so a lingering window (a
+  # slow-closing Chrome, a reaped workspace) would be claimed by the *next*
+  # scenario and closed mid-test — which shows up as "window gone" and is the
+  # intermittent failure seen when the scenarios run back to back.
+  local deadline=$((SECONDS + 15))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    [ "$(count_tests)" -eq 0 ] && break
+    sleep 0.5
+  done
   # Note: the scenarios that set a split ratio undo it themselves; do NOT call
   # ResetLayoutState here, it would wipe the ratios the user set by hand.
   adrt ActivateWorkspace "${USER_WS:-0}" >/dev/null 2>&1 || true
