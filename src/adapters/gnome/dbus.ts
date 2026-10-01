@@ -126,6 +126,21 @@ const INTERFACE_XML = `
     <method name="InjectKey">
       <arg type="i" direction="in"/><arg type="b" direction="in"/><arg type="b" direction="out"/>
     </method>
+
+    <!--
+      Test-only settings writers (section 40.4). An external gsettings set is
+      invisible to the running Shell when the host's per-user inotify budget is
+      exhausted (the keyfile backend cannot create its file monitor); writing
+      through this process makes the in-process changed signal fire exactly as
+      a settings-daemon change would. Gated on ADRT_TEST_TRIGGERS=1.
+    -->
+    <method name="SetSetting">
+      <arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="b" direction="out"/>
+    </method>
+    <method name="SetSchemaSetting">
+      <arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="s" direction="in"/>
+      <arg type="b" direction="out"/>
+    </method>
   </interface>
 </node>`;
 

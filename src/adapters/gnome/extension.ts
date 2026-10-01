@@ -1764,6 +1764,45 @@ export default class AdrtExtension extends Extension {
 
   // --------------------------------------------------------------- D-Bus
 
+  /**
+   * §40.4 test-only settings writer. The nested harness runs the keyfile
+   * GSettings backend, whose file monitor cannot be created when the host's
+   * per-user inotify budget is exhausted; an external `gsettings set` is then
+   * invisible to the running Shell and every settings-dependent scenario stalls.
+   * Writing through a `Gio.Settings` in *this* process updates the shared
+   * backend, so the reactive `changed::` handlers fire exactly as they would
+   * for a real settings-daemon change. Gated on `ADRT_TEST_TRIGGERS=1` so a
+   * production session can never reach it.
+   */
+  private writeSetting(schema: string, key: string, value: string): boolean {
+    if (GLib.getenv('ADRT_TEST_TRIGGERS') !== '1') return false;
+    try {
+      // The extension's own schema is not in the Shell's default source, so it
+      // must go through the settings instance GNOME Shell handed us.
+      if (schema === 'org.gnome.shell.extensions.adrt') {
+        if (!this.settings.writeSerialized(key, value)) return false;
+      } else {
+        const store = new Gio.Settings({ schema_id: schema });
+        const type = store.get_default_value(key)?.get_type_string();
+        if (type === undefined || type === null) return false;
+        let parsed: any;
+        try {
+          parsed = GLib.Variant.parse(new GLib.VariantType(type), value, null, null);
+        } catch {
+          if (type !== 's') return false;
+          parsed = new GLib.Variant('s', value);
+        }
+        store.set_value(key, parsed);
+      }
+      // Flush so a subsequent `gsettings get` from the harness sees the write.
+      Gio.Settings.sync();
+      return true;
+    } catch (error) {
+      this.reportError('set-setting', error);
+      return false;
+    }
+  }
+
   private handlers(): Handlers {
     return {
       DumpState: () => this.dumpState(),
@@ -1883,6 +1922,8 @@ export default class AdrtExtension extends Extension {
         this.animator.stopRecording();
         return true;
       },
+      SetSetting: (key, value) => this.writeSetting('org.gnome.shell.extensions.adrt', key, value),
+      SetSchemaSetting: (schema, key, value) => this.writeSetting(schema, key, value),
       MinimizeWindow: (id) => {
         if (!this.session.windows.has(id)) return false;
         this.host.minimize(id);

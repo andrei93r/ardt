@@ -128,6 +128,29 @@ export class GnomeSettings implements SettingsStore {
     return this.configCache;
   }
 
+  /**
+   * Test-only: write a key from its serialized GVariant text, through the
+   * extension's own settings instance (the bare schema is not in the Shell's
+   * default source, so a fresh `Gio.Settings` cannot see it). Used by the D-Bus
+   * SetSetting trigger when the host's inotify budget is spent and an external
+   * `gsettings set` cannot reach the running Shell. Mirrors `gsettings set`'s
+   * tolerance of a bare word for a string key.
+   */
+  writeSerialized(key: string, text: string): boolean {
+    const type = this.settings.get_default_value(key)?.get_type_string();
+    if (typeof type !== 'string') return false;
+    let parsed: unknown;
+    try {
+      parsed = GLib.Variant.parse(new GLib.VariantType(type), text, null, null);
+    } catch {
+      if (type !== 's') return false;
+      parsed = new GLib.Variant('s', text);
+    }
+    this.settings.set_value(key, parsed);
+    this.invalidateConfig();
+    return true;
+  }
+
   /** Drop the memoised config: any setting read may have changed. */
   invalidateConfig(): void {
     this.configCache = null;

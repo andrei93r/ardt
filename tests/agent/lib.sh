@@ -354,12 +354,27 @@ ext_dir() {
 
 # Set a key on another schema (e.g. org.gnome.desktop.interface) in the same
 # isolated keyfile store the nested Shell reads.
+# Write a setting through the Shell's own process (SetSchemaSetting) so the
+# in-process `changed` signal fires. The nested harness runs the keyfile
+# GSettings backend; when the host's per-user inotify budget is exhausted its
+# file monitor cannot be created and an external `gsettings set` is invisible to
+# the running Shell, which stalls every settings-dependent scenario. Falls back
+# to the external store for older builds and for production sessions (where the
+# trigger is gated off), so the helper never depends on the new method.
 set_system_setting() {
+  local out
+  if out="$(adrt SetSchemaSetting "$1" "$2" "$3" 2>/dev/null)" && printf '%s' "$out" | grep -q 'true'; then
+    return 0
+  fi
   GSETTINGS_BACKEND=keyfile XDG_CONFIG_HOME="$ADRT_STATE_DIR/config" \
     gsettings set "$1" "$2" "$3"
 }
 
 set_setting() {
+  local out
+  if out="$(adrt SetSetting "$1" "$2" 2>/dev/null)" && printf '%s' "$out" | grep -q 'true'; then
+    return 0
+  fi
   GSETTINGS_BACKEND=keyfile XDG_CONFIG_HOME="$ADRT_STATE_DIR/config" \
     GSETTINGS_SCHEMA_DIR="$(ext_dir)/schemas" \
     gsettings set org.gnome.shell.extensions.adrt "$1" "$2"
