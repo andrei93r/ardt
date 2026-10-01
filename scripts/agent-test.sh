@@ -380,11 +380,14 @@ if [ "${#timed[@]}" -gt 0 ]; then
   echo "== timing =="
   printf '%s\n' "${timed[@]}" | sort -rn | head -10 | awk '{printf "  %6ss  %s\n", $1, $2}'
   echo "wall=$(( $(date +%s) - TEST_T0 ))s  scenario-sum=$(printf '%.0f' "$scen_secs")s  workers=$WORKERS  scenarios=${#names[@]}"
-  # Remember the durations so the next run can balance its shards.
+  # Merge the durations into the cache, never replace it: a smoke or filtered run
+  # (or another worktree) must not wipe the full suite's history, which would
+  # wreck the next run's shard balance. Entries we did not run keep their value.
   mkdir -p "$(dirname "$DUR_CACHE")"
+  for entry in "${timed[@]}"; do DUR["${entry#* }"]="${entry%% *}"; done
   dtmp="$DUR_CACHE.$$"
   : > "$dtmp"
-  for entry in "${timed[@]}"; do printf '%s\t%s\n' "${entry#* }" "${entry%% *}" >> "$dtmp"; done
+  for dname in "${!DUR[@]}"; do printf '%s\t%s\n' "$dname" "${DUR[$dname]}" >> "$dtmp"; done
   mv -f "$dtmp" "$DUR_CACHE"
 fi
 

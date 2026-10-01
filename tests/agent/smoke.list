@@ -51,12 +51,12 @@
 #                                    A131-fullscreen-hides-highlight
 #   undo (swap, un-float)            A101-undo-restores-instance-and-config
 #   flags / trace / DumpState shape  A103-record-trace-shape
+#   cursor to the active window      A132-cursor-centre,
+#     (trigger + follows-focus)        A133-cursor-follows-focus
 #
 # Out of scope for a one-configuration smoke (kept in the full suite):
 #   multi-monitor routing/drags/rescue/replay (A105-A111, A122, A124),
 #   the four-monitor matrix (A81), the opt-in long churn run (A125).
-# A cursor-follows-focus scenario would be added here only once the
-# v2/cursor-centre branch lands and the capability probe reports it.
 #
 # --- tiling / split / axis ---
 A01-pair-tiling
@@ -102,3 +102,6 @@ A131-fullscreen-hides-highlight
 A101-undo-restores-instance-and-config
 # --- flags / trace / DumpState ---
 A103-record-trace-shape
+# --- cursor to the active window ---
+A132-cursor-centre
+A133-cursor-follows-focus
