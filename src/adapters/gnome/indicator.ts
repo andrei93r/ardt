@@ -40,11 +40,14 @@ export class GnomeIndicator implements IndicatorBackend {
   private readonly closeSources = new Set<number>();
   private pulseActive = false;
   private interfaceSettings: any = null;
+  /** The last rect handed to `showPreview`, for `DumpState` and diagnostics. */
+  private previewRect: Rect | null = null;
 
   constructor(private readonly settings: GnomeSettings) {
     this.widget = new St.Widget({ style_class: CSS_CLASS, reactive: false, visible: false });
     this.preview = new St.Widget({ style_class: PREVIEW_CLASS, reactive: false, visible: false, opacity: 120 });
     this.applyStyle();
+    this.applyPreviewStyle();
     layoutManager.addChrome(this.widget, { affectsStruts: false, trackFullscreen: false });
     layoutManager.addChrome(this.preview, { affectsStruts: false, trackFullscreen: false });
     // addChrome inserts just below `top_window_group`, so chrome added later
@@ -73,12 +76,15 @@ export class GnomeIndicator implements IndicatorBackend {
   }
 
   showPreview(rect: Rect): void {
+    this.applyPreviewStyle();
+    this.previewRect = { ...rect };
     this.preview.set_position(rect.x, rect.y);
     this.preview.set_size(rect.width, rect.height);
     this.preview.show();
   }
 
   hidePreview(): void {
+    this.previewRect = null;
     this.preview.hide();
   }
 
@@ -132,6 +138,7 @@ export class GnomeIndicator implements IndicatorBackend {
     this.ghosts.clear();
     layoutManager.removeChrome(this.widget);
     layoutManager.removeChrome(this.preview);
+    this.previewRect = null;
     this.widget.destroy();
     this.preview.destroy();
   }
@@ -145,6 +152,11 @@ export class GnomeIndicator implements IndicatorBackend {
       radius: this.settings.int('indicator-corner-radius', 8),
       stackedBelowTray: this.isBelowTray(),
     };
+  }
+
+  /** §6/§11: the drop-assist overlay, for `DumpState` and diagnostics. */
+  describePreview(): { visible: boolean; rect: Rect | null; colour: string } {
+    return { visible: this.preview.visible === true, rect: this.previewRect, colour: this.colour() };
   }
 
   /** Keep `actor` under the notification tray, so a banner paints over it. */
@@ -202,12 +214,24 @@ export class GnomeIndicator implements IndicatorBackend {
     this.widget.set_style(this.styleString());
   }
 
+  private applyPreviewStyle(): void {
+    this.preview.set_style(this.previewStyleString());
+  }
+
   private styleString(): string {
     const color = this.colour();
     const width = this.settings.int('indicator-width', 2);
     const opacity = this.settings.int('indicator-opacity', 100);
     const radius = this.settings.int('indicator-corner-radius', 8);
     return `border: ${width}px solid ${color}; border-radius: ${radius}px; opacity: ${opacity / 100};`;
+  }
+
+  /** The drop-assist outline: the border's accent and shape, faintly filled. */
+  private previewStyleString(): string {
+    const color = this.colour();
+    const width = this.settings.int('indicator-width', 2);
+    const radius = this.settings.int('indicator-corner-radius', 8);
+    return `border: ${width}px solid ${color}; border-radius: ${radius}px; background-color: ${color};`;
   }
 
   private colour(): string {

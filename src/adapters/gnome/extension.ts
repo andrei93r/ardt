@@ -523,11 +523,14 @@ export default class AdrtExtension extends Extension {
   private onDragChanged(dragging: boolean): void {
     if (dragging) {
       this.suppressBorder('drag');
-      this.stopMotionWatch();
+      // Keep sampling while the drag is live so the motion tick can reposition
+      // the drop preview (§6/§11); the border stays suppressed by `drag`.
+      this.startMotionWatch();
     } else {
       this.unsuppressBorder('drag');
       this.startMotionWatch();
     }
+    this.syncPreview();
     this.syncIndicator();
   }
 
@@ -556,6 +559,13 @@ export default class AdrtExtension extends Extension {
     if (this.isPaused()) {
       this.stopMotionWatch();
       return GLib.SOURCE_REMOVE;
+    }
+    // §6/§11: while a drag is live, the tick's only job is the drop preview —
+    // the border is suppressed and reflow is frozen. Reposition it here, as a
+    // derived property, never from a grab signal.
+    if (this.session.isDragging) {
+      this.syncPreview();
+      return GLib.SOURCE_CONTINUE;
     }
     // Remember the last window actor so a transient focus loss (mid-switch)
     // does not blind the watcher.
@@ -751,6 +761,20 @@ export default class AdrtExtension extends Extension {
   }
 
   /**
+   * §6/§11: the drop-assist overlay. The target is the model's own drag
+   * decision (`WindowSession.previewTarget`), recomputed here while the drag is
+   * live — the same decision the drop applies, so the outline is exact.
+   */
+  private syncPreview(): void {
+    const target = this.session.isDragging ? this.session.previewTarget() : null;
+    if (target === null || target.kind === 'none' || this.isPaused() || overview.visible) {
+      this.indicator.hidePreview();
+      return;
+    }
+    this.indicator.showPreview(target.rect);
+  }
+
+  /**
    * Workspace actors translate during a workspace switch — keyboard or
    * touchpad gesture — and never move when we tile a window. Watching their
    * position is therefore a precise, focus-independent transition signal.
@@ -789,6 +813,7 @@ export default class AdrtExtension extends Extension {
     this.refreshOcclusion();
     this.refreshFullscreen();
     this.syncIndicator();
+    this.syncPreview();
   }
 
   private onStubborn(_appId: string): void {
@@ -1609,7 +1634,13 @@ export default class AdrtExtension extends Extension {
       ratios: this.tiling.getRatios(),
       swapPairs: this.tiling.getSwapPairs(),
       border: this.border.snapshot(),
-      indicator: { ...this.indicator.describe(), visible: this.indicator.isVisible, ghosts: this.indicator.ghostCount, suppressed: this.border.activeSuppressions },
+      indicator: {
+        ...this.indicator.describe(),
+        visible: this.indicator.isVisible,
+        ghosts: this.indicator.ghostCount,
+        suppressed: this.border.activeSuppressions,
+        preview: this.indicator.describePreview(),
+      },
       overview: overview.visible,
       workspaceActors: this.workspaceActorSignals.length / 2,
       coherenceSweeps: this.session.coherenceSweepCount(),
