@@ -187,7 +187,8 @@ anywhere except §7's single-workspace-capable pair rule.
 - Dragging the **inner** edge of a pair changes the ratio; the tiler resizes the
   sibling so the pair stays flush (§10).
 - Dragging a managed window so its perimeter **crosses another managed window** and
-  dropping **swaps** the two.
+  dropping **swaps** the two. A slight overlap is enough — the rectangles do not have
+  to cover each other; the pair simply trade sides.
 - **Cross-screen drags** follow the target screen's rules: a free slot takes the
   window (its pair splits as usual), **on the side it came from** — from the left or
   above, slot 0; from the right or below, slot 1; a window whose perimeter was crossed
@@ -840,6 +841,11 @@ never debug-gated (the deduplication and rate limits still apply).
 71. **A workspace that only looks empty is free** (round scenario 12, confirmed): a
     new window opening there is alone among the visible windows, so it maximizes; the
     minimized windows keep their place and stay minimized.
+
+72. **Dragging one window of a pair onto the other swaps them** (round scenario 13,
+    confirmed): they trade sides, same workspace and same sizes, nothing created and
+    nothing floated, and a slight overlap is enough — the rectangles need not cover
+    each other.
 
 ## Deliberate non-goals
 
