@@ -57,6 +57,29 @@ export function isOverrideRedirect(win: any): boolean {
   return typeof win.is_override_redirect === 'function' && win.is_override_redirect() === true;
 }
 
+/**
+ * Popup-family windows: menus, tooltips, popovers. On X11 these are
+ * override-redirect, but on Wayland they are `xdg_popup` and report
+ * `override_redirect == false`, so the override-redirect check does not see
+ * them. They must never be tracked: closing one calls a NULL `close` vfunc in
+ * Mutter (`MetaWaylandXdgPopup`), which segfaults the Shell — reproduced live in
+ * `docs/shell-crash-audit.md` (windowType 9, `DROPDOWN_MENU`).
+ */
+export function isPopupWindow(win: any): boolean {
+  switch (win.get_window_type()) {
+    case Meta.WindowType.MENU:
+    case Meta.WindowType.DROPDOWN_MENU:
+    case Meta.WindowType.POPUP_MENU:
+    case Meta.WindowType.TOOLTIP:
+    case Meta.WindowType.NOTIFICATION:
+    case Meta.WindowType.COMBO:
+    case Meta.WindowType.DND:
+      return true;
+    default:
+      return false;
+  }
+}
+
 export function isOnAllWorkspaces(win: any): boolean {
   return win.is_on_all_workspaces() === true;
 }

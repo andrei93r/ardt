@@ -425,9 +425,15 @@ export class WindowSession {
   register(win: any): void {
     const id: number = win.get_id();
     if (this.windows.has(id)) return;
-    // Popups, menus and tooltips are override-redirect; they are never tiled
-    // and tracking them only creates work and spurious signals.
+    // Popups, menus and tooltips are override-redirect on X11; they are never
+    // tiled and tracking them only creates work and spurious signals.
     if (compat.isOverrideRedirect(win)) return;
+    // On Wayland the same windows are `xdg_popup` and are *not*
+    // override-redirect, so the check above misses them. Tracking one is not
+    // just noise: closing it calls a NULL `close` vfunc in Mutter and crashes
+    // the Shell, so popup-family windows are refused outright (§5,
+    // docs/shell-crash-audit.md).
+    if (compat.isPopupWindow(win)) return;
     const surface = this.deps.host.ensureSurface(win);
     const tracked = new TrackedWindow(win, surface);
     this.windowSeq += 1;
@@ -2091,6 +2097,10 @@ export class WindowSession {
   closeFocused(): boolean {
     const focused = this.focused();
     if (focused === null) return false;
+    // A popup must never reach `delete()` (Mutter has no `close` vfunc for it);
+    // refusing it in `register()` should make this unreachable, but the guard is
+    // cheap and this is the path that crashed the live Shell.
+    if (compat.isPopupWindow(focused.win)) return false;
     focused.win.delete(global.get_current_time());
     return true;
   }

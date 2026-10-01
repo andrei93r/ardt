@@ -1479,6 +1479,10 @@ export default class AdrtExtension extends Extension {
   private closeWindow(id: number): boolean {
     const tracked = this.session.windows.get(id);
     if (tracked === undefined) return false;
+    // Never delete a popup: Mutter has no `close` vfunc for `xdg_popup`, so this
+    // segfaults the Shell (the live crash). `register()` refuses them now; this
+    // is the last line of defence.
+    if (compat.isPopupWindow(tracked.win)) return false;
     tracked.win.delete(global.get_current_time());
     return true;
   }
@@ -1530,6 +1534,7 @@ export default class AdrtExtension extends Extension {
       tracked.surface.captureZ();
       return {
         id: tracked.id,
+        windowType: tracked.win.get_window_type(),
         cls: tracked.surface.appId,
         identity: tracked.identityKey,
         identitySource: tracked.identitySource,
