@@ -689,6 +689,9 @@ happens. All default off, deduplicated and rate-limited per event.
     bottom half of a stacked pair lands on the window at the same height on the next
     screen, never on the first window there.
 
+50. **Maximizing a float** (test scenario S22): the float maximizes in place, on top of
+    the tiling, and stays a float. adrt neither un-floats it nor gives it a workspace.
+
 ## Deliberate non-goals
 
 
