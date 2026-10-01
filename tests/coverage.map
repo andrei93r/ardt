@@ -84,7 +84,7 @@ os-timing-refresh | A29-frame-timing A138-os-timing
 
 # ------------------------------------------------------------ drag preview
 drag-preview | A141-drag-preview
-drag | A07-inner-edge-drag A32-swap-drag A73-lost-drag-release A74-overview-drop-is-a-move A77-clamped-drop-swaps A83-injected-drag-is-event-confirmed A141-drag-preview A150-real-inner-edge-drag
+drag | A07-inner-edge-drag A32-swap-drag A73-lost-drag-release A74-overview-drop-is-a-move A77-clamped-drop-swaps A83-injected-drag-is-event-confirmed A141-drag-preview A150-real-inner-edge-drag A151-app-dnd-is-not-a-window-move
 
 # ----------------------------------------------------------------- gestures
 gestures | A18-gesture-3-horizontal A19-gesture-3-vertical A20-gesture-pinch A21-gesture-disabled

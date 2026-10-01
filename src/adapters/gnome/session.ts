@@ -147,6 +147,16 @@ export class WindowSession {
   private grabBeginSignal = 0;
   private grabEndSignal = 0;
   private dragging = false;
+  /**
+   * §6: true while an application drag-and-drop holds the pointer button with
+   * no compositor window grab. The client (Chrome tearing a tab off, VS Code
+   * dragging a tab or panel, a GTK DnD) is placing its own window; adrt freezes
+   * reflow so it neither fights the client nor interprets the gesture as a
+   * window move, and routes/reflows once when the interaction ends. This is
+   * deliberately **not** the window-move drag state: no `dragId`, no preview,
+   * no drop interpretation.
+   */
+  private clientInteracting = false;
   private dragStartRect: Rect | null = null;
   /** The window being dragged, so the preview overlay can follow it (§6/§11). */
   private dragId: number | null = null;
@@ -271,6 +281,32 @@ export class WindowSession {
     return this.dragging || this.adjustId !== null;
   }
 
+  /** §6: an application DnD is in progress (button held, no window grab). */
+  get clientInteractionActive(): boolean {
+    return this.clientInteracting;
+  }
+
+  /** Drag/reflow state for `DumpState` (§22) — observation only. */
+  dragState(): {
+    active: boolean;
+    windowDrag: boolean;
+    clientInteraction: boolean;
+    dragId: number | null;
+    adjustId: number | null;
+    button: boolean;
+    displayGrab: boolean | null;
+  } {
+    return {
+      active: this.isDragging,
+      windowDrag: this.dragging || this.adjustId !== null,
+      clientInteraction: this.clientInteracting,
+      dragId: this.dragId,
+      adjustId: this.adjustId,
+      button: compat.button1Pressed(),
+      displayGrab: compat.displayGrabActive(),
+    };
+  }
+
   /** Suspend tiling (e.g. the overview is open); one pass runs on resume. */
   setSuspended(suspended: boolean): void {
     if (this.suspended === suspended) return;
@@ -293,6 +329,9 @@ export class WindowSession {
     const tracked = this.windows.get(id);
     if (tracked === undefined) return false;
     if (this.dragging) return true;
+    // A real Meta grab supersedes a client-interaction freeze: the move is now
+    // adrt's to follow and its drop to interpret.
+    this.clientInteracting = false;
     this.dragging = true;
     this.dragId = id;
     this.dragLastActivityMs = Date.now();
@@ -338,6 +377,7 @@ export class WindowSession {
     if (tracked === undefined) return false;
     const wasDragging = this.dragging;
     this.dragging = false;
+    this.clientInteracting = false;
     this.dragId = null;
     this.dragLastActivityMs = 0;
     this.deps.onDragChanged(false);
@@ -1238,7 +1278,7 @@ export class WindowSession {
 
   scheduleReconcile(reason: string): void {
     if (this.deps.isPaused() || this.suspended) return;
-    if (this.dragging || this.adjustId !== null) return;
+    if (this.dragging || this.adjustId !== null || this.clientInteracting) return;
     // Only a genuine user adjust is undoable; a signal-driven reconcile is a
     // safety net and must not push an entry that masks the user's own action.
     const rememberUndo = reason === 'user-adjust';
@@ -1440,7 +1480,7 @@ export class WindowSession {
    * Full reconciles are safety nets: by default they do not record undo
    * entries, so they can never mask the entry a user action pushed. */
   reconcileAll(reason: string, rememberUndo = false): void {
-    if (this.deps.isPaused() || this.suspended || this.dragging || this.adjustId !== null) return;
+    if (this.deps.isPaused() || this.suspended || this.dragging || this.adjustId !== null || this.clientInteracting) return;
     // §20: the first layout drain waits for the shell's startup to complete;
     // the host nudges us again when it does.
     if (!this.deps.host.isStartupComplete()) return;
@@ -2956,6 +2996,16 @@ export class WindowSession {
       }
     }
 
+    // §6: an application drag-and-drop (a Chrome tab tear-off, a VS Code
+    // editor-tab or panel drag, a GTK DnD) holds the pointer button but starts
+    // no compositor window grab. It is not a window move: freeze reflow so the
+    // client places its own window, interpret no drop and show no preview, then
+    // route/reflow once the interaction ends.
+    if (this.trackClientInteraction()) {
+      this.deps.onStateChanged();
+      return;
+    }
+
     if (this.isUserChange(tracked)) {
       this.beginUserAdjust(tracked);
       if (this.adjustMode(tracked) === 'resize') this.followSibling(tracked);
@@ -2968,6 +3018,35 @@ export class WindowSession {
     this.scheduleRetile(tracked.surface.workspaceId, 'frame');
   }
 
+  /**
+   * §6: keep adrt out of an application drag-and-drop's way. While the pointer
+   * button is held with **no** compositor window grab, the geometry changes are
+   * the client's own (a tab tear-off creating and moving a window, a GTK DnD),
+   * not a window move adrt may interpret — so the freeze is set and reflow is
+   * deferred. The next pass that sees the button released clears it and reflows
+   * exactly once, routing any newcomer that appeared mid-gesture.
+   *
+   * `displayGrabActive()` is `null` on a Shell with no grab reading; the old
+   * button-only heuristic is kept then, so an unknown platform is no worse than
+   * before.
+   */
+  private trackClientInteraction(): boolean {
+    if (!compat.button1Pressed()) {
+      if (this.clientInteracting) {
+        this.clientInteracting = false;
+        // The freeze is lifted: one deferred pass routes the newcomer and
+        // settles the layout, even if no further frame signal arrives.
+        this.scheduleReconcile('client-interaction-end');
+      }
+      return false;
+    }
+    if (compat.displayGrabActive() === false) {
+      this.clientInteracting = true;
+      return true;
+    }
+    return false;
+  }
+
   /** A geometry change that did not come from us is the user moving a window. */
   private isUserChange(tracked: TrackedWindow): boolean {
     const target = tracked.lastTarget;
@@ -2978,6 +3057,12 @@ export class WindowSession {
     if (tracked.surface.flags.fullscreen || tracked.surface.flags.minimized) return false;
     // A user move/resize holds the button; our own applies do not.
     if (!compat.button1Pressed()) return false;
+    // §6: the compositor must actually hold a window move/resize grab. An
+    // application DnD (Chrome tab tear-off, VS Code tab/panel drag, GTK DnD)
+    // holds the button but starts no grab, so a client-driven frame change must
+    // not be read as a user move — that is what swapped the pair under the
+    // gesture and churned `beginUserAdjust`/`endUserAdjust` on every frame.
+    if (compat.displayGrabActive() === false) return false;
     // Our own applies set `lastTarget`, so a frame that differs from it and is
     // not an animation or a stubborn refusal is the user moving the window.
     if (this.deps.tiling.activeAnimations > 0) return false;
@@ -3440,6 +3525,15 @@ export class WindowSession {
     if (this.dragIsStale()) {
       this.abandonDrag('stale');
       return;
+    }
+    // §6: an application DnD froze reflow; once the button is released the
+    // sweep lifts the freeze and reflows exactly once, so the newcomer is
+    // routed and the layout settles even if no frame signal arrives after the
+    // drop.
+    if (this.clientInteracting) {
+      if (compat.button1Pressed()) return;
+      this.clientInteracting = false;
+      this.scheduleReconcile('client-interaction-end');
     }
     if (this.dragging || this.adjustId !== null) return;
     // The backstop for a clamp the lane-2 drain missed: an off-screen window is
