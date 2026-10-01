@@ -114,3 +114,5 @@ A133-cursor-follows-focus
 A134-popup-never-tracked
 # --- screen clamp: every window stays inside its monitor ---
 A136-clamp-to-screen
+# --- topology: the one screen keeps its own axis, gated by signature ---
+A138-topology-cases
