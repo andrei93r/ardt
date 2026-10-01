@@ -30,6 +30,13 @@ export interface SessionState {
 export class SessionMachine {
   private mode: SessionMode;
   private retilePending = false;
+  /**
+   * A user-requested pause (the panel's Pause/Resume). It is not a session
+   * *mode*: locking or sharing still pause on their own, and clearing this flag
+   * never overrides them. Folded into the one `isPaused` predicate so every
+   * existing pause consumer (tiling, the drain, the indicator) sees it.
+   */
+  private manualPaused = false;
 
   constructor(mode: SessionMode = 'user') {
     this.mode = mode;
@@ -40,7 +47,17 @@ export class SessionMachine {
   }
 
   get isPaused(): boolean {
-    return this.mode === 'unlock-dialog';
+    return this.mode === 'unlock-dialog' || this.manualPaused;
+  }
+
+  /** Whether the user paused tiling manually (as opposed to a session mode). */
+  get manualPause(): boolean {
+    return this.manualPaused;
+  }
+
+  /** Set the user-requested pause. Idempotent; never touches the session mode. */
+  setManualPause(paused: boolean): void {
+    this.manualPaused = paused;
   }
 
   get indicatorVisible(): boolean {

@@ -40,6 +40,7 @@ import { GnomeHost } from './host.js';
 import { History } from './history.js';
 import { GnomeIndicator } from './indicator.js';
 import { EventJournal } from './journal.js';
+import { AdrtPanel } from './panel.js';
 import { RegistryStore } from './registry.js';
 import { WindowSession } from './session.js';
 import type { TrackedWindow } from './tracked-window.js';
@@ -105,6 +106,8 @@ interface ExtraHandlers {
   SimulateWorkspaceReorder(from: number, to: number): boolean;
   SimulateWorkspaceOrientation(vertical: boolean): boolean;
   CursorToCentre(): boolean;
+  ActivatePanelItem(name: string): boolean;
+  InjectFault(context: string): boolean;
 }
 
 type Handlers = DbusHandlers & ExtraHandlers;
@@ -125,6 +128,8 @@ export default class AdrtExtension extends Extension {
   private dbus!: GnomeDbus;
   private border!: BorderState;
   private sessionMachine = new SessionMachine();
+  /** The top-bar panel affordance; null until `enable()` builds it. */
+  private panel: AdrtPanel | null = null;
   /** A mode injected by the test trigger, overriding the live session mode. */
   private injectedMode: SessionMode | null = null;
 
@@ -135,6 +140,8 @@ export default class AdrtExtension extends Extension {
   private injectSeat: any = null;
   private injectPointer: any = null;
   private injectKeyboard: any = null;
+  /** Errors caught by the outer boundaries (enable, signal handlers). */
+  private errorCount = 0;
   private sessionModeId = 0;
   private overviewSignals: number[] = [];
   private swipeSignalIds: number[] = [];
@@ -179,6 +186,18 @@ export default class AdrtExtension extends Extension {
 
   enable(): void {
     const started = GLib.get_monotonic_time();
+    // §36: the entry point is the most important boundary — a throw here makes
+    // GNOME disable the extension (and can cascade in the Shell). Catch it, log
+    // it, and let `disable()` clean up whatever was half-built.
+    try {
+      this.enableWith(started);
+    } catch (error) {
+      this.reportError('enable', error);
+    }
+  }
+
+  /** The enable body, guarded by `enable()` so one error cannot disable adrt. */
+  private enableWith(started: number): void {
     // The journal comes first: everything below it may log a decision.
     this.journal = new EventJournal(30);
     this.journal.prune();
@@ -271,6 +290,16 @@ export default class AdrtExtension extends Extension {
       isAnimating: () => this.animator.activeCount > 0,
     });
 
+    // §1: the on-screen presence. Built after the session so its callbacks can
+    // read the live pause predicate; it owns no state of its own.
+    this.panel = new AdrtPanel({
+      isPaused: () => this.isPaused(),
+      setPaused: (paused) => this.setTilingPaused(paused),
+      indicatorEnabled: () => this.settings.boolean('active-window-indicator', true),
+      setIndicatorEnabled: (enabled) => this.settings.write('active-window-indicator', enabled),
+      openPreferences: () => this.openPreferences(),
+    });
+
     const injectedFailures = this.settings.int('debug-inject-verify-failure', 0);
     if (injectedFailures > 0) this.tiling.injectVerifyFailures(injectedFailures);
 
@@ -294,7 +323,7 @@ export default class AdrtExtension extends Extension {
     // the first ready timeout, so normalisation is deferred just past it; the
     // pass itself is idempotent.
     GLib.timeout_add(GLib.PRIORITY_DEFAULT, NORMALIZE_ON_ENABLE_MS, () => {
-      this.session?.normalizeOnEnable();
+      this.guard('normalize-enable', () => this.session?.normalizeOnEnable())();
       return GLib.SOURCE_REMOVE;
     });
 
@@ -304,17 +333,17 @@ export default class AdrtExtension extends Extension {
       this.dbus.expose(this.handlers());
     }
 
-    this.sessionModeId = sessionMode.connect('notify::current-mode', () => {
+    this.sessionModeId = sessionMode.connect('notify::current-mode', this.guard('session-mode', () => {
       // A live session transition always wins over a test-injected mode.
       this.injectedMode = null;
       this.applySessionMode(this.currentMode());
-    });
-    this.overviewSignals.push(overview.connect('showing', () => this.onOverviewChanged(true)));
-    this.overviewSignals.push(overview.connect('hidden', () => this.onOverviewChanged(false)));
+    }));
+    this.overviewSignals.push(overview.connect('showing', this.guard('overview-showing', () => this.onOverviewChanged(true))));
+    this.overviewSignals.push(overview.connect('hidden', this.guard('overview-hidden', () => this.onOverviewChanged(false))));
     this.refreshWorkspaceActors();
     this.connectWorkspaceAnimation();
-    this.layoutSignals.push(global.workspace_manager.connect('workspace-added', () => this.refreshWorkspaceActors()));
-    this.layoutSignals.push(global.workspace_manager.connect('workspace-removed', () => this.refreshWorkspaceActors()));
+    this.layoutSignals.push(global.workspace_manager.connect('workspace-added', this.guard('workspace-added', () => this.refreshWorkspaceActors())));
+    this.layoutSignals.push(global.workspace_manager.connect('workspace-removed', this.guard('workspace-removed', () => this.refreshWorkspaceActors())));
     this.applySessionMode(this.currentMode(), true);
     // §23: hide the border if the extension is enabled while the overview is
     // already open (e.g. a headless shell that starts in it); the `showing`
@@ -325,10 +354,13 @@ export default class AdrtExtension extends Extension {
     // §35: a periodic guarantee, independent of signals: a normal window must
     // never be left untiled next to a sibling.
     this.coherenceSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, COHERENCE_SWEEP_MS, () => {
-      this.session.coherenceSweep();
-      this.refreshSessionMode();
-      this.watchWorkspaceAnimation();
-      this.refreshWorkspaceSwitchSuppression();
+      this.guard('coherence-sweep', () => {
+        this.session.coherenceSweep();
+        this.refreshSessionMode();
+        this.watchWorkspaceAnimation();
+        this.refreshWorkspaceSwitchSuppression();
+        this.refreshSharingSuppression();
+      })();
       return GLib.SOURCE_CONTINUE;
     });
 
@@ -349,44 +381,120 @@ export default class AdrtExtension extends Extension {
     // the Shell keeps adrt *resident* while the screen is locked instead of
     // tearing it down. `disable()` therefore runs on logout/extension removal,
     // not on lock; the lock transition is handled by `applySessionMode`.
-    this.journal?.destroy();
-    this.history.log('disable', {});
-    this.stopMotionWatch();
-    if (this.coherenceSource !== null) {
-      GLib.source_remove(this.coherenceSource);
-      this.coherenceSource = null;
-    }
-    if (this.sessionModeId !== 0) {
-      sessionMode.disconnect(this.sessionModeId);
-      this.sessionModeId = 0;
-    }
-    for (const id of this.overviewSignals) overview.disconnect(id);
-    this.overviewSignals = [];
-    for (const entry of this.workspaceActorSignals) entry.actor.disconnect(entry.id);
-    this.workspaceActorSignals = [];
-    this.disconnectWorkspaceAnimation();
-    for (const id of this.layoutSignals) global.workspace_manager.disconnect(id);
-    this.layoutSignals = [];
-    this.unregisterKeybindings();
-    for (const unsubscribe of this.settingWatchers) unsubscribe();
-    this.settingWatchers = [];
-    for (const unsubscribe of this.hostUnsubscribers) unsubscribe();
-    this.hostUnsubscribers = [];
-    if (this.dbus !== undefined) this.dbus.unexpose();
-    this.gestures.disable();
-    this.session.destroy();
-    this.tiling.destroy();
-    this.animator.destroy();
-    this.indicator.destroy();
-    this.host.disable();
-    this.registry.flush();
-    this.saveDisplayMemory();
-    this.history.destroy();
-    this.saveState();
+    // §36: every teardown step is independent and guarded — if `enable()` threw
+    // half-built, or one resource misbehaves, the rest still tears down cleanly.
+    this.teardown('journal', () => this.journal?.destroy());
+    this.teardown('log-disable', () => this.history?.log('disable', {}));
+    this.teardown('motion', () => this.stopMotionWatch());
+    this.teardown('coherence', () => {
+      if (this.coherenceSource !== null) {
+        GLib.source_remove(this.coherenceSource);
+        this.coherenceSource = null;
+      }
+    });
+    this.teardown('session-mode', () => {
+      if (this.sessionModeId !== 0) {
+        sessionMode.disconnect(this.sessionModeId);
+        this.sessionModeId = 0;
+      }
+    });
+    this.teardown('overview', () => {
+      for (const id of this.overviewSignals) overview.disconnect(id);
+      this.overviewSignals = [];
+    });
+    this.teardown('workspace-actors', () => {
+      for (const entry of this.workspaceActorSignals) entry.actor.disconnect(entry.id);
+      this.workspaceActorSignals = [];
+    });
+    this.teardown('workspace-animation', () => this.disconnectWorkspaceAnimation());
+    this.teardown('layout', () => {
+      for (const id of this.layoutSignals) global.workspace_manager.disconnect(id);
+      this.layoutSignals = [];
+    });
+    this.teardown('keybindings', () => this.unregisterKeybindings());
+    this.teardown('setting-watchers', () => {
+      for (const unsubscribe of this.settingWatchers) unsubscribe();
+      this.settingWatchers = [];
+    });
+    this.teardown('host-watchers', () => {
+      for (const unsubscribe of this.hostUnsubscribers) unsubscribe();
+      this.hostUnsubscribers = [];
+    });
+    this.teardown('dbus', () => {
+      if (this.dbus !== undefined) this.dbus.unexpose();
+    });
+    this.teardown('panel', () => {
+      this.panel?.destroy();
+      this.panel = null;
+    });
+    this.teardown('gestures', () => this.gestures?.disable());
+    this.teardown('session', () => this.session?.destroy());
+    this.teardown('tiling', () => this.tiling?.destroy());
+    this.teardown('animator', () => this.animator?.destroy());
+    this.teardown('indicator', () => this.indicator?.destroy());
+    this.teardown('host', () => this.host?.disable());
+    this.teardown('registry', () => this.registry?.flush());
+    this.teardown('display-memory', () => this.saveDisplayMemory());
+    this.teardown('history', () => this.history?.destroy());
+    this.teardown('state', () => this.saveState());
     // §18: restore GNOME's animations to what we found, never force them on for
     // a user who had turned them off.
-    this.restoreAnimationSetting();
-    this.timing.destroy();
+    this.teardown('animation-baseline', () => this.restoreAnimationSetting());
+    this.teardown('timing', () => this.timing?.destroy());
+  }
+
+  /** Run one teardown step; a failure is logged and never stops the rest. */
+  private teardown(context: string, fn: () => void): void {
+    try {
+      fn();
+    } catch (error) {
+      this.reportError(`disable:${context}`, error);
+    }
+  }
+
+  /**
+   * §36: guard a signal/actor callback so a throw is logged, never propagated
+   * into the compositor's emission (which would disable adrt or crash the
+   * Shell). One closure and one try/catch per event is the whole cost.
+   */
+  private guard(context: string, cb: () => void, marker = '[adrt] ERROR'): () => void {
+    return (): void => {
+      try {
+        cb();
+      } catch (error) {
+        this.reportError(context, error, marker);
+      }
+    };
+  }
+
+  /**
+   * Log a caught error (`[adrt] ERROR`-style) and journal it. It is deliberately
+   * loud: the boundary stops propagation, never hides the fault. The marker is
+   * overridable only for the injected-fault test, which must not trip the
+   * harness's `[adrt] ERROR` journal gate.
+   */
+  private reportError(context: string, error: unknown, marker = '[adrt] ERROR'): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.errorCount += 1;
+    console.error(`${marker} ${context}: ${message}`);
+    try {
+      this.journal?.record('error', 'guarded', { context, error: message });
+    } catch {
+      /* logging must never rethrow out of the boundary */
+    }
+  }
+
+  /**
+   * Test trigger: run a real throw through the boundary and report whether it
+   * was caught. Uses a test-only marker so the harness's `[adrt] ERROR` gate is
+   * not tripped by an expected fault.
+   */
+  private simulateFault(context: string): boolean {
+    const before = this.errorCount;
+    this.guard(`fault-test:${context}`, () => {
+      throw new Error(`injected fault (${context})`);
+    }, '[adrt] guard-test')();
+    return this.errorCount > before;
   }
 
   // ---------------------------------------------------------------- session
@@ -398,21 +506,89 @@ export default class AdrtExtension extends Extension {
   private isPaused(): boolean {
     // §19: while the drain finishes the backlog a pause caught, policy runs as
     // if unpaused; new work is still refused where it is pushed.
-    return this.sessionMachine.isPaused && !(this.session?.isDrainingBacklog() ?? false);
+    if (this.session?.isDrainingBacklog() ?? false) return false;
+    // The one pause predicate: the session machine (lock or a manual pause) and
+    // — only when the user opted in — screen sharing. Sharing is re-derived from
+    // the live mode plus the setting on every call (this is the drain's gate),
+    // never latched by a signal handler, so a missed transition cannot strand it.
+    if (this.sessionMachine.isPaused) return true;
+    return this.sessionMachine.state.mode === 'screen-sharing' && this.pauseDuringSharing();
+  }
+
+  /** §19: whether the user asked adrt to pause while sharing/remote desktop. */
+  private pauseDuringSharing(): boolean {
+    return this.settings.boolean('pause-during-sharing', false);
+  }
+
+  /**
+   * §19: the panel/manual pause. It lives in the session machine (folded into
+   * `isPaused`), so the tiling engine, the drain and the indicator all see it
+   * with no extra plumbing. Resuming asks for one reconcile so windows that
+   * moved while paused are re-tiled.
+   */
+  private setTilingPaused(paused: boolean): void {
+    if (this.sessionMachine.manualPause === paused) {
+      this.syncPanel();
+      return;
+    }
+    this.sessionMachine.setManualPause(paused);
+    if (paused) {
+      this.stopMotionWatch();
+      // Reuse the session pause suppression so the border state and every
+      // `border_visible` reader see a manual pause exactly like a locked session.
+      this.suppressBorder('pause');
+    } else {
+      this.unsuppressBorder('pause');
+      this.session.scheduleReconcile('manual-resume');
+    }
+    this.syncIndicator();
+    this.syncPreview();
+    this.syncPanel();
+    this.history.log('session_mode', { mode: this.sessionMachine.state.mode, paused: this.isPaused(), manualPaused: paused });
   }
 
   private applySessionMode(mode: SessionMode, initial = false): void {
+    // §19: read the pre-transition sharing-pause before the machine moves, so
+    // resuming retiles exactly when the mode we are leaving was actually paused.
+    const leftSharingPaused = this.sessionMachine.state.mode === 'screen-sharing' && this.pauseDuringSharing();
     const effects = this.sessionMachine.setMode(mode);
-    if (effects.indicatorSuppression !== null) {
-      this.suppressBorder(effects.indicatorSuppression);
+    // Gate the sharing suppression on the setting: with it off, sharing is
+    // ignored entirely (no highlight suppression, tiling continues); with it on,
+    // the highlight hides and `isPaused()` stops reflowing.
+    const suppression = effects.indicatorSuppression === 'sharing' && !this.pauseDuringSharing()
+      ? null
+      : effects.indicatorSuppression;
+    if (suppression !== null) {
+      this.suppressBorder(suppression);
     } else {
-      this.unsuppressBorder('pause');
       this.unsuppressBorder('sharing');
+      // A manual pause is a suppression of its own; do not clear it on an
+      // unrelated session transition.
+      if (this.sessionMachine.manualPause) this.suppressBorder('pause');
+      else this.unsuppressBorder('pause');
     }
     this.session.setScanning(effects.scanTickRunning);
     this.syncIndicator();
-    if (!initial && effects.retileOnResume) this.session.scheduleReconcile('session-resume');
-    this.history.log('session_mode', { mode, paused: effects.paused });
+    this.syncPanel();
+    if (!initial && (effects.retileOnResume || (mode === 'user' && leftSharingPaused))) {
+      this.session.scheduleReconcile('session-resume');
+    }
+    this.history.log('session_mode', { mode, paused: effects.paused, sharingPaused: leftSharingPaused });
+  }
+
+  /**
+   * §19: the sharing suppression is a property of the mode and the setting, not
+   * of the signal that entered it. Re-derived on the periodic pass so a missed
+   * transition (or a setting flip while already sharing) cannot leave it stale.
+   */
+  private refreshSharingSuppression(): void {
+    const want = this.sessionMachine.state.mode === 'screen-sharing' && this.pauseDuringSharing();
+    const active = this.border.isSuppressed('sharing');
+    if (want === active) return;
+    if (want) this.suppressBorder('sharing');
+    else this.unsuppressBorder('sharing');
+    this.syncIndicator();
+    this.syncPanel();
   }
 
   /**
@@ -434,19 +610,19 @@ export default class AdrtExtension extends Extension {
   private subscribeHost(): void {
     // Every platform event goes into the journal, whatever consumes it (§22).
     for (const type of PLATFORM_EVENT_TYPES) {
-      this.hostUnsubscribers.push(this.host.on(type, (payload) => {
+      this.hostUnsubscribers.push(this.host.on(type, (payload) => this.guard(`host:${type}`, () => {
         this.journal.record('host', type, (payload ?? {}) as Record<string, unknown>);
-      }));
+      })()));
     }
     this.hostUnsubscribers.push(
-      this.host.on('surface-created', (payload) => {
+      this.host.on('surface-created', (payload) => this.guard('host:surface-created', () => {
         const surfaceId = (payload as { surface: { id: number } }).surface.id;
         const win = this.host.windowFor(surfaceId);
         if (win !== null) this.session.register(win);
-      }),
-      this.host.on('focus-changed', (payload) => this.onFocusChanged((payload as { id: number | null }).id)),
-      this.host.on('workspace-switched', (payload) => this.onWorkspaceSwitched(payload as { from: number; to: number })),
-      this.host.on('screens-changed', () => {
+      })()),
+      this.host.on('focus-changed', (payload) => this.guard('host:focus-changed', () => this.onFocusChanged((payload as { id: number | null }).id))()),
+      this.host.on('workspace-switched', (payload) => this.guard('host:workspace-switched', () => this.onWorkspaceSwitched(payload as { from: number; to: number }))()),
+      this.host.on('screens-changed', () => this.guard('host:screens-changed', () => {
         // §10: re-read every surface (monitor, frame, monitor-implied sticky,
         // size hints) and drop classification before the deferred replan.
         this.session.onScreensChanged();
@@ -463,7 +639,7 @@ export default class AdrtExtension extends Extension {
         this.session.scheduleReconcile('screens-changed');
         this.session.scheduleDisplayPass('screens-changed');
         this.session.scheduleMaintenance('work-area', { reason: 'screens-changed' });
-      }),
+      })()),
     );
   }
 
@@ -534,8 +710,8 @@ export default class AdrtExtension extends Extension {
   private connectWorkspaceAnimation(): void {
     const tracker = (wm as any)?._workspaceAnimation?._swipeTracker;
     if (tracker === null || tracker === undefined || typeof tracker.connect !== 'function') return;
-    this.swipeSignalIds.push(tracker.connect('begin', () => this.onWorkspaceAnimation()));
-    this.swipeSignalIds.push(tracker.connect('update', () => this.onWorkspaceAnimation()));
+    this.swipeSignalIds.push(tracker.connect('begin', this.guard('workspace-animation-begin', () => this.onWorkspaceAnimation())));
+    this.swipeSignalIds.push(tracker.connect('update', this.guard('workspace-animation-update', () => this.onWorkspaceAnimation())));
   }
 
   private disconnectWorkspaceAnimation(): void {
@@ -855,6 +1031,12 @@ export default class AdrtExtension extends Extension {
     }
   }
 
+  /** Redraw the top-bar affordance to match the live state (cheap, no-op until
+   * `enable()` has built it). */
+  private syncPanel(): void {
+    this.panel?.sync();
+  }
+
   /**
    * §6/§11: the drop-assist overlay. The target is the model's own drag
    * decision (`WindowSession.previewTarget`), recomputed here while the drag is
@@ -881,8 +1063,8 @@ export default class AdrtExtension extends Extension {
     if (!Array.isArray(workspaces)) return;
     for (const actor of workspaces) {
       if (actor === null || actor === undefined) continue;
-      this.workspaceActorSignals.push({ actor, id: actor.connect('notify::x', () => this.onWorkspaceActorMoved()) });
-      this.workspaceActorSignals.push({ actor, id: actor.connect('notify::y', () => this.onWorkspaceActorMoved()) });
+      this.workspaceActorSignals.push({ actor, id: actor.connect('notify::x', this.guard('workspace-actor-x', () => this.onWorkspaceActorMoved())) });
+      this.workspaceActorSignals.push({ actor, id: actor.connect('notify::y', this.guard('workspace-actor-y', () => this.onWorkspaceActorMoved())) });
     }
   }
 
@@ -986,7 +1168,10 @@ export default class AdrtExtension extends Extension {
       ['gaps-top', () => this.session.invalidateAll()],
       ['gaps-bottom', () => this.session.invalidateAll()],
       ['gaps-between', () => this.session.invalidateAll()],
-      ['active-window-indicator', () => this.syncIndicator()],
+      ['active-window-indicator', () => {
+        this.syncIndicator();
+        this.syncPanel();
+      }],
       ['gesture-enabled', () => this.gestures.configure()],
       ['gesture-sensitivity', () => this.gestures.configure()],
       ['gesture-3-swipe-action', () => this.gestures.configure()],
@@ -1005,6 +1190,9 @@ export default class AdrtExtension extends Extension {
       ['history-enabled', () => this.history.setEnabled(this.settings.boolean('history-enabled', true))],
       ['history-max-bytes', () => this.history.setMaxBytes(this.settings.int('history-max-bytes', 8388608))],
       ['disable-animations', () => this.applyAnimationSetting()],
+      // §19: flipping the sharing option re-derives the suppression at once
+      // (on or off) without waiting for a session transition.
+      ['pause-during-sharing', () => this.refreshSharingSuppression()],
       // Changing a shortcut re-registers the bindings so it takes effect at once.
       ...this.keybindingSettingNames().map((key): [string, () => void] => [key, () => {
         this.unregisterKeybindings();
@@ -1012,6 +1200,37 @@ export default class AdrtExtension extends Extension {
       }]),
     ];
     for (const [key, cb] of reactive) this.settingWatchers.push(this.settings.onChanged(key, cb));
+    this.watchWorkspaceModeSettings();
+  }
+
+  /**
+   * §1: `dynamic-workspaces`, `workspaces-only-on-primary` and `num-workspaces`
+   * live on system schemas and decide each screen's class and slot routing, but
+   * were read per drain with no subscription — a flip in Tweaks left the class
+   * stale until an unrelated Mutter signal. Watch them like the other reactive
+   * settings and re-derive the placement state.
+   */
+  private watchWorkspaceModeSettings(): void {
+    const watch = (schema: string, key: string): void => {
+      try {
+        const store = new Gio.Settings({ schema_id: schema });
+        const id = store.connect(`changed::${key}`, this.guard(`workspace-mode:${key}`, () => this.onWorkspaceModeChanged(key)));
+        this.settingWatchers.push(() => store.disconnect(id));
+      } catch {
+        /* the schema is unavailable in this shell: nothing to watch */
+      }
+    };
+    watch('org.gnome.mutter', 'dynamic-workspaces');
+    watch('org.gnome.mutter', 'workspaces-only-on-primary');
+    watch('org.gnome.desktop.wm.preferences', 'num-workspaces');
+  }
+
+  /** Re-derive the screen class and slot occupancy after a workspace-mode flip. */
+  private onWorkspaceModeChanged(key: string): void {
+    this.history.log('screens_changed', { reason: 'workspace-mode', key });
+    this.session.invalidateAll();
+    this.session.scheduleDisplayPass('workspace-mode');
+    this.syncIndicator();
   }
 
   /**
@@ -1642,6 +1861,8 @@ export default class AdrtExtension extends Extension {
       SimulateWorkspaceReorder: (from, to) => this.session.simulateWorkspaceReorder(from, to),
       SimulateWorkspaceOrientation: (vertical) => this.session.simulateWorkspaceOrientation(vertical),
       CursorToCentre: () => this.session.centreCursorNow(),
+      ActivatePanelItem: (name) => this.panel?.activate(name) ?? false,
+      InjectFault: (context) => this.simulateFault(context),
       MinimizeWindow: (id) => {
         if (!this.session.windows.has(id)) return false;
         this.host.minimize(id);
@@ -1662,6 +1883,15 @@ export default class AdrtExtension extends Extension {
         this.changes.clear();
         this.saveState();
         this.session.clearSignatures();
+        // Test isolation: a layout reset also clears a panel/manual pause, so a
+        // scenario that forgot to resume cannot leak a paused session into the
+        // next one on the same worker.
+        if (this.sessionMachine.manualPause) {
+          this.sessionMachine.setManualPause(false);
+          if (this.sessionMachine.state.mode === 'user') this.unsuppressBorder('pause');
+          this.syncIndicator();
+          this.syncPanel();
+        }
         this.session.scheduleReconcile('reset-layout');
         return true;
       },
@@ -1734,6 +1964,21 @@ export default class AdrtExtension extends Extension {
     return start < span / 2 ? 0 : 1;
   }
 
+  /** §1: the live workspace-mode settings, for diagnostics and the D-Bus test. */
+  private readWorkspaceModeSettings(): { dynamic: boolean; onlyPrimary: boolean; numWorkspaces: number } {
+    try {
+      const mutter = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
+      const wm = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.preferences' });
+      return {
+        dynamic: mutter.get_boolean('dynamic-workspaces'),
+        onlyPrimary: mutter.get_boolean('workspaces-only-on-primary'),
+        numWorkspaces: wm.get_int('num-workspaces'),
+      };
+    } catch {
+      return { dynamic: true, onlyPrimary: true, numWorkspaces: 1 };
+    }
+  }
+
   private dumpState(): string {
     const monitors = this.host.screens().map((screen) => ({ ...screen }));
     const windows = [...this.session.windows.values()].map((tracked) => {
@@ -1778,6 +2023,17 @@ export default class AdrtExtension extends Extension {
       platform: 'gnome',
       paused: this.isPaused(),
       mode: this.sessionMachine.state.mode,
+      userPaused: this.sessionMachine.manualPause,
+      pauseDuringSharing: this.pauseDuringSharing(),
+      panel: this.panel?.describe() ?? {
+        present: false,
+        paused: this.isPaused(),
+        indicatorEnabled: this.settings.boolean('active-window-indicator', true),
+        pauseLabel: '',
+        indicatorLabel: '',
+      },
+      workspaceMode: this.readWorkspaceModeSettings(),
+      errors: this.errorCount,
       flags: {
         debug: {
           enabled: this.settings.boolean('debug-enabled', false),

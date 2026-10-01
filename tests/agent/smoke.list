@@ -128,3 +128,12 @@ A138-os-timing
 A140-prefs-options
 # --- topology: every screen keeps its own axis, gated by signature ---
 A142-topology-cases
+# --- screen sharing: off by default, opt-in pause path (§19) ---
+A28-screen-sharing
+A144-sharing-opt-in
+# --- top-bar panel affordance: pause / highlight / preferences (§1) ---
+A143-panel
+# --- workspace-mode settings re-derive at once (§1) ---
+A145-workspace-mode
+# --- error boundary: a caught throw does not take adrt down (§36) ---
+A146-error-boundary

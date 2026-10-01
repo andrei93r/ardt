@@ -3,8 +3,9 @@
 # Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
 # and can maintain this code.
 # A123 Session modes (§19): lock pauses new work but lets the queue finish what
-# it holds, then retiles once on resume; screen sharing keeps tiling and hides
-# the highlight; suspend is treated as lock.
+# it holds, then retiles once on resume; screen sharing is ignored unless
+# `pause-during-sharing` is on, in which case it pauses and hides the highlight;
+# suspend is treated as lock.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 ensure_clean
@@ -13,16 +14,26 @@ ids=($(list_ids))
 adrt ActivateWindow "${ids[0]}" >/dev/null
 wait_settled 12
 
-# --- screen sharing: keep tiling, hide the highlight ----------------------
+# --- screen sharing: ignored unless opted in ------------------------------
+assert_eq "sharing is ignored while the option is off" "false" "$(state_expr 'str(d["pauseDuringSharing"]).lower()')"
 adrt SimulateSessionMode screen-sharing >/dev/null
 wait_settled 12
-assert_eq "sharing does not pause" "false" "$(state_expr 'str(d["paused"]).lower()')"
-assert_eq "sharing hides the highlight" "false" "$(border_visible)"
-assert_eq "tiling continues while sharing" "2" "$(count_windows)"
+assert_eq "sharing does not pause while the option is off" "false" "$(state_expr 'str(d["paused"]).lower()')"
+assert_true "the highlight stays while sharing is ignored" "$(border_visible)"
+assert_eq "tiling continues while sharing is ignored" "2" "$(count_windows)"
+
+set_setting pause-during-sharing true
+adrt SimulateSessionMode user >/dev/null
+wait_settled 12
+adrt SimulateSessionMode screen-sharing >/dev/null
+wait_settled 12
+assert_eq "sharing pauses once opted in" "true" "$(state_expr 'str(d["paused"]).lower()')"
+assert_eq "sharing hides the highlight once opted in" "false" "$(border_visible)"
 
 adrt SimulateSessionMode user >/dev/null
 wait_border_visible 20 || true
 assert_true "the highlight returns after sharing" "$(border_visible)"
+set_setting pause-during-sharing false
 
 # --- suspend is lock ------------------------------------------------------
 adrt SimulateSessionMode suspend >/dev/null

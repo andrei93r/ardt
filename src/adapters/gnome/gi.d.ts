@@ -92,11 +92,13 @@ declare module 'resource:///org/gnome/shell/ui/main.js' {
 }
 
 declare module 'resource:///org/gnome/shell/ui/panelMenu.js' {
-  export const PanelMenu: any;
+  export const Button: any;
 }
 
 declare module 'resource:///org/gnome/shell/ui/popupMenu.js' {
-  export const PopupMenu: any;
+  export const PopupMenuItem: any;
+  export const PopupSeparatorMenuItem: any;
+  export const PopupSwitchMenuItem: any;
 }
 
 declare module 'resource:///org/gnome/shell/ui/quickSettings.js' {
