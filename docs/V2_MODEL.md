@@ -84,11 +84,16 @@ changes never move a window.
 
 **Maximize.**
 - On a workspace-capable screen the window moves to a workspace created **to the
-  right** and is maximized there. The workspace it left keeps its other window (a
-  maximized single) or, if it had none, is reaped. The view follows.
-- On a single-workspace-capable screen it maximizes **in place** and, with
-  `maximize-minimizes-others` (default on), minimizes the other managed windows **on
-  that monitor only**. They return when it is unmaximized, minimized or closed.
+  right** and is maximized there. The window left behind is alone on its workspace, so
+  it takes the whole screen and maximizes; a workspace with nothing left in it is
+  reaped. The view follows.
+- On a single-workspace-capable screen there is nowhere to create a workspace, so it
+  maximizes **in place** and **minimizes the other managed windows on that monitor
+  only**. They return to their starting slots when it is unmaximized, minimized or
+  closed.
+- There is **no switch** for either: this is the single behaviour. The planned
+  `maximize-minimizes-others` and `maximize-new-workspace` settings are dropped —
+  they could never have changed anything.
 
 **Fullscreen** behaves like maximize: on a workspace-capable screen it gets a
 workspace **to the right**; on a single-workspace-capable screen it stays in place.
@@ -225,10 +230,10 @@ Never create, reap or navigate workspaces there.
 - **Single-workspace-capable**: the first *visible* window is maximized; a second
   splits it; a third **floats** (a minimized window holds no slot, so it never forces
   the float). The two slots are a persistent pair on that screen — they do not move
-  when the primary switches workspace. Maximize is in place with
-  `maximize-minimizes-others`, and **fullscreen behaves the same**: it fills the
-  screen where it is and, with the setting on, minimizes the other managed windows,
-  which return when it exits (the exiting window landing in slot 1).
+  when the primary switches workspace. Maximize is in place and minimizes the other
+  managed windows (§4), and **fullscreen behaves the same**: it fills the screen where
+  it is and minimizes the other managed windows, which return when it exits (the
+  exiting window landing in slot 1).
 - **Fixed-workspace**: routing fills existing workspaces (right, then left); a window
   with no free slot floats. Maximize behaves as on a workspace-capable screen, except
   that it may only use existing workspaces; if none is free it maximizes in place.
@@ -553,7 +558,7 @@ never debug-gated (the deduplication and rate limits still apply).
    property, wherever it sits.
 4. **Maximize** moves the window to its own workspace on a workspace-capable screen;
    on a single-workspace-capable screen it maximizes in place and minimizes the other
-   windows on that monitor only (`maximize-minimizes-others`, default on).
+   windows on that monitor only. There is no setting for it.
 5. **Fullscreen** behaves as maximize and is recorded and restored when the window
    still exists.
 6. **Unmaximize** joins the left workspace when it holds exactly one window (the
@@ -776,6 +781,13 @@ never debug-gated (the deduplication and rate limits still apply).
 63. **The trade is symmetric** (round scenario 4, confirmed): restoring the minimized
     window makes it the trigger, so it takes the screen maximized and the other is
     minimized, as many times as they trade.
+
+64. **Maximize has one behaviour, and its switch is dropped** (round scenario 5): on a
+    workspace-capable screen the window gets a workspace to the right and the window
+    left behind fills the screen and maximizes; on a single-workspace screen it
+    maximizes in place and minimizes the other managed windows, which return to their
+    starting slots on unmaximize. `maximize-minimizes-others` and
+    `maximize-new-workspace` are therefore not settings and are dropped.
 
 ## Deliberate non-goals
 

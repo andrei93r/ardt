@@ -67,7 +67,7 @@ misbehaving-client path. The families the last revision added:
   neighbour that holds windows, else into the right one, else left in place with the
   workspace allowed to persist.
 - **maximize / unmaximize / fullscreen**: own workspace to the right; in place plus
-  `maximize-minimizes-others` on a single-workspace screen; unmaximize joins a
+  minimizes the other windows on a single-workspace screen; unmaximize joins a
   neighbour only when that neighbour holds **exactly one** window (left first, then
   right), and otherwise moves it minimized into a neighbour that holds windows (left,
   else right, else it stays); fullscreen recorded and restored; and a **user move**
@@ -236,7 +236,7 @@ Implementation:
       `pruneEmptyWorkspaces` rules, `EXILE_COOLDOWN_MS`, the spawn budget +
       `core/budget.ts`, `workspaceOpDepth`.
 - [ ] Maximise rules (§4), unmaximise rules (§4), single-workspace flow (§7), floats
-      (§6), settings `maximize-new-workspace` + `maximize-minimizes-others`; remove
+      (§6); remove
       `workspace-auto-name`, `workspace-move-grace-seconds`,
       `respect-user-workspace-move`.
 - [ ] Rewrite/retire the scenario set (table in the CHANGELOG) and spec/README
