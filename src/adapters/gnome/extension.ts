@@ -26,7 +26,7 @@ import { ChangeLog } from '../../core/undo.js';
 import type { SplitAxis } from '../../core/tiler.js';
 import type { MemoryEntry } from '../../core/displays.js';
 import { NoticeGate, isAlwaysNotice, noticeTitle } from '../../core/notify.js';
-import { clamp } from '../../core/types.js';
+import { clamp, Layer } from '../../core/types.js';
 import type { Rect, Screen } from '../../core/types.js';
 import type { GestureKind } from '../../core/gestures.js';
 import type { DbusHandlers } from '../../platform/dbus.js';
@@ -42,6 +42,7 @@ import { GnomeIndicator } from './indicator.js';
 import { EventJournal } from './journal.js';
 import { RegistryStore } from './registry.js';
 import { WindowSession } from './session.js';
+import type { TrackedWindow } from './tracked-window.js';
 import { GnomeSettings } from './settings.js';
 import { Tiling } from './tiling.js';
 import type { TraceInitial, TraceWorkspace, TraceEntry } from '../../core/replay.js';
@@ -607,34 +608,63 @@ export default class AdrtExtension extends Extension {
   }
 
   /**
-   * §23.2: the border must not be drawn over a window that is on top of the
-   * focused one. A floating window (a user-forced float, or a window that
-   * returned onto a full pair) sits above the tiles, so if it covers the
-   * focused tile's centre the highlight is suppressed until it is revealed.
+   * §23.2/§11: the border must not be drawn over a window that is on top of the
+   * focused one. Occlusion is a property of the compositor *stack* — anything
+   * drawn above the focused window, a float, a dialog or an always-on-top
+   * window — not of the session float flag, so it is re-derived from live
+   * stacking order rather than a cached classification.
    */
   private refreshOcclusion(): void {
     const focused = this.session.focused();
     let occluded = false;
     if (focused !== null && this.session.classify(focused).tileable && !focused.surface.flags.floating) {
-      const r = focused.surface.frame;
-      const cx = r.x + r.width / 2;
-      const cy = r.y + r.height / 2;
-      for (const other of this.session.windows.values()) {
-        if (other.id === focused.id) continue;
-        if (!other.surface.flags.floating || other.surface.flags.minimized) continue;
-        if (other.surface.workspaceId !== focused.surface.workspaceId) continue;
-        const o = other.surface.frame;
-        if (cx >= o.x && cx <= o.x + o.width && cy >= o.y && cy <= o.y + o.height) {
-          occluded = true;
-          break;
-        }
-      }
+      occluded = this.isOccluded(focused);
     }
     if (occluded === this.occluded) return;
     this.occluded = occluded;
     if (occluded) this.suppressBorder('occluded');
     else this.unsuppressBorder('occluded');
     this.syncIndicator();
+  }
+
+  /**
+   * Whether any visible window is stacked above `focused` and covers its centre.
+   * The centre is the established "substantially covered" test; the change is
+   * that the window above need not be a session float (A130).
+   */
+  private isOccluded(focused: TrackedWindow): boolean {
+    const r = focused.surface.frame;
+    const cx = r.x + r.width / 2;
+    const cy = r.y + r.height / 2;
+    const others: TrackedWindow[] = [];
+    for (const tracked of this.session.windows.values()) {
+      if (tracked.id !== focused.id) others.push(tracked);
+    }
+    if (others.length === 0) return false;
+    // Bottom-to-top order of the tracked windows, so "above" is read from the
+    // compositor, never assumed from the layer.
+    const order = compat
+      .sortByStacking([focused.win, ...others.map((tracked) => tracked.win)])
+      .map((win: any) => win.get_id());
+    const focusIdx = order.indexOf(focused.id);
+    for (const other of others) {
+      if (other.surface.flags.minimized) continue;
+      // A window on another workspace is not visible over this one; an
+      // always-on-top or sticky window is.
+      if (other.surface.workspaceId !== focused.surface.workspaceId && !other.surface.flags.sticky) continue;
+      const idx = order.indexOf(other.id);
+      // With a real stacking order, only a window after the focused one is
+      // above it. If the order came back unsorted (API unavailable), fall back
+      // to the layer: only a modal or floating layer can be over a tile.
+      if (focusIdx >= 0 && idx >= 0) {
+        if (idx <= focusIdx) continue;
+      } else if (other.surface.layer === Layer.TILED) {
+        continue;
+      }
+      const o = other.win.get_frame_rect();
+      if (cx >= o.x && cx <= o.x + o.width && cy >= o.y && cy <= o.y + o.height) return true;
+    }
+    return false;
   }
 
   /**

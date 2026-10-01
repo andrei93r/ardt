@@ -61,6 +61,20 @@ export function isOnAllWorkspaces(win: any): boolean {
   return win.is_on_all_workspaces() === true;
 }
 
+/**
+ * The given meta windows in compositor stacking order, bottom-to-top. Used to
+ * answer "what is drawn above this window" from live state instead of a cached
+ * flag (occlusion is a property of the stack, not of how a window is
+ * classified). Falls back to the input order when the API is unavailable.
+ */
+export function sortByStacking(windows: any[]): any[] {
+  try {
+    return global.display.sort_windows_by_stacking(windows);
+  } catch {
+    return windows;
+  }
+}
+
 /** Compositor actor for a window, or null while unmapping (§26). */
 export function compositorActor(win: any): any | null {
   try {
