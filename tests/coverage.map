@@ -127,3 +127,10 @@ session-fullscreen-highlight | S21-fullscreen-no-highlight
 session-cursor-centre | S22-cursor-centre
 session-clamp-to-screen | S24-clamp-to-screen
 session-topology | S25-screen-topology
+
+# --- panel lane additions (renumbered on merge) ---
+float-restore-exact | A145-float-restore-exact
+screen-sharing-opt-in | A28-screen-sharing A148-sharing-opt-in
+panel-affordance | A147-panel
+workspace-mode-settings | A149-workspace-mode
+error-boundary | A146-error-boundary
