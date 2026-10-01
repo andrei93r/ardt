@@ -446,8 +446,10 @@ export class WindowSession {
       this.scheduleReconcile('register-unmaximize');
       return;
     }
-    // §3: the routing decision comes from the pure model; the adapter applies it.
-    this.routeWindow(tracked);
+    // §3: routing comes from the pure model and is applied by the lane-2
+    // drain. Here we only record that the window is ready and push the work.
+    tracked.routePending = true;
+    this.scheduleReconcile('route');
   }
 
   /**
@@ -558,6 +560,9 @@ export class WindowSession {
     for (let index = 0; index < count; index++) workspaces.push({ id: index, slots: [null, null], minimized: [], floats: [] });
     for (const tracked of [...this.windows.values()].sort((a, b) => a.id - b.id)) {
       if (tracked.id === excludeId) continue;
+      // A newcomer whose placement is still pending holds no slot yet: its
+      // routing is derived from live state in the drain (§3/§11).
+      if (tracked.routePending) continue;
       const ws = workspaces[tracked.surface.workspaceId];
       if (ws === undefined) continue;
       const rec: Win = {
@@ -1257,6 +1262,14 @@ export class WindowSession {
         }
       }
     }
+    // §3/§11: the routing decision is a property of the drain, never of the
+    // `onReady` timeout: the newcomer's placement is computed here from live
+    // state, so a raced spawn signal cannot leave the layout half-decided.
+    for (const tracked of [...this.windows.values()]) {
+      if (!tracked.routePending) continue;
+      tracked.routePending = false;
+      if (this.windows.has(tracked.id)) this.routeWindow(tracked);
+    }
     // §4/§16: fullscreen and user-unmaximize transitions are re-derived here,
     // never acted on inside the Mutter signal handler that reported them.
     for (const tracked of [...this.windows.values()]) {
@@ -1462,6 +1475,8 @@ export class WindowSession {
       // §16: an escaped window owns its workspace at its own size; it is not
       // tiled and the lone law does not maximize it.
       if (tracked.escaped) continue;
+      // §3/§11: a newcomer whose placement has not been decided is not tiled.
+      if (tracked.routePending) continue;
       if (this.classify(tracked).tileable) out.push(tracked);
     }
     return out.sort((a, b) => a.id - b.id);
