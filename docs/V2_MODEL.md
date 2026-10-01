@@ -515,9 +515,16 @@ Two clarifications that follow from this:
 
 ## 18. Animation policy
 
-- `disable-animations` turns off **everything**, including GNOME's own animations
-  (the Shell-wide `St.Settings.enable_animations`) as well as adrt's frame animations
-  and workspace slides.
+- `disable-animations` turns off **adrt's own** frame animations and workspace
+  slides. It never mutates GNOME's global accessibility state: the Shell-wide
+  `St.Settings.enable_animations` (and `slow-down-factor` / `reduced-motion`)
+  is the source of truth adrt reads, and `disable()` restores exactly the
+  pre-enable baseline. A user who disabled animations for accessibility keeps
+  them disabled.
+- Every duration is frame-aligned to the window's own screen (`1000 / refreshRate`,
+  or the measured interval under variable refresh) and scaled by the OS
+  `slow_down_factor`; with animations disabled the resolved duration is 0. No
+  screen is assumed to be 60 Hz.
 - With animations enabled: every model-driven geometry change animates using
   `animation-duration`; our own workspace slides are **clone-free** (the
   `animateSwitch` exception) so no window is ever drawn twice; the close ghost keeps
@@ -661,7 +668,8 @@ never debug-gated (the deduplication and rate limits still apply).
     for a window that does not fit is **its own workspace**, not a float.
 25. **Keybindings** are frozen with a workspace-move shortcut (the only keyboard
     workspace change), `follow-moved-window` default on, and nudge on both axes.
-26. **`disable-animations` disables everything**, GNOME's animations included.
+26. **`disable-animations` disables adrt's own animations only**, never the
+    user's global GNOME animation state.
 27. **The queue finishes what is in it** when the session pauses; nothing is dropped.
 28. **Enable-time normalisation** runs on every enable with §20's two-branch rule: a
     dominating window (at least 70% of the work area) maximized, else the top two by

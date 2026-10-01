@@ -30,7 +30,8 @@ import { reapPlan } from '../../core/workspaces.js';
 import type { Change, ChangeLog, InstanceConfig, LiveInstance } from '../../core/undo.js';
 import { validateChange } from '../../core/undo.js';
 
-/** §10: how long a maintenance pass waits for the surface to settle. */
+/** §10: how long a maintenance pass waits for the surface to settle (struts are
+ * set asynchronously by the Shell; internal safety, not a frame cadence). */
 const MAINTENANCE_SETTLE_MS = 200;
 import { checkPlan } from '../../core/invariants.js';
 import { SignatureCache, planSignature } from '../../core/scheduler.js';
@@ -47,12 +48,15 @@ import type { History } from './history.js';
 import { instanceIdFor, resolveWindowIdentity } from './appidentity.js';
 import type { RegistryStore } from './registry.js';
 import type { GnomeSettings } from './settings.js';
+import type { GnomeTiming } from './timing.js';
 import type { Tiling } from './tiling.js';
 import { TrackedWindow } from './tracked-window.js';
 
 export interface SessionDeps {
   host: GnomeHost;
   settings: GnomeSettings;
+  /** §11.3/§18: OS animation state and per-screen frame interval. */
+  timing: GnomeTiming;
   tiling: Tiling;
   history: History;
   registry: RegistryStore;
@@ -79,7 +83,8 @@ interface WindowSignal {
   id: number;
 }
 
-/** Quiet period after the last user frame change before a drop is interpreted. */
+/** Quiet period after the last user frame change before a drop is interpreted
+ * (internal signal-latency guard, not a frame cadence). */
 const ADJUST_SETTLE_MS = 150;
 /**
  * A maximize/unmaximize signal that arrives within this window of a state
@@ -94,6 +99,17 @@ const SELF_APPLY_MS = 200;
  * another actor — would otherwise freeze the layout until the next real drag.
  */
 const DRAG_STALE_MS = 2500;
+/** Delay before a maintenance sweep, so a burst of signals coalesces. */
+const SWEEP_DELAY_MS = 150;
+/** How long the switch-animation patch stays installed, then it is restored. */
+const SWITCH_ANIMATION_PATCH_MS = 400;
+/** Two settle passes after an action, so reaping sees the final state. */
+const PRUNE_FIRST_MS = 300;
+const PRUNE_SECOND_MS = 900;
+/** Ignore plan-mismatch re-applies for this long after Undo (internal). */
+const MISMATCH_SUPPRESSION_MS = 4000;
+/** Backoff before re-trying a lone-window maximize the same window refused. */
+const COHERENCE_RETRY_MS = 3000;
 export class WindowSession {
   readonly windows = new Map<number, TrackedWindow>();
   private readonly signals = new Map<number, WindowSignal[]>();
@@ -449,9 +465,11 @@ export class WindowSession {
     this.deferReady(tracked, 0);
   }
 
-  /** §7.1: wait for the first frame plus the configured delay. */
+  /** §7.1: wait for the first frame plus the configured delay. The floor is
+   * three compositor frames, derived from the screen refresh, not a fixed 50 ms. */
   private deferReady(tracked: TrackedWindow, attempt: number): void {
-    const delay = Math.max(50, this.deps.settings.int('gnome-animation-delay', 0));
+    const configured = this.deps.settings.int('gnome-animation-delay', 0);
+    const delay = Math.max(this.deps.timing.sampleIntervalMs(3), configured);
     this.addTimeout(delay, () => this.onReady(tracked, attempt));
   }
 
@@ -844,7 +862,7 @@ export class WindowSession {
     // A close can leave a window we had floated over a pair with nowhere to
     // float: run the sweep so it comes back into the tiling and its "above"
     // flag is cleared with it.
-    this.addTimeout(150, () => this.scheduleMaintenance('sweep'));
+    this.addTimeout(SWEEP_DELAY_MS, () => this.scheduleMaintenance('sweep'));
   }
 
   /** Re-classify and retile after a settings change. */
@@ -1274,8 +1292,9 @@ export class WindowSession {
       laters.add(type, run);
     } catch {
       // No later machinery (or the enum moved): a short timeout is still one
-      // deferred pass, never policy inside the signal handler.
-      GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, run);
+      // deferred pass, never policy inside the signal handler. One frame at the
+      // screen's refresh, never an assumed 60 Hz.
+      GLib.timeout_add(GLib.PRIORITY_DEFAULT, Math.max(1, Math.floor(this.deps.timing.frameIntervalFor())), run);
     }
   }
 
@@ -1951,7 +1970,7 @@ export class WindowSession {
     }
     this.deps.history.log('undo', { instances: change.instances.map((instance) => instance.id) });
     // Do not immediately re-tile over the restored rects.
-    this.ignoreMismatchUntilMs = Date.now() + 4000;
+    this.ignoreMismatchUntilMs = Date.now() + MISMATCH_SUPPRESSION_MS;
     this.signatures.clearAll();
     return true;
   }
@@ -2526,7 +2545,7 @@ export class WindowSession {
     try {
       fn();
     } finally {
-      this.addTimeout(400, () => {
+      this.addTimeout(SWITCH_ANIMATION_PATCH_MS, () => {
         controller.animateSwitch = original;
       });
     }
@@ -2586,8 +2605,8 @@ export class WindowSession {
 
   /** Reap empty workspaces shortly after an action, once state has settled. */
   private schedulePrune(): void {
-    this.addTimeout(300, () => this.reapEmptyWorkspaces());
-    this.addTimeout(900, () => this.reapEmptyWorkspaces());
+    this.addTimeout(PRUNE_FIRST_MS, () => this.reapEmptyWorkspaces());
+    this.addTimeout(PRUNE_SECOND_MS, () => this.reapEmptyWorkspaces());
   }
 
   /** §7.5 close: leave an empty workspace, then reap it (§16). */
@@ -3299,7 +3318,7 @@ export class WindowSession {
           const only = tileables[0];
           const due = Date.now() >= (this.coherenceRetryAt.get(only.id) ?? 0);
           if (!compat.isMaximized(only.win) && !only.surface.flags.floating && due) {
-            this.coherenceRetryAt.set(only.id, Date.now() + 3000);
+            this.coherenceRetryAt.set(only.id, Date.now() + COHERENCE_RETRY_MS);
             only.stubborn = false;
             this.deps.tiling.noteSelfApply();
             this.deps.host.maximize(only.id);

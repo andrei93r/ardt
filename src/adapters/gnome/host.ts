@@ -24,6 +24,9 @@ import { VersionDetector } from './version.js';
 
 type Listener = (payload: unknown) => void;
 
+/** If `startup-complete` never arrives, unblock the first drain after this long. */
+const STARTUP_FALLBACK_MS = 1500;
+
 interface Connection {
   object: any;
   id: number;
@@ -60,9 +63,26 @@ export class GnomeHost implements PlatformHost {
   /** §20: whether the shell has finished starting up. */
   private startupComplete = false;
   private startupFallback = 0;
+  /** Where the last refresh-rate reading came from (for the platform probe). */
+  private refreshSource = 'fallback';
 
   get hostLookups(): number {
     return this.lookupCount;
+  }
+
+  /** Which API supplied the per-screen refresh rate: layout/backend/stage/fallback. */
+  get refreshRateSource(): string {
+    return this.refreshSource;
+  }
+
+  /** Whether Mutter was told to try variable refresh (the experimental feature). */
+  adaptiveSyncSupported(): boolean {
+    try {
+      const features: unknown = this.mutter?.get_strv('experimental-features');
+      return Array.isArray(features) && features.includes('variable-refresh-rate');
+    } catch {
+      return false;
+    }
   }
 
   get hostScans(): number {
@@ -88,7 +108,7 @@ export class GnomeHost implements PlatformHost {
     } catch {
       this.startupComplete = true;
     }
-    this.startupFallback = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+    this.startupFallback = GLib.timeout_add(GLib.PRIORITY_DEFAULT, STARTUP_FALLBACK_MS, () => {
       this.startupFallback = 0;
       this.markStartupComplete();
       return GLib.SOURCE_REMOVE;
@@ -453,17 +473,34 @@ export class GnomeHost implements PlatformHost {
         workArea: this.simulatedWorkAreas.get(screen.connector) ?? (screen.workArea === undefined ? undefined : { ...screen.workArea }),
       }));
       this.primaryMonitorIndex = this.screensCache.find((screen) => screen.isPrimary)?.index ?? this.screensCache[0]?.index ?? 0;
+      this.refreshSource = 'simulated';
       return;
     }
     const monitors: any[] = layoutManager.monitors;
     const connectors = this.monitorConnectors();
     this.primaryMonitorIndex = layoutManager.primaryIndex ?? 0;
     const workspace = global.workspace_manager.get_active_workspace();
+    const stageRate = this.stageRefreshRate();
+    let sawLayout = false;
+    let sawBackend = false;
     this.screensCache = monitors.map((monitor, position) => {
       // The real Mutter index, never the array position: a reordered monitor
       // list must not move the connector or the primary flag.
       const monitorIndex = monitor.index ?? position;
       const work = workspace === null ? null : workspace.get_work_area_for_monitor(monitorIndex);
+      // Newer Shells put `refreshRate` on the layout monitor; older ones need
+      // the Mutter mode. Neither may be assumed to exist, and a virtual monitor
+      // reports a fixed rate while a real VRR panel changes at runtime.
+      let rate = 0;
+      const direct = monitor.refreshRate;
+      if (typeof direct === 'number' && direct > 0) {
+        rate = direct;
+        sawLayout = true;
+      } else {
+        rate = this.backendRefreshRate(monitorIndex);
+        if (rate > 0) sawBackend = true;
+      }
+      if (rate <= 0) rate = stageRate;
       return {
         index: monitorIndex,
         connector: connectors.get(monitorIndex) ?? connectors.get(position) ?? `M${monitorIndex}`,
@@ -473,10 +510,43 @@ export class GnomeHost implements PlatformHost {
             ? undefined
             : { x: work.x, y: work.y, width: work.width, height: work.height },
         scale: monitor.scale ?? 1,
-        refreshRate: monitor.refreshRate ?? 60,
+        refreshRate: rate > 0 ? rate : 60,
         isPrimary: monitorIndex === this.primaryMonitorIndex,
       };
     });
+    this.refreshSource = sawLayout ? 'layout' : sawBackend ? 'backend' : stageRate > 0 ? 'stage' : 'fallback';
+  }
+
+  /**
+   * The current mode's refresh rate from the Mutter monitor object, where the
+   * typelib exposes it. Feature-detected: a missing method is not an error.
+   */
+  private backendRefreshRate(index: number): number {
+    try {
+      const manager = global.backend.get_monitor_manager();
+      const monitors: any[] = manager.get_monitors();
+      const monitor = monitors.find((m: any) => (typeof m.get_index === 'function' ? m.get_index() : -1) === index) ?? monitors[index];
+      if (typeof monitor?.get_current_mode !== 'function') return 0;
+      const mode = monitor.get_current_mode();
+      const rate = typeof mode?.get_refresh_rate === 'function' ? mode.get_refresh_rate() : undefined;
+      return typeof rate === 'number' && rate > 0 ? rate : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** The stage's own frame-clock rate, a last real reading; 0 when unavailable. */
+  private stageRefreshRate(): number {
+    try {
+      const view = global.stage?.get_view?.();
+      const fromView = typeof view?.get_refresh_rate === 'function' ? view.get_refresh_rate() : undefined;
+      if (typeof fromView === 'number' && fromView > 0) return fromView;
+      const clock = global.stage?.get_frame_clock?.();
+      const fromClock = typeof clock?.get_refresh_rate === 'function' ? clock.get_refresh_rate() : undefined;
+      return typeof fromClock === 'number' && fromClock > 0 ? fromClock : 0;
+    } catch {
+      return 0;
+    }
   }
 
   /**

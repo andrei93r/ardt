@@ -44,6 +44,7 @@ import { RegistryStore } from './registry.js';
 import { WindowSession } from './session.js';
 import type { TrackedWindow } from './tracked-window.js';
 import { GnomeSettings } from './settings.js';
+import { GnomeTiming } from './timing.js';
 import { Tiling } from './tiling.js';
 import type { TraceInitial, TraceWorkspace, TraceEntry } from '../../core/replay.js';
 
@@ -55,17 +56,23 @@ import type { TraceInitial, TraceWorkspace, TraceEntry } from '../../core/replay
 const RELEASE_VERSION = '0.2.0';
 /** The settings/state format version (the migration gate). */
 const EXTENSION_VERSION = 1;
-/** §23.2: how often the focused actor's position is sampled, and how many
- * stable samples end a transition. */
-const MOTION_POLL_MS = 50;
+/** §23.2: how many compositor frames between focused-actor position samples.
+ * The wall-clock interval is derived from the screen's refresh rate (or the
+ * measured interval under adaptive sync), never a fixed 50 ms. */
+const MOTION_POLL_FRAMES = 3;
 const MOTION_STABLE_SAMPLES = 3;
-/** §35: every N motion ticks (~500 ms) re-run the tiling plan as a safety net,
- * so a layout that drifted without a usable signal heals on its own. */
-const MOTION_RETILE_TICKS = 10;
-/** Ignore movement for this long after we applied a plan ourselves. */
+/** §35: at least this long between safety-net retiles, measured in frames. */
+const MOTION_RETILE_MS = 500;
+/** Ignore movement for this long after we applied a plan ourselves. Internal
+ * signal-latency guard, not a frame cadence. */
 const MOTION_SELF_MS = 200;
-/** §35: how often the coherence sweep guarantees every window is tiled. */
+/** §35: how often the coherence sweep guarantees every window is tiled. Internal
+ * safety cadence. */
 const COHERENCE_SWEEP_MS = 700;
+/** Startup settle before normalising existing workspaces (adoption is async). */
+const NORMALIZE_ON_ENABLE_MS = 400;
+/** §23.2: a workspace-switch animation still running after this is torn down. */
+const SWITCH_WATCHDOG_MS = 1500;
 
 interface ExtraHandlers {
   ActivateWindow(id: number): boolean;
@@ -105,6 +112,7 @@ type Handlers = DbusHandlers & ExtraHandlers;
 export default class AdrtExtension extends Extension {
   private settings!: GnomeSettings;
   private host!: GnomeHost;
+  private timing!: GnomeTiming;
   private registry!: RegistryStore;
   private history!: History;
   private journal!: EventJournal;
@@ -117,6 +125,8 @@ export default class AdrtExtension extends Extension {
   private dbus!: GnomeDbus;
   private border!: BorderState;
   private sessionMachine = new SessionMachine();
+  /** A mode injected by the test trigger, overriding the live session mode. */
+  private injectedMode: SessionMode | null = null;
 
   private readonly notices = new NoticeGate();
   /** Why focus last moved, as far as adrt knows (the shell moves it itself). */
@@ -141,6 +151,22 @@ export default class AdrtExtension extends Extension {
   private motionTicks = 0;
   private motionRetiles = 0;
   private motionSkip = '';
+  /** The interval the motion sampler is currently armed with, in ms. */
+  private motionPollMs = 0;
+  /** Ticks per safety-net retile, re-derived from the sampler interval. */
+  private motionRetileTicks = 10;
+  /** The last observed frame timestamp, for VRR measurement (µs). */
+  private lastFrameUs = 0;
+  /**
+   * GNOME's animation state as found at enable. adrt does not write it, so
+   * `disable()` restores exactly this (a no-op unless a future path mutates).
+   */
+  private animationsBaseline: { enableAnimations: boolean | null; slowDownFactor: number | null } = {
+    enableAnimations: null,
+    slowDownFactor: null,
+  };
+  /** Set only if adrt ever writes GNOME's animation state (never today). */
+  private animationsMutated = false;
   private occluded = false;
   private wsSwitchEvents = 0;
   private motionSuppressions = 0;
@@ -170,6 +196,13 @@ export default class AdrtExtension extends Extension {
       this.buildDirMtimeMs = 0;
     }
     this.settings = new GnomeSettings(this.getSettings());
+    this.timing = new GnomeTiming({
+      screens: () => this.host?.screens() ?? [],
+      animationsDisabled: () => this.settings.boolean('disable-animations', false),
+      adaptiveSync: () => this.host?.adaptiveSyncSupported() ?? false,
+      onChanged: () => undefined,
+    });
+    this.captureAnimationBaseline();
     this.applyAnimationSetting();
 
     this.history = new History(
@@ -195,7 +228,7 @@ export default class AdrtExtension extends Extension {
     this.host = new GnomeHost();
     this.host.enable();
 
-    this.indicator = new GnomeIndicator(this.settings);
+    this.indicator = new GnomeIndicator(this.settings, this.timing);
     this.animator = new FrameClockAnimator({
       isAlive: (id) => this.session.windows.has(id),
       apply: (id, rect) => this.host.applyFrame(id, rect),
@@ -205,6 +238,7 @@ export default class AdrtExtension extends Extension {
     this.tiling = new Tiling({
       host: this.host,
       settings: this.settings,
+      timing: this.timing,
       history: this.history,
       registry: this.registry,
       animator: this.animator,
@@ -218,6 +252,7 @@ export default class AdrtExtension extends Extension {
     this.session = new WindowSession({
       host: this.host,
       settings: this.settings,
+      timing: this.timing,
       tiling: this.tiling,
       history: this.history,
       registry: this.registry,
@@ -258,7 +293,7 @@ export default class AdrtExtension extends Extension {
     // §20: every enable normalises the existing workspaces. Adoption finishes on
     // the first ready timeout, so normalisation is deferred just past it; the
     // pass itself is idempotent.
-    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
+    GLib.timeout_add(GLib.PRIORITY_DEFAULT, NORMALIZE_ON_ENABLE_MS, () => {
       this.session?.normalizeOnEnable();
       return GLib.SOURCE_REMOVE;
     });
@@ -269,7 +304,11 @@ export default class AdrtExtension extends Extension {
       this.dbus.expose(this.handlers());
     }
 
-    this.sessionModeId = sessionMode.connect('notify::current-mode', () => this.applySessionMode(this.currentMode()));
+    this.sessionModeId = sessionMode.connect('notify::current-mode', () => {
+      // A live session transition always wins over a test-injected mode.
+      this.injectedMode = null;
+      this.applySessionMode(this.currentMode());
+    });
     this.overviewSignals.push(overview.connect('showing', () => this.onOverviewChanged(true)));
     this.overviewSignals.push(overview.connect('hidden', () => this.onOverviewChanged(false)));
     this.refreshWorkspaceActors();
@@ -287,6 +326,7 @@ export default class AdrtExtension extends Extension {
     // never be left untiled next to a sibling.
     this.coherenceSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, COHERENCE_SWEEP_MS, () => {
       this.session.coherenceSweep();
+      this.refreshSessionMode();
       this.watchWorkspaceAnimation();
       this.refreshWorkspaceSwitchSuppression();
       return GLib.SOURCE_CONTINUE;
@@ -305,6 +345,10 @@ export default class AdrtExtension extends Extension {
   }
 
   disable(): void {
+    // §19: `metadata.json` declares `session-modes: [user, unlock-dialog]`, so
+    // the Shell keeps adrt *resident* while the screen is locked instead of
+    // tearing it down. `disable()` therefore runs on logout/extension removal,
+    // not on lock; the lock transition is handled by `applySessionMode`.
     this.journal?.destroy();
     this.history.log('disable', {});
     this.stopMotionWatch();
@@ -339,12 +383,10 @@ export default class AdrtExtension extends Extension {
     this.saveDisplayMemory();
     this.history.destroy();
     this.saveState();
-    // §18: leave GNOME's animations as we found them.
-    try {
-      St.Settings.get().enable_animations = true;
-    } catch {
-      /* no St.Settings */
-    }
+    // §18: restore GNOME's animations to what we found, never force them on for
+    // a user who had turned them off.
+    this.restoreAnimationSetting();
+    this.timing.destroy();
   }
 
   // ---------------------------------------------------------------- session
@@ -373,6 +415,22 @@ export default class AdrtExtension extends Extension {
     this.history.log('session_mode', { mode, paused: effects.paused });
   }
 
+  /**
+   * §19: re-derive the session-mode property from the live `sessionMode` on the
+   * periodic pass. The `notify::current-mode` signal is the primary path, but a
+   * missed or raced transition (a lock during a Shell restart) must not leave
+   * adrt unpaused while the session is locked. Reads only; `applySessionMode`
+   * runs the effects on a real change.
+   */
+  private refreshSessionMode(): void {
+    // A test-injected mode (SimulateSessionMode) owns the state until a real
+    // session transition clears it; re-deriving would revert the injection.
+    if (this.injectedMode !== null) return;
+    const mode = this.currentMode();
+    if (mode === this.sessionMachine.state.mode) return;
+    this.applySessionMode(mode);
+  }
+
   private subscribeHost(): void {
     // Every platform event goes into the journal, whatever consumes it (§22).
     for (const type of PLATFORM_EVENT_TYPES) {
@@ -392,6 +450,11 @@ export default class AdrtExtension extends Extension {
         // §10: re-read every surface (monitor, frame, monitor-implied sticky,
         // size hints) and drop classification before the deferred replan.
         this.session.onScreensChanged();
+        // §11.3: a refresh-rate change (or a VRR mode change) re-derives the
+        // resolved timing here, as a read-only property refresh. Measured frame
+        // intervals belong to the old topology, so drop them too.
+        this.timing.resetObserved();
+        this.timing.invalidate();
         if (this.settings.boolean('debug-displays', false)) {
           this.history.log('screens_changed', { monitors: this.host.screens().length });
         }
@@ -451,7 +514,7 @@ export default class AdrtExtension extends Extension {
       this.switchWatchStart = Date.now();
       return;
     }
-    if (Date.now() - this.switchWatchStart < 1500) return;
+    if (Date.now() - this.switchWatchStart < SWITCH_WATCHDOG_MS) return;
     this.switchWatchStart = 0;
     try {
       controller.cancelSwitchAnimation();
@@ -543,7 +606,28 @@ export default class AdrtExtension extends Extension {
     this.motionLastY = Number.NaN;
     this.motionStable = 0;
     this.motionTicks = 0;
-    this.motionSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, MOTION_POLL_MS, () => this.onMotionTick());
+    this.armMotionWatch();
+  }
+
+  /**
+   * Arm the position sampler for `MOTION_POLL_FRAMES` compositor frames. The
+   * wall-clock interval is re-derived from the current frame interval, so a
+   * 120/144 Hz screen (or a VRR panel) is sampled at its own rate.
+   */
+  private armMotionWatch(): void {
+    this.motionPollMs = this.derivedMotionPollMs();
+    this.motionRetileTicks = this.derivedMotionRetileTicks();
+    this.motionSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this.motionPollMs, () => this.onMotionTick());
+  }
+
+  /** The current motion sampler interval, derived from the frame interval. */
+  private derivedMotionPollMs(): number {
+    return this.timing.sampleIntervalMs(MOTION_POLL_FRAMES);
+  }
+
+  /** Ticks between safety-net retiles at the current sampler interval. */
+  private derivedMotionRetileTicks(): number {
+    return Math.max(1, Math.round(MOTION_RETILE_MS / this.derivedMotionPollMs()));
   }
 
   private stopMotionWatch(): void {
@@ -555,6 +639,17 @@ export default class AdrtExtension extends Extension {
   private onMotionTick(): boolean {
     if (this.isPaused()) {
       this.stopMotionWatch();
+      return GLib.SOURCE_REMOVE;
+    }
+    // §11.3: keep re-deriving the cadence. A refresh-rate change (plug/unplug,
+    // VRR mode switch) must not leave the sampler on a stale interval.
+    const desiredPollMs = this.timing.sampleIntervalMs(MOTION_POLL_FRAMES);
+    if (desiredPollMs !== this.motionPollMs) {
+      if (this.motionSource !== null) {
+        GLib.source_remove(this.motionSource);
+        this.motionSource = null;
+      }
+      this.armMotionWatch();
       return GLib.SOURCE_REMOVE;
     }
     // Remember the last window actor so a transient focus loss (mid-switch)
@@ -616,7 +711,7 @@ export default class AdrtExtension extends Extension {
       }
     }
     this.motionTicks += 1;
-    if (this.motionTicks >= MOTION_RETILE_TICKS) {
+    if (this.motionTicks >= this.motionRetileTicks) {
       this.motionTicks = 0;
       this.periodicRetile();
     }
@@ -805,15 +900,25 @@ export default class AdrtExtension extends Extension {
   }
 
   private onFrameSample(): void {
+    // §11.3: measure the *observed* frame interval on every animated frame, so
+    // a variable-refresh display is followed and never assumed to be 60 Hz.
+    const now = GLib.get_monotonic_time();
+    if (this.lastFrameUs > 0) this.timing.observeFrame((now - this.lastFrameUs) / 1000);
+    this.lastFrameUs = now;
     if (!this.settings.boolean('trace-enabled', false)) return;
     this.frameSamples += 1;
     if (this.frameSamples % 60 !== 0) return;
-    this.history.log('frame_timing', { samples: this.frameSamples, budgetMs: this.settings.int('max-frame-interval-ms', 16) });
+    this.history.log('frame_timing', {
+      samples: this.frameSamples,
+      budgetMs: this.timing.frameIntervalFor(),
+      configuredMs: this.settings.int('max-frame-interval-ms', 16),
+    });
   }
 
-  /** §23: fade a ghost at the closing window's rect. */
+  /** §23: fade a ghost at the closing window's rect, on the right screen. */
   private onWindowClosed(_id: number, rect: Rect): void {
-    this.indicator.ghostClose(rect, this.settings.int('close-animation-duration', 150));
+    const base = this.settings.int('close-animation-duration', 150);
+    this.indicator.ghostClose(rect, this.timing.effectiveDuration(base, this.screenIndexForRect(rect)));
   }
 
   // ------------------------------------------------------------- workspace
@@ -856,6 +961,7 @@ export default class AdrtExtension extends Extension {
       ['indicator-opacity', () => this.syncIndicator()],
       ['indicator-corner-radius', () => this.syncIndicator()],
       ['indicator-animated-pulse', () => this.syncIndicator()],
+      ['indicator-pulse-duration', () => this.syncIndicator()],
       ['history-enabled', () => this.history.setEnabled(this.settings.boolean('history-enabled', true))],
       ['history-max-bytes', () => this.history.setMaxBytes(this.settings.int('history-max-bytes', 8388608))],
       ['disable-animations', () => this.applyAnimationSetting()],
@@ -869,16 +975,44 @@ export default class AdrtExtension extends Extension {
   }
 
   /**
-   * §18: `disable-animations` switches off *everything*, GNOME's own Shell
-   * animations included, not just adrt's frame animations.
+   * §18: adrt's `disable-animations` is honoured **internally** by `GnomeTiming`
+   * (`animationsDisabled`), so adrt skips its own animations without touching
+   * GNOME's global accessibility state. A user who disabled animations for
+   * accessibility keeps them disabled; adrt never flips the Shell setting.
    */
   private applyAnimationSetting(): void {
-    const enabled = !this.settings.boolean('disable-animations', false);
+    this.timing?.invalidate();
+  }
+
+  /** Record GNOME's animation state at enable, so `disable()` can restore it. */
+  private captureAnimationBaseline(): void {
     try {
-      St.Settings.get().enable_animations = enabled;
+      const st = St.Settings.get();
+      this.animationsBaseline = {
+        enableAnimations: typeof st.enable_animations === 'boolean' ? st.enable_animations : null,
+        slowDownFactor: typeof st.slow_down_factor === 'number' ? st.slow_down_factor : null,
+      };
     } catch {
-      /* St.Settings unavailable in a bare test shell: nothing to switch */
+      this.animationsBaseline = { enableAnimations: null, slowDownFactor: null };
     }
+    this.animationsMutated = false;
+  }
+
+  /**
+   * §18: restore GNOME's animation state to the pre-enable baseline. adrt never
+   * writes it, so this is a no-op today; it exists so that if any path ever
+   * mutates the global state, `disable()` leaves the session exactly as found.
+   */
+  private restoreAnimationSetting(): void {
+    if (!this.animationsMutated) return;
+    try {
+      const st = St.Settings.get();
+      if (this.animationsBaseline.enableAnimations !== null) st.enable_animations = this.animationsBaseline.enableAnimations;
+      if (this.animationsBaseline.slowDownFactor !== null) st.slow_down_factor = this.animationsBaseline.slowDownFactor;
+    } catch {
+      /* no St.Settings */
+    }
+    this.animationsMutated = false;
   }
 
   /** The frozen v2 keybinding surface (§17): every name is one settings key. */
@@ -1204,6 +1338,17 @@ export default class AdrtExtension extends Extension {
     return this.host.screens().find((screen) => screen.index === monitor);
   }
 
+  /** The screen whose geometry contains a rect's centre, if any. */
+  private screenIndexForRect(rect: Rect): number | undefined {
+    const cx = rect.x + rect.width / 2;
+    const cy = rect.y + rect.height / 2;
+    for (const screen of this.host.screens()) {
+      const g = screen.geometry;
+      if (cx >= g.x && cx <= g.x + g.width && cy >= g.y && cy <= g.y + g.height) return screen.index;
+    }
+    return undefined;
+  }
+
   /** The work area of one monitor, from the last screen read (§10). */
   private workAreaOf(monitor: number): Rect {
     const screen = this.screenAt(monitor);
@@ -1245,6 +1390,28 @@ export default class AdrtExtension extends Extension {
       session: Meta.is_wayland_compositor?.() === true ? 'wayland' : 'x11',
       monitors: this.host.screens().length,
       layoutRows: global.workspace_manager.layout_rows,
+      // §11.3: what the Shell exposes about refresh and adaptive sync, so a
+      // diagnostic can see whether a fixed or variable mode is active.
+      refresh: {
+        source: this.host.refreshRateSource,
+        screens: this.timing.screens().map((screen) => ({
+          index: screen.index,
+          refreshRate: screen.refreshRate,
+          frameIntervalMs: screen.frameIntervalMs,
+        })),
+        observedFrameIntervalMs: this.timing.resolve().observedFrameIntervalMs,
+        variableRefresh: this.timing.resolve().variableRefresh,
+        adaptiveSyncSupported: this.host.adaptiveSyncSupported(),
+        adaptiveSyncReason: this.host.adaptiveSyncSupported()
+          ? 'org.gnome.mutter experimental-features includes variable-refresh-rate'
+          : 'Mutter exposes no VRR capability and the experimental feature is off',
+      },
+      // §18: the OS animation state adrt reads (and never writes).
+      animations: {
+        enabled: this.timing.animationsEnabled(),
+        reducedMotion: this.timing.reducedMotion(),
+        slowDownFactor: this.timing.slowDownFactor(),
+      },
       laters: {
         available: typeof global.compositor?.get_laters === 'function',
         beforeRedraw: true,
@@ -1586,6 +1753,21 @@ export default class AdrtExtension extends Extension {
       activeWorkspace: this.host.activeWorkspaceId(),
       workspaceLayoutRows: global.workspace_manager.layout_rows,
       build: { version: RELEASE_VERSION, dirMtimeMs: this.buildDirMtimeMs },
+      timing: {
+        ...this.timing.describe(),
+        // The pre-enable accessibility state we found and never changed.
+        baseline: {
+          enableAnimations: this.animationsBaseline.enableAnimations,
+          slowDownFactor: this.animationsBaseline.slowDownFactor,
+        },
+        mutated: this.animationsMutated,
+        motionPollMs: this.derivedMotionPollMs(),
+        motionRetileTicks: this.derivedMotionRetileTicks(),
+        normaliseOnEnableMs: NORMALIZE_ON_ENABLE_MS,
+        coherenceSweepMs: COHERENCE_SWEEP_MS,
+        switchWatchdogMs: SWITCH_WATCHDOG_MS,
+        motionSelfMs: MOTION_SELF_MS,
+      },
       tileAxis: this.session.tileAxis(),
       focusedReason: this.focusReason,
       gaps: {
@@ -1871,8 +2053,11 @@ export default class AdrtExtension extends Extension {
   }
   private simulateSessionMode(mode: string): boolean {
     if (mode !== 'user' && mode !== 'unlock-dialog' && mode !== 'screen-sharing' && mode !== 'suspend') return false;
-    // §19: suspend is treated as lock.
-    this.applySessionMode(mode === 'suspend' ? 'unlock-dialog' : mode);
+    // §19: suspend is treated as lock. The injected mode overrides the live one
+    // until a real `notify::current-mode` transition clears it.
+    const resolved: SessionMode = mode === 'suspend' ? 'unlock-dialog' : mode;
+    this.injectedMode = resolved;
+    this.applySessionMode(resolved);
     return true;
   }
 

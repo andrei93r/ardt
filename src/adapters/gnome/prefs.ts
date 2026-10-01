@@ -97,6 +97,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
     group.add(this.spinRow(settings, 'indicator-width', 'Width (px)', '', 1, 20));
     group.add(this.spinRow(settings, 'indicator-corner-radius', 'Corner radius (px)', '', 0, 32));
     group.add(this.switchRow(settings, 'indicator-animated-pulse', 'Pulse'));
+    group.add(this.spinRow(settings, 'indicator-pulse-duration', 'Pulse duration (ms)', '', 0, 4000));
     page.add(group);
     return page;
   }
