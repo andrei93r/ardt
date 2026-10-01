@@ -286,6 +286,7 @@ export default class AdrtExtension extends Extension {
     this.coherenceSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, COHERENCE_SWEEP_MS, () => {
       this.session.coherenceSweep();
       this.watchWorkspaceAnimation();
+      this.refreshWorkspaceSwitchSuppression();
       return GLib.SOURCE_CONTINUE;
     });
 
@@ -489,6 +490,21 @@ export default class AdrtExtension extends Extension {
   private workspaceAnimationActive(): boolean {
     const controller = (wm as any)?._workspaceAnimation;
     return controller !== null && controller !== undefined && controller._switchData != null;
+  }
+
+  /**
+   * §23.2: the workspace-switch suppression is a property of the animation, not
+   * of the paired signals that started it. The motion watcher clears it when it
+   * settles, but that watcher stops whenever focus is lost or paused — and the
+   * suppression then stays set, keeping the highlight hidden long after the
+   * switch is over. Re-derive it on the periodic pass so a missed or raced
+   * finish can never leave it stuck.
+   */
+  private refreshWorkspaceSwitchSuppression(): void {
+    if (this.workspaceAnimationActive()) return;
+    if (!this.border.isSuppressed('workspace-switch')) return;
+    this.unsuppressBorder('workspace-switch');
+    this.syncIndicator();
   }
 
   /** Hide the border for the duration of a workspace switch. */
@@ -1325,13 +1341,7 @@ export default class AdrtExtension extends Extension {
       },
       ToggleFloat: (id) => this.session.toggleFloat(id),
       SimulateResize: (a, b, ratio) => this.simulateResize(a, b, ratio),
-      SwapPair: (a, b) => {
-        this.tiling.toggleSwap(a, b);
-        this.session.clearPendingSlots(a, b);
-        this.session.clearSignatures();
-        this.session.retile(this.session.windows.get(a)?.surface.workspaceId ?? 0, 'swap');
-        return true;
-      },
+      SwapPair: (a, b) => this.session.swapPair(a, b),
       InjectVerifyFailure: (id, count) => this.injectVerifyFailure(id, count),
       FocusDirection: (direction) => {
         this.noteFocus(`focus-${direction}`);

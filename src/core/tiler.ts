@@ -290,15 +290,20 @@ export function computePlans(windows: readonly TilerWindow[], screen: Screen, co
   // instead: sides that followed position would flip again once the swap moved
   // the windows, oscillating forever.
   const swapped = config.swapPairs.has(pairKey(byId[0].id, byId[1].id));
-  // §3/§4: an explicit slot (a routed arrival, an unmaximize joining slot 1)
-  // wins over the geometric guess; when both carry one they must differ.
+  // §3/§4: an explicit slot (a routed arrival, an unmaximize joining slot 1, or
+  // a swap the user made) wins over both the geometric guess and the swap flag.
+  // A swap records the new sides as explicit slots, so it is invertible even
+  // when the pair's position order already matches the reverse of its id order
+  // (toggling the flag alone could then change nothing); the flag remains the
+  // durable/restart form of the same fact.
   const explicit0 = byId.find((w) => w.slot === 0);
   const explicit1 = byId.find((w) => w.slot === 1);
-  const ordered = swapped
-    ? [...byId].reverse()
-    : explicit0 !== undefined && explicit1 !== undefined && explicit0.id !== explicit1.id
+  const ordered =
+    explicit0 !== undefined && explicit1 !== undefined && explicit0.id !== explicit1.id
       ? [explicit0, explicit1]
-      : [...windows].sort(byRelativePosition);
+      : swapped
+        ? [...byId].reverse()
+        : [...windows].sort(byRelativePosition);
   const w0 = ordered[0];
   const w1 = ordered[1];
   const defaultAxis: SplitAxis = config.workspaceAxis ?? (isPortrait(screen) ? 'vertical' : 'horizontal');
