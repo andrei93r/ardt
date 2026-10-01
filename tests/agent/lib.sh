@@ -505,7 +505,7 @@ print("tiled:", [(w["id"], w["rect"]) for w in tiles]); sys.exit(1)
     fi
   fi
   echo
-    bash "$NOTIFY" "Adrt — test verdict: $([ "$failures" -eq 0 ] && echo PASS || echo FAIL)" "$(basename "${0:-scenario}" .sh) — checks=$checks failures=$failures" "$([ "$failures" -eq 0 ] && echo dialog-information || echo dialog-error)" "$([ "$failures" -eq 0 ] && echo normal || echo critical)"
+    bash "$NOTIFY" "Adrt — test verdict: $([ "$failures" -eq 0 ] && echo PASS || echo FAIL)" "$(basename "${0:-scenario}" .sh) — checks=$checks failures=$failures" "$([ "$failures" -eq 0 ] && echo dialog-information || echo dialog-error)" "$([ "$failures" -eq 0 ] && echo normal || echo critical)" 1 6000
 echo "checks=$checks failures=$failures"
   [ "$failures" -eq 0 ]
 }
@@ -513,4 +513,4 @@ echo "checks=$checks failures=$failures"
 # The user asked for a toast per test: one when it starts, naming it, and one with
 # the verdict when it ends. `$0` is the scenario that sourced this library.
 NOTIFY="$ROOT_DIR/scripts/notify.sh"
-[ -f "$NOTIFY" ] && bash "$NOTIFY" "Adrt — test started" "$(basename "${0:-scenario}" .sh)" utilities-system-monitor
+[ -f "$NOTIFY" ] && bash "$NOTIFY" "Adrt — test started" "$(basename "${0:-scenario}" .sh)" utilities-system-monitor normal 1 2500

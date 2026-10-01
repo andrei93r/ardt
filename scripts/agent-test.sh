@@ -51,7 +51,7 @@ run_worker() {
   if ! bash "$NESTED" reset; then
     echo "worker ${ADRT_WORKER_INDEX}: reset failed"
     for script in $ADRT_SCENARIO_LIST; do
-      bash "$ROOT/scripts/notify.sh" "Adrt — test FAILED" "$(basename "$script" .sh)" dialog-error critical
+      bash "$ROOT/scripts/notify.sh" "Adrt — test FAILED" "$(basename "$script" .sh)" dialog-error critical 2 7000
       printf 'FAIL\t%s\n' "$(basename "$script" .sh)" >> "$results"
     done
     return 1
@@ -123,7 +123,7 @@ if [ "${#ALL[@]}" -eq 0 ]; then
 fi
 [ "$WORKERS" -gt "${#ALL[@]}" ] && WORKERS=${#ALL[@]}
 echo
-bash "$ROOT/scripts/notify.sh" "Adrt — tests starting" "${#ALL[@]} scenarios, $WORKERS nested Shells" utilities-system-monitor
+bash "$ROOT/scripts/notify.sh" "Adrt — tests starting" "${#ALL[@]} scenarios, $WORKERS nested Shells" utilities-system-monitor normal 1 4000
 echo "== running ${#ALL[@]} scenarios across $WORKERS nested Shells ($(( WORKERS * 100 / ( $(nproc 2>/dev/null || echo 4) ) ))% of cores) =="
 
 export ADRT_SKIP_BUILD=1
@@ -263,6 +263,6 @@ fi
 } > "$ROOT/TEST_RESULTS.md"
 
 echo
-echo "bash "$ROOT/scripts/notify.sh" "Adrt — tests done" "failures=$failures skips=$skips of $scenario_count" "$([ "$failures" -eq 0 ] && echo dialog-information || echo dialog-error)"
+echo "bash "$ROOT/scripts/notify.sh" "Adrt — tests done" "failures=$failures skips=$skips of $scenario_count" "$([ "$failures" -eq 0 ] && echo dialog-information || echo dialog-error)" normal 1 10000
 agent-test: wrote $ROOT/TEST_RESULTS.md"
 [ "$failures" -eq 0 ] && [ "$LINT_RC" -eq 0 ] && [ "$CORE_RC" -eq 0 ]

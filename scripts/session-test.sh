@@ -113,6 +113,6 @@ echo "scenarios=${#names[@]} failures=$failures skips=$skips"
 } > "$ROOT/TEST_RESULTS_SESSION.md"
 
 echo
-bash "$ROOT/scripts/notify.sh" "Adrt — live suite done" "failures=$failures skips=$skips (TEST_RESULTS_SESSION.md)" "$([ "$failures" -eq 0 ] && echo dialog-information || echo dialog-error)" "$([ "$failures" -eq 0 ] && echo normal || echo critical)"
+bash "$ROOT/scripts/notify.sh" "Adrt — live suite done" "failures=$failures skips=$skips (TEST_RESULTS_SESSION.md)" "$([ "$failures" -eq 0 ] && echo dialog-information || echo dialog-error)" "$([ "$failures" -eq 0 ] && echo normal || echo critical)" 1 12000
 echo "session-test: wrote $ROOT/TEST_RESULTS_SESSION.md"
 [ "$failures" -eq 0 ]
