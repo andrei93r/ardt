@@ -48,7 +48,8 @@
 #   session modes (pause/lock hide   A13-lock-screen
 #     the border)
 #   highlight (occlusion, fullscreen) A130-occlusion-hides-highlight,
-#                                    A131-fullscreen-hides-highlight
+#     and under Shell chrome            A131-fullscreen-hides-highlight,
+#                                      A135-highlight-below-notifications
 #   undo (swap, un-float)            A101-undo-restores-instance-and-config
 #   flags / trace / DumpState shape  A103-record-trace-shape
 #   cursor to the active window      A132-cursor-centre,
@@ -99,6 +100,7 @@ A13-lock-screen
 # --- highlight ---
 A130-occlusion-hides-highlight
 A131-fullscreen-hides-highlight
+A135-highlight-below-notifications
 # --- undo (swap, un-float) ---
 A101-undo-restores-instance-and-config
 # --- flags / trace / DumpState ---

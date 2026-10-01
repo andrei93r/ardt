@@ -385,7 +385,10 @@ changing one **re-fits the pair by ratio** like any other work-area change.
   `overview`, `occluded`), rect update, close ghost, animation tick — together with its
   rect and the active suppression set, under `debug.indicator`. `DumpState` reports the
   same values, so "why is the border there / not there" is answerable from one
-  snapshot.
+  snapshot. The highlight is also **stacked below Shell chrome** (the notification
+  tray), because `addChrome` inserts each new actor above the previous one and a
+  highlight added after the tray would otherwise be painted through a notification
+  banner.
 
 ## 12. App registry (profiles, exceptions and adaptation in one entry)
 

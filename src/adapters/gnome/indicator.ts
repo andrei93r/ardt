@@ -11,7 +11,7 @@ import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import St from 'gi://St';
-import { layoutManager } from 'resource:///org/gnome/shell/ui/main.js';
+import { layoutManager, messageTray } from 'resource:///org/gnome/shell/ui/main.js';
 
 import type { Rect } from '../../core/types.js';
 import type { IndicatorBackend } from '../../platform/indicator.js';
@@ -47,6 +47,12 @@ export class GnomeIndicator implements IndicatorBackend {
     this.applyStyle();
     layoutManager.addChrome(this.widget, { affectsStruts: false, trackFullscreen: false });
     layoutManager.addChrome(this.preview, { affectsStruts: false, trackFullscreen: false });
+    // addChrome inserts just below `top_window_group`, so chrome added later
+    // (us) lands *above* the notification tray and the highlight draws over a
+    // banner. Keep the highlight below the tray so notifications are never
+    // painted through.
+    this.stackBelowTray(this.widget);
+    this.stackBelowTray(this.preview);
   }
 
   show(rect: Rect): void {
@@ -83,6 +89,7 @@ export class GnomeIndicator implements IndicatorBackend {
     ghost.set_size(rect.width, rect.height);
     ghost.set_style(this.styleString());
     layoutManager.addChrome(ghost, { affectsStruts: false, trackFullscreen: false });
+    this.stackBelowTray(ghost);
     this.ghosts.add(ghost);
 
     let sourceId = 0;
@@ -130,13 +137,37 @@ export class GnomeIndicator implements IndicatorBackend {
   }
 
   /** Resolved styling, for `DumpState` and diagnostics. */
-  describe(): { color: string; width: number; opacity: number; radius: number } {
+  describe(): { color: string; width: number; opacity: number; radius: number; stackedBelowTray: boolean } {
     return {
       color: this.colour(),
       width: this.settings.int('indicator-width', 3),
       opacity: this.settings.int('indicator-opacity', 100),
       radius: this.settings.int('indicator-corner-radius', 8),
+      stackedBelowTray: this.isBelowTray(),
     };
+  }
+
+  /** Keep `actor` under the notification tray, so a banner paints over it. */
+  private stackBelowTray(actor: any): void {
+    try {
+      const parent = actor.get_parent();
+      if (parent === null || messageTray === null || messageTray.get_parent() !== parent) return;
+      parent.set_child_below_sibling(actor, messageTray);
+    } catch (e) {
+      console.error(`[adrt] could not stack the highlight below the notification tray: ${(e as Error).message}`);
+    }
+  }
+
+  /** Whether the highlight currently sits below the notification tray. */
+  private isBelowTray(): boolean {
+    try {
+      const parent = this.widget.get_parent();
+      if (parent === null || messageTray === null || messageTray.get_parent() !== parent) return false;
+      const children = parent.get_children();
+      return children.indexOf(this.widget) < children.indexOf(messageTray);
+    } catch {
+      return false;
+    }
   }
 
   get isVisible(): boolean {
