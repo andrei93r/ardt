@@ -11,16 +11,21 @@ open_pair
 assert_eq "two windows are tracked" "2" "$(count_windows)"
 if wait_python 20 '
 import json, sys
-ws = [w["rect"] for w in json.load(sys.stdin)["windows"]]
+d = json.load(sys.stdin)
+ws = [w["rect"] for w in d["windows"]]
 if len(ws) != 2:
     sys.exit(1)
+areas = {m["index"]: (m.get("workArea") or m["geometry"]) for m in d["monitors"]}
 for i in range(len(ws)):
     for j in range(i + 1, len(ws)):
         a, b = ws[i], ws[j]
         if a["x"] < b["x"] + b["width"] and b["x"] < a["x"] + a["width"] and a["y"] < b["y"] + b["height"] and b["y"] < a["y"] + a["height"]:
             sys.exit(1)
-    r = ws[i]
-    if r["x"] < 0 or r["y"] < 0 or r["x"] + r["width"] > 1281 or r["y"] + r["height"] > 801:
+for w in d["windows"]:
+    r, a = w["rect"], areas.get(w["monitor"])
+    if a is None:
+        sys.exit(1)
+    if r["x"] < a["x"] - 2 or r["y"] < a["y"] - 2 or r["x"] + r["width"] > a["x"] + a["width"] + 2 or r["y"] + r["height"] > a["y"] + a["height"] + 2:
         sys.exit(1)
 sys.exit(0)'; then
   pass "tiles are non-overlapping and inside the monitor"

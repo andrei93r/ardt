@@ -359,5 +359,10 @@
       <summary>Inject verify failures</summary>
       <description>Debug-only; makes verification fail N times.</description>
     </key>
+    <key name="debug-toasts" type="as">
+      <default>[]</default>
+      <summary>Debug notifications</summary>
+      <description>Which decisions raise a live notification (see the catalogue in core/notify.ts). Empty by default; the nothing-happened notices are always shown.</description>
+    </key>
   </schema>
 </schemalist>

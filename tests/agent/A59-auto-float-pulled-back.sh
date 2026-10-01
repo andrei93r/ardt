@@ -33,24 +33,21 @@ wait_count 3 15 || true
 third="$(comm -13 <(echo "$before_ids" | tr ' ' '\n' | sort) <(list_ids | tr ' ' '\n' | sort) | tr -d '\n' | xargs)"
 wait_settled 12
 adrt UnmaximizeWindow "$B" >/dev/null
-if wait_python 15 '
+poll "B floats over the pair" '
 import json, sys
 d = json.load(sys.stdin)
 b = [w for w in d["windows"] if w["id"] == int("'"$B"'")]
-sys.exit(0 if b and b[0]["layer"] == 2 else 1)'; then
-  pass "B floats over the pair"
-else
-  fail "B did not float over the pair"
-fi
+sys.exit(0 if b and b[0]["layer"] == 2 else 1)
+' 30
 
-check_python "floating set the always-on-top flag" '
+poll "floating set the always-on-top flag" '
 import json, sys
 d = json.load(sys.stdin)
 w = [x for x in d["windows"] if x["id"] == int("'"$B"'")]
 if not w:
     print("window gone"); sys.exit(1)
 sys.exit(0 if w[0].get("above") is True else 1)
-'
+' 30
 
 # Remove both tiles by their known ids; B is left alone and auto-floated.
 adrt CloseWindow "$A" >/dev/null 2>&1 || true

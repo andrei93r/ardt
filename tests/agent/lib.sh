@@ -353,6 +353,25 @@ inject_pointer() {
   adrt InjectPointerMove "$1" "$2" >/dev/null 2>&1 || true
 }
 
+# One key, press or release. Keyvals are X11 keysyms (xev names): Super 65515,
+# Alt 65511, Ctrl 65507, Shift 65505, grave 96, a..z = ord(letter).
+inject_key() {
+  adrt InjectKey "$1" "$2" >/dev/null 2>&1 || true
+  sleep 0.15
+}
+
+# A key combination: press each in order, release in reverse. `inject_hotkey 65515 122`
+# is Super+Z.
+inject_hotkey() {
+  local keyval
+  for keyval in "$@"; do inject_key "$keyval" true; done
+  sleep 0.2
+  local reverse=()
+  for keyval in "$@"; do reverse=("$keyval" "${reverse[@]}"); done
+  for keyval in "${reverse[@]}"; do inject_key "$keyval" false; done
+  sleep 0.2
+}
+
 inject_click() {
   local x="$1" y="$2"
   inject_pointer "$x" "$y"; sleep 0.25

@@ -70,5 +70,43 @@ else
   fail "DumpEvents filter returned the wrong entries: $(printf '%s' "$filtered" | head -c 200)"
 fi
 
+# Decisions share the same sequence and are read the same way.
+decisions="$(adrt DumpDecisions 200 2>/dev/null | python3 "$PARSE" 2>/dev/null || true)"
+if printf '%s' "$decisions" | python3 -c '
+import json, sys
+entries = json.load(sys.stdin)
+if not isinstance(entries, list) or len(entries) < 3:
+    print("too few decisions:", len(entries) if isinstance(entries, list) else entries)
+    sys.exit(1)
+for e in entries:
+    for key in ("seq", "source", "event", "at"):
+        if key not in e:
+            print("decision missing", key, e)
+            sys.exit(1)
+    if e["source"] != "decision":
+        print("not a decision:", e)
+        sys.exit(1)
+seqs = [e["seq"] for e in entries]
+if seqs != sorted(seqs):
+    print("decision sequence is not increasing:", seqs[:8])
+    sys.exit(1)
+print("decisions", len(entries))
+'; then
+  pass "DumpDecisions returns the decisions on the shared sequence"
+else
+  fail "DumpDecisions — $(printf '%s' "$decisions" | head -c 200)"
+fi
+
+# The notification catalogue: a nothing-happened notice is always shown, is
+# deduplicated per subject, and an opt-in decision stays silent until enabled.
+first="$(adrt SimulateNotice nothing-to-undo subject-A | python3 "$PARSE")"
+second="$(adrt SimulateNotice nothing-to-undo subject-A | python3 "$PARSE")"
+third="$(adrt SimulateNotice nothing-to-undo subject-B | python3 "$PARSE")"
+optin="$(adrt SimulateNotice did-not-fit subject-A | python3 "$PARSE")"
+assert_eq "an always-on notice is shown" "True" "$first"
+assert_eq "the same notice for the same subject is deduplicated" "False" "$second"
+assert_eq "a different subject is its own notice" "True" "$third"
+assert_eq "an opt-in decision stays silent by default" "False" "$optin"
+
 ensure_clean
 summary

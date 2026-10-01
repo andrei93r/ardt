@@ -62,7 +62,7 @@ a, b = int("'"$A"'"), int("'"$B"'")
 if a not in by or b not in by:
     print("window missing"); sys.exit(1)
 sys.exit(0 if by[a] > by[b] else 1)
-' 12
+' 30
 
 adrt SimulateWorkspaceOrientation false >/dev/null
 poll "back to horizontal the pair is side by side" '

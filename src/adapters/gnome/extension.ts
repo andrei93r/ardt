@@ -21,6 +21,7 @@ import { BorderState } from '../../core/border.js';
 import { SessionMachine } from '../../core/session.js';
 import type { SessionMode } from '../../core/session.js';
 import type { SplitAxis } from '../../core/tiler.js';
+import { NoticeGate, isAlwaysNotice, noticeTitle } from '../../core/notify.js';
 import { clamp } from '../../core/types.js';
 import type { Rect } from '../../core/types.js';
 import type { GestureKind } from '../../core/gestures.js';
@@ -103,6 +104,7 @@ export default class AdrtExtension extends Extension {
   private border!: BorderState;
   private sessionMachine = new SessionMachine();
 
+  private readonly notices = new NoticeGate();
   private injectionEnabled = false;
   private injectSeat: any = null;
   private injectPointer: any = null;
@@ -896,6 +898,32 @@ export default class AdrtExtension extends Extension {
     notify('Adrt', 'Adrt tiles windows into pairs per monitor. Press Super+Z to undo a retile.');
   }
 
+  // ------------------------------------------------------------ notifications
+
+  /**
+   * Raise a decision as a notification (§21). Every decision is journalled
+   * whether or not the user opted into seeing it; the nothing-happened notices
+   * are always shown, the rest follow the `debug-toasts` setting, and the gate
+   * deduplicates and rate-limits whatever does get shown.
+   */
+  private toast(key: string, subject: string, fields: Record<string, unknown> = {}): boolean {
+    const title = noticeTitle(key);
+    if (title === null) {
+      console.warn(`[adrt] unknown notice key: ${key}`);
+      return false;
+    }
+    this.journal.decide('notice', { key, subject, ...fields });
+    const wanted = isAlwaysNotice(key) || this.settings.strv('debug-toasts').includes(key);
+    if (!wanted || !this.notices.allow(key, subject, Date.now())) return false;
+    notify('Adrt', title);
+    return true;
+  }
+
+  /** Harness trigger: exercise the catalogue and the gate end to end. */
+  private simulateNotice(key: string, subject: string): boolean {
+    return this.toast(key, subject);
+  }
+
   // ------------------------------------------------ platform probe, injection
 
   /** The capability JSON the harness depends on (§40.4, Stage 0). */
@@ -1019,6 +1047,7 @@ export default class AdrtExtension extends Extension {
       InjectPointerMove: (x, y) => this.injectPointerMove(x, y),
       InjectPointerButton: (button, pressed) => this.injectPointerButton(button, pressed),
       InjectKey: (keyval, pressed) => this.injectKey(keyval, pressed),
+      SimulateNotice: (key, subject) => this.simulateNotice(key, subject),
       LookupWindow: (id) => this.lookupWindow(id),
       ListWindows: () => JSON.stringify(this.listWindows()),
       ListMonitors: () => JSON.stringify(this.host.screens().map((screen) => screen.connector)),

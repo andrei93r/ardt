@@ -32,6 +32,7 @@ export interface DbusHandlers {
   InjectPointerMove(x: number, y: number): boolean;
   InjectPointerButton(button: number, pressed: boolean): boolean;
   InjectKey(keyval: number, pressed: boolean): boolean;
+  SimulateNotice(key: string, subject: string): boolean;
 }
 
 export interface DbusBackend {
