@@ -64,6 +64,8 @@
 #
 # --- tiling / split / axis ---
 A01-pair-tiling
+# --- gaps: per-side outer, between, per screen (§10) ---
+A139-gaps
 A64-vertical-workspaces
 # --- arrival routing ---
 A02-third-window

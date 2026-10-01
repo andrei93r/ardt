@@ -36,7 +36,7 @@ const MAINTENANCE_SETTLE_MS = 200;
 import { checkPlan } from '../../core/invariants.js';
 import { SignatureCache, planSignature } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
-import { computePlans, effectiveGap, ratioKey, screenArea } from '../../core/tiler.js';
+import { computePlans, ratioKey, resolveGaps, screenArea } from '../../core/tiler.js';
 import type { FocusDirection } from '../../core/focus.js';
 import { cycleOrder, cycleSequence, pickDirectional } from '../../core/focus.js';
 import type { CycleEntry } from '../../core/focus.js';
@@ -2449,7 +2449,9 @@ export class WindowSession {
    */
   private refusalEscapes(refusing: TrackedWindow, sibling: TrackedWindow, screen: Screen, env: Env): boolean {
     const area = screenArea(screen);
-    const gap = effectiveGap(this.tilerConfig(), screen);
+    // §10: the split extent uses the between-window gap, not the base, so an
+    // explicit `gaps-between` is honoured by the refusal ladder.
+    const gap = resolveGaps(this.tilerConfig(), screen).between;
     const extent = env.axis === 'vertical' ? area.height : area.width;
     const split = Math.max(0, extent - gap);
     const axis: 'width' | 'height' = env.axis === 'vertical' ? 'height' : 'width';
