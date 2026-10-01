@@ -833,6 +833,10 @@ never debug-gated (the deduplication and rate limits still apply).
     it, the window's former workspace keeps its survivor maximized, and the view stays
     where the drag started.
 
+70. **Restoring a minimized window onto a full workspace floats it** (round scenario
+    11, confirmed): no slot is freed and nobody gives way; the window returns as a
+    float, offset from the pair, and no toast is raised because something did happen.
+
 ## Deliberate non-goals
 
 
