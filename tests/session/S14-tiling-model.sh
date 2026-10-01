@@ -11,6 +11,11 @@
 #      left workspace holds one window
 #   7. the active-window marker follows the focused window's geometry
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+# RETIRED in v2: this scenario asserted the v1 tiling model end to end; the v2 rules are covered live by S02, S04, S05, S06, S10, S13, S15 and S18-S20, and exhaustively by the nested suite (117 scenarios).
+# Replaced by: S02/S04/S05/S06/S10/S13/S15/S18-S20.
+skip "S14-tiling-model.sh: this scenario asserted the v1 tiling model end to end; the v2 rules are covered live by S02, S04, S05, S06, S10, S13, S15 and S18-S20, and exhaustively by the nested suite (117 scenarios)"
+exit 0
+
 session_begin
 
 # 1. First window is maximized on its own workspace.

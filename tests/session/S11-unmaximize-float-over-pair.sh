@@ -3,6 +3,11 @@
 # S13 Unmaximize onto a full pair on the live session: floats on top, centred,
 # without covering the pair.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+# RETIRED in v2: the float-over-pair rule is deleted in v2 (unmaximise joins the left workspace when it holds exactly one window, else parks minimised): its live twin is S05 and the nested A90/A91.
+# Replaced by: S05/S18 + A90/A91.
+skip "S11-unmaximize-float-over-pair.sh: the float-over-pair rule is deleted in v2 (unmaximise joins the left workspace when it holds exactly one window, else parks minimised): its live twin is S05 and the nested A90/A91"
+exit 0
+
 session_begin
 
 spawn

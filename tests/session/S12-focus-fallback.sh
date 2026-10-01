@@ -3,6 +3,11 @@
 # S12 Focus direction fallback on the live session: no window on the requested
 # side focuses the other side; no neighbour at all does nothing.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+# RETIRED in v2: a direction with nothing that way is silent in v2, so the old "fallback" has nothing to assert: the live twin is S20 and the nested A44 (retired).
+# Replaced by: S20.
+skip "S12-focus-fallback.sh: a direction with nothing that way is silent in v2, so the old "fallback" has nothing to assert: the live twin is S20 and the nested A44 (retired)"
+exit 0
+
 session_begin
 
 spawn
