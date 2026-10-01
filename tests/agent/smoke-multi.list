@@ -18,8 +18,11 @@
 #   the arriving window takes its side from the      A124-screen-side-rule
 #     monitor signal
 #   the four-monitor matrix                          A81-four-monitors
+#   every configured screen (1 to 4), any arrangement, keeps its own axis and
+#   contains its windows                            A137-screen-topology
 
 A105-per-screen-axis
+A137-screen-topology
 A106-no-cross-monitor-exile
 A107-cross-monitor-drag-takes-the-free-slot-or-swaps
 A108-maximised-drag-still-maximised-at-drop

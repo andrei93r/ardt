@@ -10,5 +10,9 @@
 #   multi-monitor tiling, non-primary tileable, move across screens without a
 #   stale classification, and the other screen surviving a workspace switch
 #                                        S15-multi-monitor
+#   every connected screen keeps its own axis and contains its windows, for any
+#   number of mixed-orientation screens and arrangement
+#                                        S25-screen-topology
 
 S15-multi-monitor
+S25-screen-topology
