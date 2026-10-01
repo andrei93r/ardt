@@ -132,8 +132,6 @@ export class WindowSession {
   private crossScreenId: number | null = null;
   /** The screen the move is heading to; the arrival waits until it lands there. */
   private crossScreenTarget: number | null = null;
-  /** Bounded re-arms while a `move_to_monitor` is still in flight. */
-  private crossScreenAttempts = 0;
   /** When the dragged window last changed geometry (stale-drag watchdog). */
   private dragLastActivityMs = 0;
   /** True while a compositor state makes tiling pointless (the overview). */
@@ -188,7 +186,8 @@ export class WindowSession {
       this.onGrabEnd(win, op),
     );
     // Anything that can move, restack or re-parent a window triggers a
-    // debounced global reconcile pass.
+    // debounced global reconcile pass. `window-entered-monitor` is also what
+    // re-queues a pending cross-screen move once `move_to_monitor` lands (A106).
     this.displaySignals.push(
       global.display.connect('window-entered-monitor', () => this.scheduleReconcile('window-monitor')),
       global.display.connect('window-left-monitor', () => this.scheduleReconcile('window-monitor')),
@@ -755,6 +754,7 @@ export class WindowSession {
   unregister(id: number): void {
     const tracked = this.windows.get(id);
     if (tracked === undefined) return;
+    if (this.crossScreenId === id) this.clearCrossScreenMove();
     const workspaceId = tracked.surface.workspaceId;
     const closedRect: Rect = { ...tracked.surface.frame };
     // Only windows we actually tiled get a close ghost; popups, menus,
@@ -1250,7 +1250,10 @@ export class WindowSession {
     // §6: a directional move that crossed a screen edge is arrived from here,
     // but only once Mutter has actually put the window on the target screen —
     // `move_to_monitor` is asynchronous and arriving early floats it against the
-    // source work area (A106).
+    // source work area (A106). The arrival is event-driven: `window-entered-
+    // monitor` (wired in `startScan`) pushes another lane-2 pass when the move
+    // lands, so a pass that still sees the source screen simply leaves the move
+    // pending — no retry counter, no private timer.
     if (this.crossScreenId !== null) {
       const id = this.crossScreenId;
       const tracked = this.windows.get(id);
@@ -1259,11 +1262,7 @@ export class WindowSession {
       } else {
         tracked.refreshFrame();
         const target = this.crossScreenTarget;
-        if (target !== null && tracked.surface.screenId !== target) {
-          this.crossScreenAttempts += 1;
-          if (this.crossScreenAttempts > 40) this.clearCrossScreenMove();
-          else this.scheduleReconcile('move-monitor-arrive');
-        } else {
+        if (target === null || tracked.surface.screenId === target) {
           const from = this.crossScreenFrom ?? 'left';
           this.clearCrossScreenMove();
           this.arriveCrossScreen(tracked, from);
@@ -2540,9 +2539,10 @@ export class WindowSession {
     this.crossScreenFrom = direction === 'right' ? 'left' : direction === 'left' ? 'right' : direction === 'down' ? 'above' : 'below';
     // `move_to_monitor` is asynchronous: the arrival ladder must not run while
     // the window is still on the source screen, or its float rect (computed from
-    // the source work area) drags it straight back (A106).
+    // the source work area) drags it straight back (A106). `window-entered-
+    // monitor` re-queues the drain when it lands; until then the move stays
+    // pending.
     this.crossScreenTarget = target.index;
-    this.crossScreenAttempts = 0;
     this.signatures.clearAll();
     this.scheduleReconcile('move-monitor');
   }
@@ -2551,7 +2551,6 @@ export class WindowSession {
     this.crossScreenId = null;
     this.crossScreenFrom = null;
     this.crossScreenTarget = null;
-    this.crossScreenAttempts = 0;
   }
 
   /**
