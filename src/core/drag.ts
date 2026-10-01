@@ -35,6 +35,13 @@ export interface DragInput {
   workspace: number;
   from: Direction | null;
   crossed: number | null;
+  /**
+   * §6: whether the dragged window is a *managed* window — one that can occupy
+   * a tile. A drag of a window that cannot (a dialog, a popup, a skip-taskbar
+   * utility, an always-on-top widget, a fixed-size client, an exception app, or
+   * a window the user floated) has no landing decision at all.
+   */
+  managed: boolean;
   /** The drag has stayed on its own workspace and screen (§6). */
   samePlane: boolean;
   /** The screen receiving the drop. */
@@ -48,8 +55,16 @@ export interface DragInput {
   dropped: Rect;
 }
 
-/** The rect the dragged window takes after `decision` is applied. */
-export function dragOutcome(input: DragInput): DragOutcome {
+/**
+ * The rect the dragged window takes after `decision` is applied, or `null` when
+ * the drag has no landing decision at all (§6).
+ */
+export function dragOutcome(input: DragInput): DragOutcome | null {
+  // §6: only a *managed* window crosses and swaps. A window that cannot occupy
+  // a tile has no landing: no drop-assist highlight (the overlay hides on a
+  // `null` target) and no swap/slot/maximize on the drop. Dragging it is a
+  // plain move. A free slot or a crossing must never be offered for it.
+  if (!input.managed) return null;
   const result = (windows: readonly TilerWindow[]): Rect => {
     const plan = computePlans(windows, input.screen, input.config);
     return plan.placements.find((placement) => placement.surfaceId === input.id)?.rect ?? input.dropped;

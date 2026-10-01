@@ -195,6 +195,10 @@ anywhere except §7's single-workspace-capable pair rule.
   to cover each other; the pair simply trade sides. **A free slot wins over a
   crossing**: the swap happens only when the target has nowhere else to put the
   window (a full pair, a full screen).
+- Only a **managed** window has a landing: a drag of a window that cannot occupy a
+  tile (a dialog, a popup, a skip-taskbar utility, an always-on-top widget, a
+  fixed-size client, an exception app, a floated window) draws **no** drop-assist
+  outline and applies no swap/slot/maximize — it is a plain move (decision 90).
 - **Cross-screen drags** follow the target screen's rules, in this order: a **free
   slot** takes the window (its pair splits as usual), **on the side it came from** —
   from the left or above, slot 0; from the right or below, slot 1; **otherwise** a
@@ -960,6 +964,13 @@ never debug-gated (the deduplication and rate limits still apply).
     crossed window stays where it is (moving to the other side only if the origin side
     is the one taken). The swap happens only when there is no free slot — a full pair
     or a full screen — which is exactly what S3 (a full screen) and S13 (a pair) did.
+
+90. **Only a managed window has a landing** (§6): a drag of a window that cannot
+    occupy a tile — a dialog, a popup, a skip-taskbar utility, an always-on-top
+    widget, a fixed-size client, an exception app, or a window the user floated —
+    produces **no drop-assist highlight and no swap/slot/maximize**. The drag is a
+    plain move. A landing outline is drawn only for a window the drop could actually
+    tile, so the preview can never promise a placement that cannot happen.
 
 ## Deliberate non-goals
 
