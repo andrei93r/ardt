@@ -597,21 +597,25 @@ happens. All default off, deduplicated and rate-limited per event.
     neighbour that holds windows** (§4) — a free slot is not required, and an empty
     neighbour is never a target, since the window would be alone there.
 
-37. **The maximize/fullscreen round trip is exact** (test scenario S6): a window
-    maximized onto its own workspace and then unmaximized rejoins its former pair,
-    the workspace it left is reaped, and the view returns.
-40. **The primary is always GNOME's current primary**, re-read whenever it changes;
-    adrt never assumes, stores or sets it (S10).
-39. **The spare is GNOME's, and routing is per arrival** (S8, S9): a window opening
-    while viewing the spare occupies it and GNOME appends a fresh spare; two windows
-    opening together give a maximized single and then a pair, never a new workspace.
-38. **Routing is not an undoable change** (S7): a newly opened window was never on
-    another workspace, so undo leaves it exactly where it is and acts on the previous
-    change, or reports that there is nothing to undo.
 36. **A disconnect rescue preserves the vanished screen's arrangement** (the test
     scenario confirmed it): its windows come back as workspaces inserted immediately
     right of the current one, keeping their order and pairing, and never scavenge free
     slots on workspaces that were not theirs; the view does not move.
+
+37. **The maximize/fullscreen round trip is exact** (test scenario S6): a window
+    maximized onto its own workspace and then unmaximized rejoins its former pair,
+    the workspace it left is reaped, and the view returns.
+
+38. **Routing is not an undoable change** (S7): a newly opened window was never on
+    another workspace, so undo leaves it exactly where it is and acts on the previous
+    change, or reports that there is nothing to undo.
+
+39. **The spare is GNOME's, and routing is per arrival** (S8, S9): a window opening
+    while viewing the spare occupies it and GNOME appends a fresh spare; two windows
+    opening together give a maximized single and then a pair, never a new workspace.
+
+40. **The primary is always GNOME's current primary**, re-read whenever it changes;
+    adrt never assumes, stores or sets it (S10).
 
 ## Deliberate non-goals
 
