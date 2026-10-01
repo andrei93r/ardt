@@ -222,7 +222,9 @@ Never create, reap or navigate workspaces there.
   splits it; a third **floats** (a minimized window holds no slot, so it never forces
   the float). The two slots are a persistent pair on that screen — they do not move
   when the primary switches workspace. Maximize is in place with
-  `maximize-minimizes-others`.
+  `maximize-minimizes-others`, and **fullscreen behaves the same**: it fills the
+  screen where it is and, with the setting on, minimizes the other managed windows,
+  which return when it exits (the exiting window landing in slot 1).
 - **Fixed-workspace**: routing fills existing workspaces (right, then left); a window
   with no free slot floats. Maximize behaves as on a workspace-capable screen, except
   that it may only use existing workspaces; if none is free it maximizes in place.
@@ -739,6 +741,11 @@ never debug-gated (the deduplication and rate limits still apply).
 59. **Undo covers every change, including drag-swaps and un-floats** (the user's
     confirmation): both instances and their slots in a swap, the float flag in an
     un-float, plus ratios, exactly as §13 says.
+
+60. **Fullscreen on a single-workspace screen is in place and minimizes the others**
+    (test scenario 1 of the layout round, confirmed): it fills the screen where it is,
+    the other managed windows are minimized while it is fullscreen, and they return on
+    exit. On a workspace-capable screen fullscreen is S17's own-workspace case instead.
 
 ## Deliberate non-goals
 
