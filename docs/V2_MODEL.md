@@ -381,7 +381,7 @@ changing one **re-fits the pair by ratio** like any other work-area change.
 - **The active-window highlight is instrumented**, because it has its own bug classes
   (stuck on a workspace that is gone, drawn at a stale rect, flicker, a suppression
   that never lifts): every highlight change is journalled with its **reason** — focus
-  changed, suppression added or removed (`drag`, `switch`, `pause`, `sharing`,
+  changed, suppression added or removed (`drag`, `switch`, `fullscreen`, `pause`, `sharing`,
   `overview`, `occluded`), rect update, close ghost, animation tick — together with its
   rect and the active suppression set, under `debug.indicator`. `DumpState` reports the
   same values, so "why is the border there / not there" is answerable from one

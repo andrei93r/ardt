@@ -604,6 +604,7 @@ export default class AdrtExtension extends Extension {
       this.periodicRetile();
     }
     this.refreshOcclusion();
+    this.refreshFullscreen();
     return GLib.SOURCE_CONTINUE;
   }
 
@@ -665,6 +666,24 @@ export default class AdrtExtension extends Extension {
       if (cx >= o.x && cx <= o.x + o.width && cy >= o.y && cy <= o.y + o.height) return true;
     }
     return false;
+  }
+
+  /**
+   * §11/§16: a fullscreen window is not highlighted as active — it fills the
+   * screen, so a marker drawn around it would sit over its own content. This is
+   * re-derived from the focused window's own flag on the same pass as occlusion
+   * (the lane-2 drain and the motion tick), never as a one-shot reaction to
+   * `notify::fullscreen`, so a missed or raced signal cannot leave the border
+   * on. It applies on any workspace and any screen, including the workspace our
+   * own maximize/fullscreen policy moved the window to.
+   */
+  private refreshFullscreen(): void {
+    const focused = this.session.focused();
+    const fullscreen = focused !== null && focused.surface.flags.fullscreen === true;
+    if (fullscreen === this.border.isSuppressed('fullscreen')) return;
+    if (fullscreen) this.suppressBorder('fullscreen');
+    else this.unsuppressBorder('fullscreen');
+    this.syncIndicator();
   }
 
   /**
@@ -751,6 +770,7 @@ export default class AdrtExtension extends Extension {
       this.startMotionWatch();
     }
     this.refreshOcclusion();
+    this.refreshFullscreen();
     this.syncIndicator();
   }
 
@@ -1506,6 +1526,7 @@ export default class AdrtExtension extends Extension {
         z: tracked.surface.zPosition,
         maximized: tracked.surface.flags.maximized,
         minimized: tracked.surface.flags.minimized,
+        fullscreen: tracked.surface.flags.fullscreen,
         above: tracked.surface.flags.above,
         transient: tracked.surface.flags.transient,
         slot: this.slotOf(tracked.surface.frame, this.workAreaOf(tracked.surface.screenId), this.axisOf(tracked.surface.screenId)),
