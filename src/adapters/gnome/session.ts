@@ -169,8 +169,13 @@ export class WindowSession {
   private wmPreferencesSettings: any = null;
   private adjustId: number | null = null;
   private adjustSource: number | null = null;
-  /** A released drag whose gesture the drain still has to interpret (§6/§11). */
-  private readonly dropPending = new Map<number, AdjustMode>();
+  /**
+   * A released drag whose gesture the drain still has to interpret (§6/§11).
+   * The rect the gesture started from travels with the intent: `endDrag` clears
+   * the shared `dragStartRect` before the deferred drain runs, and an inner-edge
+   * resize needs it to tell which edge moved and to derive the new ratio (§10).
+   */
+  private readonly dropPending = new Map<number, { mode: AdjustMode; start: Rect | null }>();
   /** While set, plan-mismatch re-applies are suppressed (e.g. right after Undo). */
   private ignoreMismatchUntilMs = 0;
   private scanPerfCounter = 0;
@@ -339,7 +344,7 @@ export class WindowSession {
     if (!wasDragging) return true;
 
     tracked.refreshFrame();
-    this.dropPending.set(id, this.adjustMode(tracked));
+    this.dropPending.set(id, { mode: this.adjustMode(tracked), start: this.dragStartRect });
     this.dragStartRect = null;
     this.signatures.clearAll();
     this.scheduleReconcile('drag-end');
@@ -1440,10 +1445,17 @@ export class WindowSession {
     // the host nudges us again when it does.
     if (!this.deps.host.isStartupComplete()) return;
     // §6/§11: a released drag is interpreted here, not inside the grab signal.
-    for (const [id, mode] of [...this.dropPending]) {
+    for (const [id, pending] of [...this.dropPending]) {
       this.dropPending.delete(id);
       const tracked = this.windows.get(id);
-      if (tracked !== undefined) this.interpretDrop(tracked, mode);
+      if (tracked === undefined) continue;
+      // §10/§12: restore the gesture's start rect for the interpretation — it
+      // was captured by `endDrag` and must survive until the drain runs, or an
+      // inner-edge resize cannot derive the new split ratio and reflows to the
+      // old one (the snap-back).
+      this.dragStartRect = pending.start;
+      this.interpretDrop(tracked, pending.mode);
+      this.dragStartRect = null;
     }
     // §7.6/§8: after a user reorder every index moved; re-derive them here,
     // never in the signal handler.

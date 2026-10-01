@@ -35,7 +35,7 @@ focus | A06-focus-follows A44-focus-direction-fallback A46-finish-focus-nearest-
 move-and-swap | A08-pair-swap A10-nudge-split A31-swap-keyboard A32-swap-drag A54-overview-move-onto-pair A55-overview-move-pair-member A73-lost-drag-release A77-clamped-drop-swaps A94-overview-drop-onto-full-floats A97-drop-onto-single-maximised-splits A107-cross-monitor-drag-takes-the-free-slot-or-swaps A108-maximised-drag-still-maximised-at-drop A127-swap-is-invertible
 
 # --------------------------------------------------------- resize and undo
-resize-and-undo | A07-inner-edge-drag A09-undo A15-adaptation A29-frame-timing A51-prune-safety A52-adaptation-no-bogus-min A56-coherence-sweep A101-undo-restores-instance-and-config A102-undo-toasts-when-impossible A113-trigger-wins-and-trades
+resize-and-undo | A07-inner-edge-drag A09-undo A15-adaptation A29-frame-timing A51-prune-safety A52-adaptation-no-bogus-min A56-coherence-sweep A101-undo-restores-instance-and-config A102-undo-toasts-when-impossible A113-trigger-wins-and-trades A150-real-inner-edge-drag
 
 # ------------------------------------------------- maximize / unmaximize
 maximize-unmaximize | A03-lone-maximize A04-maximized-window A05-unmaximize A40-unmaximize-float-over-pair A45-maximize-right-return-left A50-unmaximize-returns-left-floating A53-no-floating-leftover A58-lone-window-maximized A59-auto-float-pulled-back A88-maximise-owns-a-workspace A89-maximise-in-place-minimises-others A90-unmaximise-joins-pair-forming-left A91-unmaximise-parks-when-no-neighbour-can-pair A114-fullscreen-in-place-minimises A126-third-maximized-arrival A129-opened-maximized-pairs
@@ -84,7 +84,7 @@ os-timing-refresh | A29-frame-timing A138-os-timing
 
 # ------------------------------------------------------------ drag preview
 drag-preview | A141-drag-preview
-drag | A07-inner-edge-drag A32-swap-drag A73-lost-drag-release A74-overview-drop-is-a-move A77-clamped-drop-swaps A83-injected-drag-is-event-confirmed A141-drag-preview
+drag | A07-inner-edge-drag A32-swap-drag A73-lost-drag-release A74-overview-drop-is-a-move A77-clamped-drop-swaps A83-injected-drag-is-event-confirmed A141-drag-preview A150-real-inner-edge-drag
 
 # ----------------------------------------------------------------- gestures
 gestures | A18-gesture-3-horizontal A19-gesture-3-vertical A20-gesture-pinch A21-gesture-disabled
