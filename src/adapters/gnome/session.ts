@@ -36,7 +36,7 @@ import { validateChange } from '../../core/undo.js';
  * set asynchronously by the Shell; internal safety, not a frame cadence). */
 const MAINTENANCE_SETTLE_MS = 200;
 import { checkPlan } from '../../core/invariants.js';
-import { SignatureCache, planSignature } from '../../core/scheduler.js';
+import { SignatureCache, planSignature, shouldApplyPlan } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
 import { computePlans, ratioKey, resolveGaps, screenArea } from '../../core/tiler.js';
 import type { FocusDirection } from '../../core/focus.js';
@@ -1639,19 +1639,14 @@ export class WindowSession {
       }
       if (Date.now() < this.ignoreMismatchUntilMs) continue;
     const key = `ws:${workspaceId}:${screen.index}`;
-      const mismatch = this.planMismatch(plan);
-      const changed = this.signatures.changed(key, planSignature(plan.placements));
-      if (!mismatch && !changed) continue;
       // A signal (a title or frame change, most often) can clear the plan
       // cache mid-transition. Re-applying the identical plan then restarts the
       // frame animation from wherever Mutter's own maximise/unmaximise
       // transition happens to have the window, which reads as an overshoot
-      // followed by a correction. When every window already aims at exactly
-      // this plan and none has genuinely drifted (`mismatch` false), there is
-      // nothing to re-apply: adopt the plan and let the settle/verify path
-      // finish the move. A real drift makes `planMismatch` true and still
-      // re-applies.
-      if (!mismatch && this.planIsCurrentTarget(plan)) continue;
+      // followed by a correction. See `shouldApplyPlan`.
+      const mismatch = this.planMismatch(plan);
+      const changed = this.signatures.changed(key, planSignature(plan.placements));
+      if (!shouldApplyPlan({ mismatch, changed, alreadyTargeted: this.planIsCurrentTarget(plan) })) continue;
       this.deps.history.log('tile', {
         reason,
         workspaceId,

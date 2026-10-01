@@ -82,3 +82,22 @@ export function planSignature(placements: ReadonlyArray<{ surfaceId: number; rec
     .map((p) => `${p.surfaceId}:${p.rect.x},${p.rect.y},${p.rect.width},${p.rect.height}`)
     .join(';');
 }
+
+/**
+ * Whether a computed plan should be applied, from its pure inputs.
+ *
+ * `changed` is true when the plan differs from the last one applied for its
+ * workspace — but the per-workspace cache can also be cleared by an unrelated
+ * signal (a title or frame change), which makes `changed` true for a plan that
+ * is byte-identical to the one already applied. When the windows already aim at
+ * exactly this plan (`alreadyTargeted`) and none has genuinely drifted
+ * (`mismatch`), re-applying it would restart the frame animation from a
+ * mid-transition rect — the "overshoot then corrects". So an unchanged,
+ * already-targeted plan is adopted without re-applying; a real drift
+ * (`mismatch`) still applies.
+ */
+export function shouldApplyPlan(input: { mismatch: boolean; changed: boolean; alreadyTargeted: boolean }): boolean {
+  if (!input.mismatch && !input.changed) return false;
+  if (!input.mismatch && input.alreadyTargeted) return false;
+  return true;
+}

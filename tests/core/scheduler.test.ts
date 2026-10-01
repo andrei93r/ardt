@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { RetileScheduler, SignatureCache, planSignature } from '../../src/core/scheduler.js';
+import { RetileScheduler, SignatureCache, planSignature, shouldApplyPlan } from '../../src/core/scheduler.js';
 
 describe('RetileScheduler', () => {
   it('coalesces duplicate schedules', () => {
@@ -57,5 +57,28 @@ describe('planSignature', () => {
     const c = planSignature([{ surfaceId: 1, rect: { x: 1, y: 0, width: 10, height: 10 } }]);
     expect(a).toBe(b);
     expect(a).not.toBe(c);
+  });
+});
+
+describe('shouldApplyPlan', () => {
+  it('does nothing when the plan is unchanged and the windows are in place', () => {
+    expect(shouldApplyPlan({ mismatch: false, changed: false, alreadyTargeted: true })).toBe(false);
+    expect(shouldApplyPlan({ mismatch: false, changed: false, alreadyTargeted: false })).toBe(false);
+  });
+
+  it('does not re-apply a plan the windows already aim at', () => {
+    // A signal cleared the cache mid-transition: `changed` is true for the plan
+    // already applied, and Mutter has not handed the window back yet. Applying
+    // it again would restart the animation (the overshoot-then-correct bug).
+    expect(shouldApplyPlan({ mismatch: false, changed: true, alreadyTargeted: true })).toBe(false);
+  });
+
+  it('applies a genuinely changed plan', () => {
+    expect(shouldApplyPlan({ mismatch: false, changed: true, alreadyTargeted: false })).toBe(true);
+  });
+
+  it('applies on a real drift even when the plan is unchanged', () => {
+    expect(shouldApplyPlan({ mismatch: true, changed: false, alreadyTargeted: true })).toBe(true);
+    expect(shouldApplyPlan({ mismatch: true, changed: true, alreadyTargeted: true })).toBe(true);
   });
 });
