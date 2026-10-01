@@ -103,6 +103,24 @@ be expressed as a pure-core test is a rule that belongs further down the stack, 
 split is enforced, not merely encouraged. Behaviour must be identical on `headless` and
 on a headful session; the harness proves the same scenarios hold on both.
 
+### Cases the layout round added (each confirmed, each needs tests)
+
+- fullscreen on a single-workspace screen: in place, the other managed windows minimised.
+- a split that cannot exist: the trigger keeps the screen (alone, so maximised) and the
+  reactor gives way — its own clamped workspace on a workspace-capable screen, minimised
+  on a single-workspace screen; the two trade whenever one is restored.
+- fixed and static-number screens: nearest workspace with room (right first), the slot
+  on the side it came from, the view switching to it; a full screen floats.
+- reconnect replays a remembered screen's slots; a window opened in the meantime stays put.
+- a primary change moves no window; the extra window from the old primary's other
+  workspace becomes a float.
+- a screen without workspaces silently ignores the switch.
+- an overview drop onto the empty workspace maximises there and GNOME adds a new one.
+- restore onto a full workspace floats; a workspace that only looks empty is free.
+- a slight overlap when dragging one of a pair onto the other swaps them.
+- a dialog floats, centred on its parent, raised; placed floats are nudged off-centre.
+- every surface change (dock, bar, screen, gaps) re-fits the windows by ratio.
+
 ## Targets and capabilities
 
 | Capability | `headless` (VM) | `session-like` (VM) | `session` (real) |
