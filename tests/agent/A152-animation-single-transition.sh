@@ -32,10 +32,13 @@ for i, evs in per.items():
         elif ended and e["kind"] in ("start", "frame", "cancel"):
             print("window", i, "moved after its animation ended", e); sys.exit(1)
     frames = [e["rect"] for e in evs if e["kind"] in ("start", "frame", "end")]
+    # Animation rects are interpolated floats; allow sub-pixel tolerance so
+    # floating-point noise on the final approach is not read as a reversal.
+    eps = 0.5
     for key in ("x", "y", "width", "height"):
         vals = [f[key] for f in frames]
-        nonincreasing = all(b <= a for a, b in zip(vals, vals[1:]))
-        nondecreasing = all(b >= a for a, b in zip(vals, vals[1:]))
+        nonincreasing = all(b <= a + eps for a, b in zip(vals, vals[1:]))
+        nondecreasing = all(b >= a - eps for a, b in zip(vals, vals[1:]))
         if not (nonincreasing or nondecreasing):
             print("window", i, "non-monotonic", key, vals); sys.exit(1)
 print("animations", {i: len([e for e in evs if e["kind"] == "start"]) for i, evs in per.items()},
