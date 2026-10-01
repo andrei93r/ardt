@@ -14,6 +14,7 @@ function candidate(overrides: Partial<ClampCandidate> = {}): ClampCandidate {
     fullscreen: false,
     minimized: false,
     stubborn: false,
+    settling: false,
     frame: { x: -200, y: -150, width: 400, height: 300 },
     ...overrides,
   };
@@ -45,5 +46,20 @@ describe('shouldClampWindow', () => {
     expect(shouldClampWindow(candidate({ fullscreen: true }))).toBe(false);
     expect(shouldClampWindow(candidate({ minimized: true }))).toBe(false);
     expect(shouldClampWindow(candidate({ stubborn: true }))).toBe(false);
+  });
+
+  it('never clamps a window the tiler is mid-transition for', () => {
+    // The frame read during an apply is an intermediate step toward a target
+    // the tiler already chose, not an off-screen float. Clamping it writes a
+    // rect derived from that frame and races the animation; the clamp's own
+    // apply then resets the recent-move clock and the next drain clamps again.
+    expect(shouldClampWindow(candidate({ settling: true }))).toBe(false);
+    // A Chrome/VS Code frame that momentarily overflows the monitor (its Mutter
+    // transition is still running) is the reported jump/tear.
+    expect(shouldClampWindow(candidate({ settling: true, frame: { x: 1440, y: 679, width: 1372, height: 1462 } }))).toBe(false);
+  });
+
+  it('still clamps an off-screen float once the apply has landed', () => {
+    expect(shouldClampWindow(candidate({ settling: false }))).toBe(true);
   });
 });
