@@ -108,6 +108,8 @@ interface ExtraHandlers {
   CursorToCentre(): boolean;
   ActivatePanelItem(name: string): boolean;
   InjectFault(context: string): boolean;
+  StartFrameRecording(): boolean;
+  StopFrameRecording(): boolean;
 }
 
 type Handlers = DbusHandlers & ExtraHandlers;
@@ -1863,6 +1865,14 @@ export default class AdrtExtension extends Extension {
       CursorToCentre: () => this.session.centreCursorNow(),
       ActivatePanelItem: (name) => this.panel?.activate(name) ?? false,
       InjectFault: (context) => this.simulateFault(context),
+      StartFrameRecording: () => {
+        this.animator.startRecording();
+        return true;
+      },
+      StopFrameRecording: () => {
+        this.animator.stopRecording();
+        return true;
+      },
       MinimizeWindow: (id) => {
         if (!this.session.windows.has(id)) return false;
         this.host.minimize(id);
@@ -2127,6 +2137,7 @@ export default class AdrtExtension extends Extension {
         logEvents: this.history.logEvents,
       },
       bounds: this.session.memoryBounds(),
+      animRecords: this.animator.recordsSnapshot(),
     });
   }
 

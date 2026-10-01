@@ -87,6 +87,9 @@ const INTERFACE_XML = `
     <method name="CursorToCentre"><arg type="b" direction="out"/></method>
     <method name="ActivatePanelItem"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
     <method name="InjectFault"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
+    <!-- Bounded animation-frame sampler (DumpState.animRecords); never on by default. -->
+    <method name="StartFrameRecording"><arg type="b" direction="out"/></method>
+    <method name="StopFrameRecording"><arg type="b" direction="out"/></method>
 
     <!-- Stage 4/5: the app registry and the display fixtures. -->
     <method name="GetRegistry"><arg type="s" direction="out"/></method>

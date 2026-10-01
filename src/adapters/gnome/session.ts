@@ -1642,6 +1642,16 @@ export class WindowSession {
       const mismatch = this.planMismatch(plan);
       const changed = this.signatures.changed(key, planSignature(plan.placements));
       if (!mismatch && !changed) continue;
+      // A signal (a title or frame change, most often) can clear the plan
+      // cache mid-transition. Re-applying the identical plan then restarts the
+      // frame animation from wherever Mutter's own maximise/unmaximise
+      // transition happens to have the window, which reads as an overshoot
+      // followed by a correction. When every window already aims at exactly
+      // this plan and none has genuinely drifted (`mismatch` false), there is
+      // nothing to re-apply: adopt the plan and let the settle/verify path
+      // finish the move. A real drift makes `planMismatch` true and still
+      // re-applies.
+      if (!mismatch && this.planIsCurrentTarget(plan)) continue;
       this.deps.history.log('tile', {
         reason,
         workspaceId,
@@ -1689,6 +1699,24 @@ export class WindowSession {
       }
     }
     return false;
+  }
+
+  /**
+   * True when every placement in `plan` is already the aim of its window
+   * (`tracked.lastTarget`). Used with `planMismatch` to tell a genuine drift
+   * (re-apply) from a plan cache cleared mid-transition by an unrelated signal
+   * (do not re-apply: a second animation would restart from Mutter's
+   * in-flight transition and read as a correction).
+   */
+  private planIsCurrentTarget(plan: TilePlan): boolean {
+    if (plan.placements.length === 0) return false;
+    for (const placement of plan.placements) {
+      const tracked = this.windows.get(placement.surfaceId);
+      const target = tracked?.lastTarget;
+      if (target === null || target === undefined) return false;
+      if (!rectEquals(target, placement.rect)) return false;
+    }
+    return true;
   }
 
   tileables(workspaceId: number): TrackedWindow[] {
