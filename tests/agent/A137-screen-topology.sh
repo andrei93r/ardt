@@ -11,6 +11,11 @@
 # skips above four. Complements A105's pair-on-two-screens check.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
+# Superseded by A142-topology-cases, which gates every canonical combination by
+# its signature instead of running on whatever topology happens to be present.
+skip "superseded by A142-topology-cases (gated per topology)"
+exit 0
+
 ensure_clean
 nmon="$(state_expr 'len(d["monitors"])')"
 if [ "$nmon" -lt 1 ] || [ "$nmon" -gt 4 ]; then

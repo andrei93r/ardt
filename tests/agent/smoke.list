@@ -126,3 +126,5 @@ A136-clamp-to-screen
 A138-os-timing
 # --- preferences / options: rows match the schema, a few toggles observed ---
 A140-prefs-options
+# --- topology: every screen keeps its own axis, gated by signature ---
+A142-topology-cases

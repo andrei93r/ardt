@@ -22,12 +22,20 @@ land = [m for m in mons if m["geometry"]["width"] >= m["geometry"]["height"]]
 port = [m for m in mons if m["geometry"]["height"] > m["geometry"]["width"]]
 print(len(mons), (land[0]["index"] if land else -1), (port[0]["index"] if port else -1))')"
 
-if [ "$NMON" -ne 2 ] || [ "$LAND" = "-1" ] || [ "$PORT" = "-1" ]; then
-  skip "A105 needs exactly one landscape and one portrait monitor (run with ADRT_MONITORS=1920x1080:1080x1920)"
-  ensure_clean
-  summary
-  exit 0
-fi
+# Gate by topology signature (src/core/topology.ts): exactly two screens, one
+# landscape and one portrait. A two-screen topology the case cannot use (both
+# landscape, both portrait) skips too, and a three-screen harness can never run
+# it — the signature says so.
+sig="$(topology_signature)"
+case "$sig" in
+  2:LP:*|2:PL:*) ;;
+  *)
+    skip "topology $sig present, A105 needs exactly two screens (one landscape, one portrait); run with ADRT_MONITORS=1920x1080:1080x1920"
+    ensure_clean
+    summary
+    exit 0
+    ;;
+esac
 
 primary_index="$(state_expr 'next(m["index"] for m in d["monitors"] if m.get("isPrimary"))')"
 if [ "$primary_index" = "$LAND" ]; then
