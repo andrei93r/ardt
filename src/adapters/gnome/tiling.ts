@@ -212,7 +212,14 @@ export class Tiling {
     let delay = 0;
     if (compat.isMaximized(win)) {
       const started = GLib.get_monotonic_time();
-      this.deps.host.unmaximize(tracked.id);
+      // §4: this is our own unmaximize to fit a tile, not the user's. Mark it so
+      // `onMaximizeSignal` does not run the unmaximize policy for it.
+      tracked.selfUnmaximize = true;
+      try {
+        this.deps.host.unmaximize(tracked.id);
+      } finally {
+        tracked.selfUnmaximize = false;
+      }
       const observed = Math.round((GLib.get_monotonic_time() - started) / 1000);
       this.deps.adaptation.observeUnmaximizeDelay(tracked.surface.appId, observed);
       delay = this.deps.adaptation.delayFor(tracked.surface.appId, tracked.profile.unmaximizeDelayMs);

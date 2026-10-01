@@ -634,6 +634,22 @@ export class WindowSession {
       const onScreen = (t: TrackedWindow): boolean => t.surface.screenId === screen.index;
       const tileables = this.tileables(workspaceId).filter(onScreen);
       if (tileables.length === 0) continue;
+      // §4 maximize, as a property: a window the user maximized that still
+      // shares its workspace is moved to a workspace of its own to the right,
+      // and the view follows. Re-asserting it here means a signal that was
+      // missed or raced can not leave the window sharing the pair.
+      if (tileables.length > 1) {
+        const requested = tileables.find((t) => t.maximizeRequested && compat.isMaximized(t.win));
+        if (requested !== undefined && this.moveToNewWorkspace(requested, true)) {
+          this.signatures.clearAll();
+          this.scheduleRetile(workspaceId, 'maximize-property');
+          continue;
+        }
+      } else if (tileables[0].maximizeRequested) {
+        // Settled: a lone window on its own workspace is maximized; the
+        // maximize property no longer needs to be enforced for it.
+        tileables[0].maximizeRequested = false;
+      }
       // §7.2: a window maximized on its own was left maximized when a sibling
       // arrived on this monitor; unmaximize it and tile the pair.
       if (this.unmaximizeStaleLone(tileables)) {
@@ -1214,6 +1230,8 @@ export class WindowSession {
 
   /** §7.3: user unmaximized a window that had been sent to its own workspace. */
   private returnFromMaximize(tracked: TrackedWindow): void {
+    // The user unmaximized: the §4 maximize property no longer applies.
+    tracked.maximizeRequested = false;
     const manager = global.workspace_manager;
     let previous = tracked.previousWorkspaceIdx;
     // A stale index (workspaces were reaped since the maximize) must not strand
@@ -1704,6 +1722,9 @@ export class WindowSession {
     if (maximized) {
       const siblings = this.tileables(tracked.surface.workspaceId).filter((t) => t.id !== tracked.id);
       if (siblings.length > 0) {
+        // §4: the user maximized a window that shares its workspace. Remember
+        // the intent so the drain can re-assert it, then move it now.
+        tracked.maximizeRequested = true;
         // Keep the window's size (it is already maximized) and slide it onto
         // its own workspace to the right; it arrives maximized. Resizing it
         // first would make the transition visibly jump.
@@ -1711,6 +1732,17 @@ export class WindowSession {
       } else {
         this.signatures.clearAll();
       }
+      return;
+    }
+    // Not maximized: any earlier maximize intent is spent. (The drain's lone
+    // law re-maximizes a window that is alone on its workspace, so a tiler
+    // unmaximize during a stale frame apply does not need the intent.)
+    tracked.maximizeRequested = false;
+    if (tracked.selfUnmaximize) {
+      // The tiler unmaximized this window itself to apply a tile frame. That is
+      // not a user unmaximize: ignore it and let the lone-maximize property /
+      // the next drain decide where the window belongs.
+      this.scheduleReconcile('self-unmaximize');
       return;
     }
     if (tracked.previousWorkspaceIdx !== null) {

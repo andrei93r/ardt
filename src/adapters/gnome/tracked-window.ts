@@ -39,8 +39,22 @@ export class TrackedWindow {
   ready = false;
   /** Set when the user moves this window; policies leave it alone for a while. */
   userMovedAtMs = 0;
+  /**
+   * Set while the tiler unmaximizes this window itself, to apply a tile frame.
+   * That unmaximize is not a user action and must not drive the unmaximize
+   * policy (`onMaximizeSignal`), or a stale retry would drag a window we just
+   * maximized to its own workspace back to the pair (A45).
+   */
+  selfUnmaximize = false;
   /** When Adrt last sent this window to its own workspace (see EXILE_COOLDOWN_MS). */
   exiledAtMs = 0;
+  /**
+   * Set when the window is maximized while it shares its workspace (a user
+   * maximize, §4), cleared when it settles alone on its own workspace or is
+   * unmaximized. The drain treats this as a property: while it is set, the
+   * window belongs on its own workspace to the right.
+   */
+  maximizeRequested = false;
   lastWorkspaceIdx = 0;
 
   /** Cached min/max dimensions; never re-queried on the tile hot path. */
