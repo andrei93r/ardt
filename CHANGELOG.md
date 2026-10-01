@@ -4,6 +4,44 @@ All notable changes to Adrt are documented here. This project follows
 [Semantic Versioning](https://semver.org/): MAJOR for a Shell bump that needs
 code changes, MINOR for features, PATCH for fixes.
 
+## [Unreleased]
+
+### Added (Stage 0 — grounding and event-confirmed triggers)
+
+- `ProbePlatform` on the test D-Bus surface: a capability JSON (laters and
+  `BEFORE_REDRAW`, monitor count, `layout_rows`, virtual input, RemoteDesktop,
+  injection, grab detection, devkit), so the harness can gate on facts instead
+  of assumptions.
+- **Event journal** (`adapters/gnome/journal.ts`): every raw platform event and
+  every decision, one monotonic sequence, a bounded in-memory tail for
+  `DumpEvents`/`DumpDecisions`, and one JSONL file per day under
+  `$XDG_DATA_HOME/adrt/journal` rotated by size with a 30-day retention. The
+  host now watches each window's own signals (frame, monitor, workspace,
+  minimized, wm-class, unmanaged) so nothing happens unjournalled.
+- **Real input injection**: `InjectPointerMove`, `InjectPointerButton` and
+  `InjectKey` through `Clutter.Seat.create_virtual_device`, gated on
+  `ADRT_INJECT` (the nested harness sets it; a live session never does).
+- The **decision catalogue** (`core/notify.ts`) and `SimulateNotice`: decisions
+  phrased as decisions, deduplicated per subject and rate-limited, opt-in behind
+  the `debug-toasts` setting, with the nothing-happened notices always shown.
+  Every decision is journalled whether or not it is shown.
+- `DumpState` gains the pair `axis` and a derived `slot` per window, the `gaps`
+  in force, and `focusedReason` for the harness's focus triggers.
+- Harness: `tests/lib/common.sh` shared by both runners, `tests/MANIFEST.md`
+  (generated) listing every scenario with what it needs and when it can skip,
+  and `tests/support/refusing-client.py` for the refusal-ladder tests.
+- `docs/platform-notes.md`: the public/private/never API table and the
+  documented exceptions, probed on GNOME 50.1 rather than remembered.
+
+### Changed
+
+- `A22`/`A23`/`A24` (keybindings) run headlessly by injection instead of being
+  skipped for lack of a seat; `A01`/`A14` derive their bounds from `DumpState`
+  instead of the literal `1281x801`; `A32`/`A59`/`A64` poll with a real budget
+  instead of single-shot assertions.
+- Scripts that no longer apply to the laptop's harness are struck from the plan
+  with a reason (`scripts/server-test.sh` needs the not-yet-set-up server).
+
 ## [0.1.0] - 2026-09-29
 
 ### Added

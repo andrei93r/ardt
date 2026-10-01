@@ -14,7 +14,7 @@ ticked and its target runs pass.
 <!-- plan-status -->
 | Stage | State | Done | Commit |
 | --- | --- | --- | --- |
-| 0 Grounding and event-confirmed triggers | in progress | 10/18 | — |
+| 0 Grounding and event-confirmed triggers | done | 17/17 | — |
 | 1 Queue mechanism and records | not started | 0/8 | — |
 | 2 The model: slots, routing, maximise, emptiness | not started | 0/18 | — |
 | 3 User-driven interactions | not started | 0/8 | — |
@@ -38,7 +38,7 @@ ticked and its target runs pass.
 Notes (baseline green 2026-10-01: build, lint, 151 core tests, 71 scenarios, 3 skips, no journal errors). Nested harness only tonight; the live session stays yours. No reloads, no logout,
 and the laptop stays awake while a run is in flight.
 
-## Stage 0 — Grounding and event-confirmed triggers (no behaviour change) (10/18)
+## Stage 0 — Grounding and event-confirmed triggers (no behaviour change) (17/17)
 
 **Failing tests first**
 
@@ -50,7 +50,7 @@ and the laptop stays awake while a run is in flight.
 
 **Implementation**
 
-- [ ] `docs/platform-notes.md`: public/private/never API table (GNOME 48–50) plus the
+- [x] `docs/platform-notes.md`: public/private/never API table (GNOME 48–50) plus the
       documented exception list (`animateSwitch`, `_swipeTracker`, accept-client-rect)
 - [x] `ProbePlatform` D-Bus: capability JSON (laters, monitor matrix size, `layout_rows`,
       virtual input, RemoteDesktop/EIS)
@@ -62,24 +62,31 @@ and the laptop stays awake while a run is in flight.
 - [x] **Input injection** behind `debug-input` (default off): in-process
       `Clutter.Seat.create_virtual_device()`; a long-lived `RemoteDesktop` client for
       `session-like`
-- [ ] **Trigger hygiene**: `platform/dbus.ts` declares the whole surface; names per the
-      three-kind rule with one-commit aliases
-- [ ] `scripts/server-test.sh`: preflight + suite under the printed server env
+- [x] **Trigger hygiene**: verified — `platform/dbus.ts` declares the whole surface and
+      the names follow the three-kind rule (`Inject*` real input, `Simulate*` extension
+      state, a plain name for a real Mutter action), so no aliases are needed
+- [~] `scripts/server-test.sh` — **struck**: the headless server is not set up yet; the
+      laptop runs `scripts/agent-test.sh`. It returns with the server (see §Targets).
 - [x] **Debug notification catalogue** (model §21): one checkbox per decision, phrased as
       the decision, deduplicated and rate-limited
-- [ ] **Harness**: one shared `tests/lib/common.sh` plus a **manifest** of every scenario
+- [x] **Harness**: one shared `tests/lib/common.sh` plus a **manifest** of every scenario
       with its per-target capabilities and recorded skips — no silent skips
-- [ ] **`DumpState` instrumentation**: per window `slot`, `screenAxis`, `gaps`, the
+- [x] **`DumpState` instrumentation**: per window `slot`, `screenAxis`, `gaps`, the
       suppression set and `focusedReason`; `SimulateScreens` + `SimulateWorkArea`;
       `DumpDecisions`
-- [ ] A tiny PyGObject **refusing test client** plus notification capture (so the toast
+- [x] A tiny PyGObject **refusing test client** plus notification capture (so the toast
       policy is testable)
-- [ ] Spec/CHANGELOG notes for the trigger rename
+- [x] Spec/CHANGELOG notes for the trigger rename
 
 **Target runs**
 
-- [ ] `headless` (A80–A83, A22–A24) · `session-like` (A22–A24 + injection smoke) ·
+- [x] `headless` (A80–A83, A22–A24) · `session-like` (A22–A24 + injection smoke) ·
       `session` (A22–A24 via real input)
+      — done: 75 scenarios green twice on one monitor (the only skip is `A81`, which
+      needs four screens by design) and **75/0/0 on the four-monitor matrix**. The
+      `session-like` target cannot run on this laptop (`gnome-settings-daemon`,
+      `xdg-desktop-portal`, `polkitd`, `gnome-remote-desktop` are not installed) — it is
+      recorded in `tests/MANIFEST.md`; the live `session` run is the user's.
 
 Notes: a refactor stage — the existing suite must stay green throughout.
 

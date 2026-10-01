@@ -7,11 +7,14 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 ensure_clean
 open_pair
+wait_settled 25
 ids=($(list_ids))
 adrt SimulateResize "${ids[0]}" "${ids[1]}" 0.3 >/dev/null
 wait_settled 12
 
-check_python "split moved to roughly 30/70" '
+# A resize can trail a loaded drain, so poll for the geometry instead of
+# sampling once after a settle.
+poll "split moved to roughly 30/70" '
 import json, sys
 d = json.load(sys.stdin)
 ws = [w["rect"] for w in d["windows"]]
@@ -20,7 +23,7 @@ ratios = sorted(r["width"] / total for r in ws)
 if abs(ratios[0] - 0.3) > 0.1:
     print("ratios", [round(x, 2) for x in ratios]); sys.exit(1)
 print("ratios", [round(x, 2) for x in ratios])
-'
+' 30
 check_python "ratio persisted" '
 import json, sys
 if not json.load(sys.stdin)["ratios"]:

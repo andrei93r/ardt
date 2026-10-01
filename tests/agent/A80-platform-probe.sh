@@ -49,5 +49,35 @@ fi
 assert_eq "the probe sees the harness's monitors" "$expected_monitors" \
   "$(printf '%s' "$probe" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("monitors", -1))' 2>/dev/null || echo -1)"
 
+# The dump carries what the layout tests need: the axis, a derived slot per
+# window, the gaps in force, and why focus last moved.
+open_pair
+if wait_python 20 '
+import json, sys
+d = json.load(sys.stdin)
+if d.get("focusedReason", None) is None:
+    print("no focusedReason"); sys.exit(1)
+gaps = d.get("gaps") or {}
+if "base" not in gaps or "landscape" not in gaps or "portrait" not in gaps:
+    print("no gaps", gaps); sys.exit(1)
+for w in d["windows"]:
+    if w.get("axis") not in ("horizontal", "vertical"):
+        print("bad axis", w.get("axis")); sys.exit(1)
+    if w.get("slot") not in (0, 1, None):
+        print("bad slot", w.get("slot")); sys.exit(1)
+tiles = [w for w in d["windows"] if w["tileable"] and not w["minimized"]]
+slots = sorted(w["slot"] for w in tiles if w["slot"] is not None)
+if slots != [0, 1]:
+    print("a pair should read as slots 0 and 1:", [(w["id"], w["slot"]) for w in tiles]); sys.exit(1)
+sys.exit(0)'; then
+  pass "DumpState reports the axis, the slots, the gaps and the focus reason"
+else
+  check_python "DumpState reports the axis, the slots, the gaps and the focus reason" '
+import json, sys
+d = json.load(sys.stdin)
+print("focusReason", d.get("focusedReason"), "gaps", d.get("gaps"), "windows", [(w["id"], w.get("slot"), w.get("axis")) for w in d["windows"]])
+sys.exit(1)'
+fi
+
 ensure_clean
 summary

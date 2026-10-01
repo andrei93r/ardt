@@ -15,24 +15,35 @@ fi
 ensure_clean
 open_pair
 ids=($(list_ids))
-before="$(window_field "${ids[0]}" rect)"
+rect_of() {
+  dump | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+w = [x for x in d['windows'] if x['id'] == ${ids[0]}]
+print(json.dumps(w[0]['rect']) if w else '')"
+}
+before="$(rect_of)"
 adrt SimulateResize "${ids[0]}" "${ids[1]}" 0.3 >/dev/null
 wait_settled 12
-mid="$(window_field "${ids[0]}" rect)"
-if [ "$mid" = "$before" ]; then
+if [ "$(rect_of)" = "$before" ]; then
   fail "precondition: the resize changed the geometry"
   summary
   exit 1
 fi
 
 inject_hotkey 65515 122   # Super+Z
-wait_settled 12
-after="$(window_field "${ids[0]}" rect)"
-if [ "$before" = "$after" ]; then
-  pass "the undo keybinding restored the ratio"
-else
-  fail "the undo keybinding did not restore ($before -> $mid -> $after)"
-fi
+
+# The undo lands when the drain runs: poll for the restored rectangle instead of
+# sampling once after the geometry happens to go quiet.
+poll "the undo keybinding restored the ratio" "
+import json, sys
+d = json.load(sys.stdin)
+w = [x for x in d['windows'] if x['id'] == ${ids[0]}]
+same = bool(w) and w[0]['rect'] == json.loads('''$before''')
+if not same:
+    print('now', w[0]['rect'] if w else None, 'was', '''$before''')
+sys.exit(0 if same else 1)
+" 20
 
 ensure_clean
 summary

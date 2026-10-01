@@ -1,22 +1,14 @@
-# Generated with AI for personal use.
-# Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
-# and can maintain this code.
-#
-# Shared helpers for the autonomous agent scenarios (§40.3). Source this file;
-# do not execute it directly.
-
-set -uo pipefail
+# Generaset -uo pipefail
 
 AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$AGENT_DIR/../.." && pwd)"
-export ADRT_STATE_DIR="${ADRT_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/adrt-nested}"
 PARSE="$AGENT_DIR/parse.py"
+export ADRT_STATE_DIR="${ADRT_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/adrt-nested}"
+
+# shellcheck source=tests/lib/common.sh
+source "$AGENT_DIR/../lib/common.sh"
+
 NESTED="$ROOT_DIR/scripts/nested-shell.sh"
-
 TEST_CLIENT="${ADRT_TEST_CLIENT:-gnome-text-editor --new-window}"
-
-failures=0
-checks=0
 
 log() { printf '%s\n' "$*"; }
 
@@ -236,18 +228,6 @@ check_python() {
   fi
 }
 
-# Poll a python predicate until it holds, then pass; on timeout report the
-# failing state. Prefer this over sampling once when a retile may be settling.
-poll() {
-  local label="$1" code="$2" timeout="${3:-12}" out
-  if wait_python "$timeout" "$code"; then
-    pass "$label"
-  else
-    out="$(dump | python3 -c "$code" 2>&1 || true)"
-    fail "$label${out:+ — $out}"
-  fi
-}
-
 close_all() {
   local ids
   ids="$(list_ids)"
@@ -355,6 +335,20 @@ inject_pointer() {
 
 # One key, press or release. Keyvals are X11 keysyms (xev names): Super 65515,
 # Alt 65511, Ctrl 65507, Shift 65505, grave 96, a..z = ord(letter).
+# Wait until a counter has grown by at least one. A loaded machine can starve a
+# periodic pass past a fixed measurement window, so measure to a budget.
+wait_counter_grows() {
+  local name="$1" timeout="${2:-20}" base now
+  base="$(counter "$name")"
+  local deadline=$((SECONDS + timeout))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    now="$(counter "$name")"
+    if [ "$now" -gt "$base" ] 2>/dev/null; then return 0; fi
+    sleep 0.5
+  done
+  return 1
+}
+
 inject_key() {
   adrt InjectKey "$1" "$2" >/dev/null 2>&1 || true
   sleep 0.15

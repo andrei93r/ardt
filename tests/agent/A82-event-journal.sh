@@ -103,10 +103,10 @@ first="$(adrt SimulateNotice nothing-to-undo subject-A | python3 "$PARSE")"
 second="$(adrt SimulateNotice nothing-to-undo subject-A | python3 "$PARSE")"
 third="$(adrt SimulateNotice nothing-to-undo subject-B | python3 "$PARSE")"
 optin="$(adrt SimulateNotice did-not-fit subject-A | python3 "$PARSE")"
-assert_eq "an always-on notice is shown" "True" "$first"
-assert_eq "the same notice for the same subject is deduplicated" "False" "$second"
-assert_eq "a different subject is its own notice" "True" "$third"
-assert_eq "an opt-in decision stays silent by default" "False" "$optin"
+assert_eq "an always-on notice is shown" "true" "$first"
+assert_eq "the same notice for the same subject is deduplicated" "false" "$second"
+assert_eq "a different subject is its own notice" "true" "$third"
+assert_eq "an opt-in decision stays silent by default" "false" "$optin"
 
 ensure_clean
 summary

@@ -48,6 +48,8 @@ export class Tiling {
   private readonly sources = new Set<number>();
   private destroyed = false;
   private verifyFailuresRemaining = 0;
+  /** When set, only this window's applies are failed (null = any window). */
+  private verifyFailuresFor: number | null = null;
   private lastAppliedAtMs = 0;
   /** Diagnostics: plans that actually moved at least one window. */
   private appliedPlans = 0;
@@ -221,9 +223,10 @@ export class Tiling {
     this.deps.animator.cancel(id);
   }
 
-  /** §31.5 failure injection. */
-  injectVerifyFailures(count: number): void {
+  /** §31.5 failure injection: `id` limits it to one window's applies. */
+  injectVerifyFailures(count: number, id: number | null = null): void {
     this.verifyFailuresRemaining = Math.max(0, count);
+    this.verifyFailuresFor = id;
   }
 
   get activeAnimations(): number {
@@ -278,7 +281,7 @@ export class Tiling {
     tracked.refreshFrame();
     const current = tracked.surface.frame;
 
-    if (this.verifyFailuresRemaining > 0) {
+    if (this.verifyFailuresRemaining > 0 && (this.verifyFailuresFor === null || this.verifyFailuresFor === tracked.id)) {
       this.verifyFailuresRemaining -= 1;
       this.retryOrRecord(tracked, target, reason, attempt, current);
       return;

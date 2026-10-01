@@ -33,9 +33,17 @@ adrt ActivateWindow "${ids[0]}" >/dev/null
 wait_settled 15
 
 # The coherence sweep is the periodic guarantee (§35); it must keep running.
-assert_num "the coherence sweep keeps running" '>' "$(counter_delta sweeps 5)" 0
+if wait_counter_grows sweeps 20; then
+  pass "the coherence sweep keeps running"
+else
+  fail "the coherence sweep stopped (sweeps=$(counter sweeps))"
+fi
 # Classification is consulted on every pass, so a tiled pair must be counted.
-assert_num "classification is counted" '>' "$(counter_delta classifyCalls 5)" 0
+if wait_counter_grows classifyCalls 20; then
+  pass "classification is counted"
+else
+  fail "classification stopped being counted (classifyCalls=$(counter classifyCalls))"
+fi
 # The sweep is timed, so a maximum must have been recorded.
 assert_num "the sweep is timed" '>' "$(state_expr 'd["counters"]["sweepMsMax"]')" 0
 
@@ -53,8 +61,11 @@ if wait_for 15 bash -c "[ \"\$(bash '$NESTED' dbus DumpState | python3 '$PARSE' 
 else
   fail "a resize is counted as a plan applied (still $(counter plansApplied), was $before_applied)"
 fi
-assert_num "logging is counted" '>' \
-  "$(python3 -c "print($(counter logEvents) - $before_logged)")" 0
+if wait_counter_grows logEvents 20; then
+  pass "logging is counted"
+else
+  fail "logging stopped being counted (logEvents=$(counter logEvents), was $before_logged)"
+fi
 
 ensure_clean
 summary

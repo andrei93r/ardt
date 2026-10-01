@@ -53,7 +53,32 @@ ws.sort(key=lambda w: w["rect"]["y"])
 print(ws[0]["id"], ws[1]["id"])')"
 
 adrt ActivateWindow "$A" >/dev/null
+# The move acts on the focused window: wait until it really is A, otherwise a
+# loaded shell moves the wrong one (or nothing) and the poll times out.
+if ! wait_python 15 "import json,sys; sys.exit(0 if json.load(sys.stdin)['focused'] == $A else 1)"; then
+  fail "the focus did not land on the window before the move"
+fi
 adrt MoveDirection down >/dev/null
+# The keyboard move is recorded as a swap; assert the decision too, so a slow
+# apply cannot hide whether the move was understood at all.
+swapped=0
+for _ in $(seq 1 20); do
+  if adrt DumpDecisions 200 2>/dev/null | python3 "$PARSE" 2>/dev/null | python3 -c "
+import json, sys
+entries = json.load(sys.stdin)
+a, b = int('$A'), int('$B')
+sys.exit(0 if any(e.get('event') == 'swap' and {e.get('a'), e.get('b')} == {a, b} for e in entries) else 1)" 2>/dev/null; then
+    swapped=1
+    break
+  fi
+  sleep 0.5
+done
+if [ "$swapped" = 1 ]; then
+  pass "the move down was recorded as a swap"
+else
+  fail "the move down was never recorded as a swap"
+fi
+
 poll "move down swaps the stacked pair" '
 import json, sys
 d = json.load(sys.stdin)

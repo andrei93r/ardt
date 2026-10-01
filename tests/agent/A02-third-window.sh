@@ -12,21 +12,23 @@ pair_ws="$(dump | python3 -c 'import json,sys; print(json.load(sys.stdin)["windo
 spawn_window >/dev/null
 
 # As soon as the third window appears, Adrt pushes it right: the highlight must
-# not linger at its spawn position (the border would be drawn over the old
-# spot while the window is moved). The suppression window is short, so poll
-# tightly rather than once per 0.5s.
+# not linger at its spawn position. That suppression is transient, so assert the
+# journalled event (with its reason) rather than catching it live.
 suppressed=0
-for _ in $(seq 1 40); do
-  if bash "$NESTED" dbus DumpState | python3 "$PARSE" | python3 -c 'import json,sys; sys.exit(0 if "workspace-switch" in json.load(sys.stdin)["indicator"]["suppressed"] else 1)' 2>/dev/null; then
+for _ in $(seq 1 20); do
+  if journal_tail 200 '' | python3 -c '
+import json, sys
+entries = json.load(sys.stdin)
+sys.exit(0 if any(e.get("event") == "suppress" and e.get("reason") == "workspace-switch" for e in entries) else 1)' 2>/dev/null; then
     suppressed=1
     break
   fi
-  sleep 0.05
+  sleep 0.5
 done
 if [ "$suppressed" = "1" ]; then
-  pass "the highlight is suppressed while the window is pushed right"
+  pass "the highlight was suppressed while the window was pushed right"
 else
-  fail "highlight not suppressed during the push (suppressed: $(state_expr 'd["indicator"]["suppressed"]'))"
+  fail "no workspace-switch suppression was journalled"
 fi
 
 wait_count 3 15 || true

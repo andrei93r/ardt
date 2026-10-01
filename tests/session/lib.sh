@@ -12,6 +12,9 @@ SESSION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SESSION_DIR/../.." && pwd)"
 PARSE="$ROOT_DIR/tests/agent/parse.py"
 
+# shellcheck source=tests/lib/common.sh
+source "$ROOT_DIR/tests/lib/common.sh"
+
 # Test clients. Plain nautilus/chrome are single-instance and silently reuse an
 # existing window, so always ask for a new one. gnome-text-editor is excluded:
 # it opens a second draft window and ignores a close request.
@@ -58,19 +61,6 @@ check_python() {
   if out="$(dump | python3 -c "$code" 2>&1)"; then
     pass "$label${out:+ — $out}"
   else
-    fail "$label${out:+ — $out}"
-  fi
-}
-
-# Poll a python predicate over DumpState until it holds, then pass. On timeout,
-# run it once more to print the failing state. The live Shell is slower than the
-# nested one, so a single sample after a fixed sleep is not reliable.
-poll() {
-  local label="$1" code="$2" timeout="${3:-12}" out
-  if wait_python "$timeout" "$code"; then
-    pass "$label"
-  else
-    out="$(dump | python3 -c "$code" 2>&1 || true)"
     fail "$label${out:+ — $out}"
   fi
 }

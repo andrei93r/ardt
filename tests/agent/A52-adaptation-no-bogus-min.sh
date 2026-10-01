@@ -21,9 +21,21 @@ echo "app=$app"
 adrt MoveWindow "$a" 100 100 500 400 >/dev/null
 adrt InjectVerifyFailure "$a" 12 >/dev/null
 adrt SimulateResize "$a" "$b" 0.7 >/dev/null
-sleep 4
 
-adapt="$(adrt GetAdaptations | python3 "$PARSE")"
+# The refusal is observed over the next few applies; give it a real budget and
+# then read the final state.
+adapt=""
+for _ in $(seq 1 20); do
+  adapt="$(adrt GetAdaptations | python3 "$PARSE")"
+  if echo "$adapt" | python3 -c '
+import json, sys
+recs = json.load(sys.stdin)
+rec = [r for r in recs if r.get("appId") == "'"$app"'"]
+sys.exit(0 if rec else 1)' 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
 if echo "$adapt" | python3 -c '
 import json, sys
 recs = json.load(sys.stdin)

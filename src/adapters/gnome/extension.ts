@@ -18,6 +18,7 @@ import { layoutManager, notify, overview, sessionMode, wm } from 'resource:///or
 import type { AdaptationRecord, Bundle, ImportMode } from '../../core/config.js';
 import { BUNDLE_FORMAT, BUNDLE_VERSION, mergeAdaptations, normalizeBundle, serializeBundle } from '../../core/config.js';
 import { BorderState } from '../../core/border.js';
+import type { SuppressionReason } from '../../core/border.js';
 import { SessionMachine } from '../../core/session.js';
 import type { SessionMode } from '../../core/session.js';
 import type { SplitAxis } from '../../core/tiler.js';
@@ -105,6 +106,8 @@ export default class AdrtExtension extends Extension {
   private sessionMachine = new SessionMachine();
 
   private readonly notices = new NoticeGate();
+  /** Why focus last moved, as far as adrt knows (the shell moves it itself). */
+  private focusReason = 'shell';
   private injectionEnabled = false;
   private injectSeat: any = null;
   private injectPointer: any = null;
@@ -314,10 +317,10 @@ export default class AdrtExtension extends Extension {
   private applySessionMode(mode: SessionMode, initial = false): void {
     const effects = this.sessionMachine.setMode(mode);
     if (effects.indicatorSuppression !== null) {
-      this.border.suppress(effects.indicatorSuppression);
+      this.suppressBorder(effects.indicatorSuppression);
     } else {
-      this.border.unsuppress('pause');
-      this.border.unsuppress('sharing');
+      this.unsuppressBorder('pause');
+      this.unsuppressBorder('sharing');
     }
     this.session.setScanning(effects.scanTickRunning);
     this.syncIndicator();
@@ -443,17 +446,17 @@ export default class AdrtExtension extends Extension {
     this.startMotionWatch();
     if (this.border.isSuppressed('workspace-switch')) return;
     this.motionSuppressions += 1;
-    this.border.suppress('workspace-switch');
+    this.suppressBorder('workspace-switch');
     this.syncIndicator();
   }
 
   /** §23.1: the user is dragging; hide the border and stop reflowing. */
   private onDragChanged(dragging: boolean): void {
     if (dragging) {
-      this.border.suppress('drag');
+      this.suppressBorder('drag');
       this.stopMotionWatch();
     } else {
-      this.border.unsuppress('drag');
+      this.unsuppressBorder('drag');
       this.startMotionWatch();
     }
     this.syncIndicator();
@@ -539,7 +542,7 @@ export default class AdrtExtension extends Extension {
     } else {
       this.motionStable += 1;
       if (this.motionStable >= MOTION_STABLE_SAMPLES && this.border.isSuppressed('workspace-switch')) {
-        this.border.unsuppress('workspace-switch');
+        this.unsuppressBorder('workspace-switch');
         this.syncIndicator();
       }
     }
@@ -578,8 +581,8 @@ export default class AdrtExtension extends Extension {
     }
     if (occluded === this.occluded) return;
     this.occluded = occluded;
-    if (occluded) this.border.suppress('occluded');
-    else this.border.unsuppress('occluded');
+    if (occluded) this.suppressBorder('occluded');
+    else this.unsuppressBorder('occluded');
     this.syncIndicator();
   }
 
@@ -654,8 +657,8 @@ export default class AdrtExtension extends Extension {
   /** §23: chrome must not show over the overview or the app grid. Tiling keeps
    * running in the workspace — only the border is hidden. */
   private onOverviewChanged(visible: boolean): void {
-    if (visible) this.border.suppress('overview');
-    else this.border.unsuppress('overview');
+    if (visible) this.suppressBorder('overview');
+    else this.unsuppressBorder('overview');
     this.syncIndicator();
   }
 
@@ -920,6 +923,26 @@ export default class AdrtExtension extends Extension {
   }
 
   /** Harness trigger: exercise the catalogue and the gate end to end. */
+  /**
+   * Border suppression is a transient state that a loaded test can miss by
+   * sampling; the journal keeps the event with its reason (§11), so a scenario
+   * can assert what happened instead of catching it live.
+   */
+  private suppressBorder(reason: SuppressionReason): void {
+    this.border.suppress(reason);
+    this.journal.record('border', 'suppress', { reason, active: [...this.border.activeSuppressions] });
+  }
+
+  private unsuppressBorder(reason: SuppressionReason): void {
+    this.border.unsuppress(reason);
+    this.journal.record('border', 'release', { reason, active: [...this.border.activeSuppressions] });
+  }
+
+  /** The harness's focus triggers say why focus moved, for the dump. */
+  private noteFocus(reason: string): void {
+    this.focusReason = reason;
+  }
+
   private simulateNotice(key: string, subject: string): boolean {
     return this.toast(key, subject);
   }
@@ -927,6 +950,13 @@ export default class AdrtExtension extends Extension {
   // ------------------------------------------------ platform probe, injection
 
   /** The capability JSON the harness depends on (§40.4, Stage 0). */
+  /** The work area of one monitor, from the last screen read (§10). */
+  private workAreaOf(monitor: number): Rect {
+    const screen = this.host.screens()[monitor];
+    if (screen === undefined) return { x: 0, y: 0, width: 0, height: 0 };
+    return screen.workArea ?? screen.geometry;
+  }
+
   private probePlatform(): string {
     let virtualInput = false;
     try {
@@ -1086,6 +1116,7 @@ export default class AdrtExtension extends Extension {
       },
       SimulateWorkspaceSwitch: (holdMs) => this.simulateWorkspaceSwitch(holdMs),
       ActivateWindow: (id) => {
+        this.noteFocus('activate-window');
         this.session.focus(id);
         return true;
       },
@@ -1103,10 +1134,12 @@ export default class AdrtExtension extends Extension {
       },
       InjectVerifyFailure: (id, count) => this.injectVerifyFailure(id, count),
       FocusDirection: (direction) => {
+        this.noteFocus(`focus-${direction}`);
         this.session.focusDirection(direction);
         return true;
       },
       FocusCycle: () => {
+        this.noteFocus('focus-cycle');
         this.session.focusCycle();
         return true;
       },
@@ -1122,6 +1155,7 @@ export default class AdrtExtension extends Extension {
       MoveToWorkspace: (id, index) => this.moveToWorkspace(id, index),
       MarkWorkspaceCached: (id, index) => this.session.markWorkspaceCached(id, index),
       MoveDirection: (direction) => {
+        this.noteFocus(`move-${direction}`);
         this.session.moveToward(direction);
         return true;
       },
@@ -1195,6 +1229,29 @@ export default class AdrtExtension extends Extension {
     return true;
   }
 
+  /** The pair axis of a monitor: portrait screens and vertical workspaces stack. */
+  private axisOf(monitor: number): 'horizontal' | 'vertical' {
+    const screen = this.host.screens()[monitor];
+    const rows = global.workspace_manager.layout_rows;
+    if (rows === -1) return 'vertical';
+    if (screen !== undefined && screen.geometry.height > screen.geometry.width) return 'vertical';
+    return 'horizontal';
+  }
+
+  /**
+   * Which slot a window occupies, derived from its rectangle: 0 for the first
+   * half of the work area along the axis, 1 for the second, null when it spans
+   * the middle (a maximized single, a float, a window that refuses to shrink).
+   * Stage 2's placement module makes this authoritative; today it is a reading.
+   */
+  private slotOf(rect: Rect, area: Rect, axis: 'horizontal' | 'vertical'): number | null {
+    const span = axis === 'vertical' ? area.height : area.width;
+    if (span <= 0) return null;
+    const start = (axis === 'vertical' ? rect.y - area.y : rect.x - area.x) + (axis === 'vertical' ? rect.height : rect.width) / 2;
+    if (Math.abs(start - span / 2) < span * 0.1) return null;
+    return start < span / 2 ? 0 : 1;
+  }
+
   private dumpState(): string {
     const monitors = this.host.screens().map((screen) => ({ ...screen }));
     const windows = [...this.session.windows.values()].map((tracked) => {
@@ -1214,6 +1271,8 @@ export default class AdrtExtension extends Extension {
         minimized: tracked.surface.flags.minimized,
         above: tracked.surface.flags.above,
         transient: tracked.surface.flags.transient,
+        slot: this.slotOf(tracked.surface.frame, this.workAreaOf(tracked.surface.screenId), this.axisOf(tracked.surface.screenId)),
+        axis: this.axisOf(tracked.surface.screenId),
         tileable: this.session.classify(tracked).tileable,
         reason: this.session.classify(tracked).reason,
         profile: tracked.profile.name,
@@ -1230,6 +1289,12 @@ export default class AdrtExtension extends Extension {
       workspaceLayoutRows: global.workspace_manager.layout_rows,
       build: { version: EXTENSION_VERSION, dirMtimeMs: this.buildDirMtimeMs },
       tileAxis: this.session.tileAxis(),
+      focusedReason: this.focusReason,
+      gaps: {
+        base: this.settings.int('gaps-base', 8),
+        landscape: this.settings.int('gaps-landscape', -1),
+        portrait: this.settings.int('gaps-portrait', -1),
+      },
       workspaceAnimating: this.workspaceAnimationActive(),
       focused: this.session.focused()?.id ?? null,
       workspaces: this.session.countWorkspaces(),
@@ -1373,7 +1438,10 @@ export default class AdrtExtension extends Extension {
 
   private injectVerifyFailure(id: number, count: number): boolean {
     if (!this.session.windows.has(id)) return false;
-    this.tiling.injectVerifyFailures(count);
+    // The id matters: a scenario that fails one window's applies must not make
+    // every other window's applies look like a refusal too (that taught a bogus
+    // minimum in A52).
+    this.tiling.injectVerifyFailures(count, id);
     return true;
   }
 
