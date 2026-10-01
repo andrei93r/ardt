@@ -40,10 +40,51 @@ interface Entry {
   bounds: Rect | null;
 }
 
+/**
+ * One animation event, kept only while recording is armed. A transition must
+ * carry exactly one `start` per window with no `frame`/`start` after its `end`
+ * (a second `start` from a re-apply is the visible "overshoot then correct").
+ * Exposed add-only through `DumpState.animRecords` and driven by the
+ * `StartFrameRecording`/`StopFrameRecording` test triggers.
+ */
+export interface AnimRecord {
+  kind: 'start' | 'frame' | 'end' | 'cancel';
+  id: number;
+  at: number;
+  rect: Rect;
+  to?: Rect;
+  from?: Rect;
+}
+
+/** A bounded sample window so an armed recording can never grow without limit. */
+const MAX_RECORDS = 4096;
+
 export class FrameClockAnimator {
   private readonly entries = new Map<number, Entry>();
+  private records: AnimRecord[] = [];
+  private recording = false;
 
   constructor(private readonly hooks: AnimatorHooks) {}
+
+  /** Arm the bounded recorder: clears it and starts collecting. */
+  startRecording(): void {
+    this.records = [];
+    this.recording = true;
+  }
+
+  stopRecording(): void {
+    this.recording = false;
+  }
+
+  /** The last sampled animation events (empty when never armed). */
+  recordsSnapshot(): AnimRecord[] {
+    return this.records;
+  }
+
+  private record(entry: AnimRecord): void {
+    if (!this.recording || this.records.length >= MAX_RECORDS) return;
+    this.records.push(entry);
+  }
 
   get activeCount(): number {
     return this.entries.size;
@@ -74,6 +115,7 @@ export class FrameClockAnimator {
       bounds,
     };
     this.entries.set(id, entry);
+    this.record({ kind: 'start', id, at: Date.now(), rect: { ...from }, to: { ...to }, from: { ...from } });
     timeline.connect('new-frame', (_tl: any, msec: number) => this.onFrame(id, entry, msec));
     timeline.connect('completed', () => this.onCompleted(id, entry));
     timeline.start();
@@ -84,6 +126,7 @@ export class FrameClockAnimator {
     if (entry === undefined) return;
     entry.timeline.stop();
     this.entries.delete(id);
+    this.record({ kind: 'cancel', id, at: Date.now(), rect: { ...entry.rect }, to: { ...entry.to }, from: { ...entry.from } });
   }
 
   cancelAll(): void {
@@ -114,6 +157,7 @@ export class FrameClockAnimator {
       entry.rect.y = Math.max(b.y, Math.min(entry.rect.y, b.y + b.height - entry.rect.height));
     }
     this.hooks.apply(id, entry.rect);
+    this.record({ kind: 'frame', id, at: Date.now(), rect: { ...entry.rect }, to: { ...entry.to }, from: { ...entry.from } });
     if (this.hooks.onFrame !== undefined) this.hooks.onFrame(id, entry.rect);
   }
 
@@ -125,6 +169,7 @@ export class FrameClockAnimator {
     }
     this.entries.delete(id);
     this.hooks.apply(id, entry.to);
+    this.record({ kind: 'end', id, at: Date.now(), rect: { ...entry.to } });
     if (entry.onComplete !== null) entry.onComplete();
   }
 }

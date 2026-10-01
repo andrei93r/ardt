@@ -40,6 +40,7 @@ resize-and-undo | A07-inner-edge-drag A09-undo A15-adaptation A29-frame-timing A
 # ------------------------------------------------- maximize / unmaximize
 maximize-unmaximize | A03-lone-maximize A04-maximized-window A05-unmaximize A40-unmaximize-float-over-pair A45-maximize-right-return-left A50-unmaximize-returns-left-floating A53-no-floating-leftover A58-lone-window-maximized A59-auto-float-pulled-back A88-maximise-owns-a-workspace A89-maximise-in-place-minimises-others A90-unmaximise-joins-pair-forming-left A91-unmaximise-parks-when-no-neighbour-can-pair A114-fullscreen-in-place-minimises A126-third-maximized-arrival A129-opened-maximized-pairs
 lone-maximize | A03-lone-maximize A58-lone-window-maximized A114-fullscreen-in-place-minimises
+animation-single-transition | A152-animation-single-transition
 fullscreen | A57-keyboard-focus-system A114-fullscreen-in-place-minimises A131-fullscreen-hides-highlight
 
 # ------------------------------------------------------------------ float

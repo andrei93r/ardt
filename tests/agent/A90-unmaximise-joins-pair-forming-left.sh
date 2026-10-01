@@ -20,6 +20,12 @@ d = json.load(sys.stdin)
 b = [w for w in d["windows"] if w["id"] == int("'"$B"'")]
 sys.exit(0 if b and b[0]["maximized"] and b[0]["workspace"] != int("'"$pair_ws"'") else 1)' || true
 
+# Sample the animator frames for the join. A signal can clear the plan cache
+# while the reflow is animating; re-applying the identical plan then restarts
+# the animation from wherever Mutter's unmaximise transition has the window,
+# which is the reported "overshoot then corrects". A transition must carry one
+# animation per window and no frame activity after its completion.
+adrt StartFrameRecording >/dev/null
 adrt UnmaximizeWindow "$B" >/dev/null
 
 poll "the unmaximized window rejoined left as slot 1" '
@@ -34,6 +40,27 @@ if b[0]["workspace"] != pair_ws or b[0]["maximized"] or b[0]["minimized"]:
     print("B state", b[0]["workspace"], b[0]["maximized"], b[0]["minimized"]); sys.exit(1)
 print("joined ws", pair_ws, "-", len(pair), "windows")
 ' 25
+
+adrt StopFrameRecording >/dev/null
+check_python "the join animates once per window with no post-animation correction" '
+import json, sys
+recs = json.load(sys.stdin).get("animRecords") or []
+starts = {}
+ended = {}
+for r in recs:
+    i = r["id"]
+    if r["kind"] == "start":
+        starts[i] = starts.get(i, 0) + 1
+        ended[i] = False
+    elif r["kind"] in ("start", "frame") and ended.get(i):
+        print("frame activity after the animation ended", r); sys.exit(1)
+    elif r["kind"] == "end":
+        ended[i] = True
+restarted = {i: n for i, n in starts.items() if n > 1}
+if restarted:
+    print("a window restarted its animation", restarted); sys.exit(1)
+print("starts", starts, "events", len(recs))
+'
 
 poll "the two windows tile as a pair" '
 import json, sys

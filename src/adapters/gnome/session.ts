@@ -36,7 +36,7 @@ import { validateChange } from '../../core/undo.js';
  * set asynchronously by the Shell; internal safety, not a frame cadence). */
 const MAINTENANCE_SETTLE_MS = 200;
 import { checkPlan } from '../../core/invariants.js';
-import { SignatureCache, planSignature } from '../../core/scheduler.js';
+import { SignatureCache, planSignature, shouldApplyPlan } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
 import { computePlans, ratioKey, resolveGaps, screenArea } from '../../core/tiler.js';
 import type { FocusDirection } from '../../core/focus.js';
@@ -1691,9 +1691,14 @@ export class WindowSession {
       }
       if (Date.now() < this.ignoreMismatchUntilMs) continue;
     const key = `ws:${workspaceId}:${screen.index}`;
+      // A signal (a title or frame change, most often) can clear the plan
+      // cache mid-transition. Re-applying the identical plan then restarts the
+      // frame animation from wherever Mutter's own maximise/unmaximise
+      // transition happens to have the window, which reads as an overshoot
+      // followed by a correction. See `shouldApplyPlan`.
       const mismatch = this.planMismatch(plan);
       const changed = this.signatures.changed(key, planSignature(plan.placements));
-      if (!mismatch && !changed) continue;
+      if (!shouldApplyPlan({ mismatch, changed, alreadyTargeted: this.planIsCurrentTarget(plan) })) continue;
       this.deps.history.log('tile', {
         reason,
         workspaceId,
@@ -1741,6 +1746,24 @@ export class WindowSession {
       }
     }
     return false;
+  }
+
+  /**
+   * True when every placement in `plan` is already the aim of its window
+   * (`tracked.lastTarget`). Used with `planMismatch` to tell a genuine drift
+   * (re-apply) from a plan cache cleared mid-transition by an unrelated signal
+   * (do not re-apply: a second animation would restart from Mutter's
+   * in-flight transition and read as a correction).
+   */
+  private planIsCurrentTarget(plan: TilePlan): boolean {
+    if (plan.placements.length === 0) return false;
+    for (const placement of plan.placements) {
+      const tracked = this.windows.get(placement.surfaceId);
+      const target = tracked?.lastTarget;
+      if (target === null || target === undefined) return false;
+      if (!rectEquals(target, placement.rect)) return false;
+    }
+    return true;
   }
 
   tileables(workspaceId: number): TrackedWindow[] {

@@ -108,6 +108,8 @@ interface ExtraHandlers {
   CursorToCentre(): boolean;
   ActivatePanelItem(name: string): boolean;
   InjectFault(context: string): boolean;
+  StartFrameRecording(): boolean;
+  StopFrameRecording(): boolean;
 }
 
 type Handlers = DbusHandlers & ExtraHandlers;
@@ -151,7 +153,6 @@ export default class AdrtExtension extends Extension {
   private coherenceSource: number | null = null;
   /** What build is actually running (set at enable). */
   private buildDirMtimeMs = 0;
-  private motionActor: any = null;
   private motionLastX = Number.NaN;
   private motionLastY = Number.NaN;
   private motionStable = 0;
@@ -838,20 +839,21 @@ export default class AdrtExtension extends Extension {
       this.syncPreview();
       return GLib.SOURCE_CONTINUE;
     }
-    // Remember the last window actor so a transient focus loss (mid-switch)
-    // does not blind the watcher.
+    // Re-derive the actor from the focused window on every tick. A cached actor
+    // can be disposed with its window, and the disposal check itself is the
+    // touch that logs a Gjs CRITICAL ("MetaWindowActorWayland has been already
+    // disposed") and can wedge the Shell, so a cached reference is never
+    // re-checked. A tick without a live focused actor skips the sample and the
+    // watcher stays armed, recovering on the next tick.
     const focused = this.session.focused();
-    if (focused !== null) {
-      const actor = compat.compositorActor(focused.win);
-      if (actor !== null && compat.actorAlive(actor)) this.motionActor = actor;
-    }
-    const actor = this.motionActor;
-    if (actor === null || actor === undefined || !compat.actorAlive(actor)) {
-      // The cached actor was disposed (its window closed): stop watching
-      // instead of throwing a stack trace on every tick.
-      this.motionActor = null;
-      this.stopMotionWatch();
-      return GLib.SOURCE_REMOVE;
+    const actor = focused === null ? null : compat.compositorActor(focused.win);
+    if (actor === null) {
+      // A transient focus loss (mid-switch) or a closed window: keep the
+      // watcher alive and re-anchor when an actor is available again.
+      this.motionLastX = Number.NaN;
+      this.motionLastY = Number.NaN;
+      if (this.workspaceAnimationActive()) this.suppressForWorkspaceSwitch();
+      return GLib.SOURCE_CONTINUE;
     }
 
     // Stage-space, so a sliding workspace (moving parent actor) is detected.
@@ -1873,6 +1875,14 @@ export default class AdrtExtension extends Extension {
       CursorToCentre: () => this.session.centreCursorNow(),
       ActivatePanelItem: (name) => this.panel?.activate(name) ?? false,
       InjectFault: (context) => this.simulateFault(context),
+      StartFrameRecording: () => {
+        this.animator.startRecording();
+        return true;
+      },
+      StopFrameRecording: () => {
+        this.animator.stopRecording();
+        return true;
+      },
       MinimizeWindow: (id) => {
         if (!this.session.windows.has(id)) return false;
         this.host.minimize(id);
@@ -2138,6 +2148,7 @@ export default class AdrtExtension extends Extension {
         logEvents: this.history.logEvents,
       },
       bounds: this.session.memoryBounds(),
+      animRecords: this.animator.recordsSnapshot(),
     });
   }
 
