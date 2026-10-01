@@ -823,6 +823,11 @@ never debug-gated (the deduplication and rate limits still apply).
     becomes a **float** over the pair that stays. Which screen has workspaces follows
     GNOME.
 
+68. **A screen without workspaces ignores the switch** (round scenario 9, confirmed):
+    while the workspaces screen changes workspace, the other screen keeps its windows
+    exactly as they are (slots, size, focus), and nothing is notified. A normal
+    switch is not an event, and that screen simply has nothing to switch.
+
 ## Deliberate non-goals
 
 
