@@ -680,6 +680,11 @@ happens. All default off, deduplicated and rate-limited per event.
     alone on the target still maximizes - the side rule only decides the slot once a
     pair forms. The directional move key follows the same side rule.
 
+48. **Minimizing the only window of a workspace** (test scenario S20): the window is
+    minimized into the left neighbour that holds windows, else the right one, else it
+    stays where it is. The workspace it left is empty and is removed, and the view
+    (which was on it) moves to the workspace the window went to.
+
 ## Deliberate non-goals
 
 
