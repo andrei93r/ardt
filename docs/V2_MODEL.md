@@ -63,6 +63,8 @@ changes never move a window.
 - **Fixed-workspace screen**: route to the nearest existing workspace (right first,
   then left) that has a free slot; if every fixed workspace is full, **float**.
   Nothing is created.
+- Routing is decided **per arrival**: a second window always finds the first (a
+  maximized single to split with), never a simultaneous evaluation of both.
 - Routing does not apply to hotplug, which has its own rule (§9).
 
 ## 4. Maximize, unmaximize, fullscreen, minimize
@@ -123,6 +125,9 @@ anywhere except §7's single-workspace-capable pair rule.
   empty.
 - When a reaped workspace was the one the view was on, the view moves to the nearest
   non-empty workspace with windows (left first). Otherwise the view does not move.
+- The **spare is GNOME's**: opening a window while viewing it simply occupies it (the
+  window is alone there, so it maximizes) and GNOME appends a fresh spare after it.
+  adrt neither creates nor removes it.
 - Workspaces emptied **by our own reorder work** are exempt only for the duration of
   that work (they are the adjacency placement of §9); they are reaped on the next
   drain if still empty.
@@ -240,7 +245,9 @@ and never creates a workspace. A window the user has touched since, or whose mem
 has expired (`display-memory-minutes`, default 30), is left alone; replay is partial
 in that case, and §5 reaps afterwards.
 
-adrt never changes the primary monitor; a primary change is followed, not caused.
+adrt never changes the primary monitor; a primary change is followed, not caused. The
+primary is always **read from GNOME** — the current one, re-read whenever it changes —
+and never assumed or remembered.
 
 ## 10. Sizing: ratios, refusals, gaps, and the work area
 
@@ -349,6 +356,9 @@ appId → {
   produced them.
 - **Exactly one change** is held, in memory only; a restart clears it.
 - Undoing an unmaximize **recreates** the workspace that unmaximize deleted.
+- **A routed new window is not the change**: it was never on another workspace, so
+  undo leaves it exactly where it is and acts on the previous change — or reports
+  that there is nothing to undo.
 - If the revert is impossible — an instance is gone, or a slot it needs has since been
   taken — **nothing** is applied and a toast (`Main.notify`) says so. Partial restores
   never happen.
@@ -587,6 +597,17 @@ happens. All default off, deduplicated and rate-limited per event.
     neighbour that holds windows** (§4) — a free slot is not required, and an empty
     neighbour is never a target, since the window would be alone there.
 
+37. **The maximize/fullscreen round trip is exact** (test scenario S6): a window
+    maximized onto its own workspace and then unmaximized rejoins its former pair,
+    the workspace it left is reaped, and the view returns.
+40. **The primary is always GNOME's current primary**, re-read whenever it changes;
+    adrt never assumes, stores or sets it (S10).
+39. **The spare is GNOME's, and routing is per arrival** (S8, S9): a window opening
+    while viewing the spare occupies it and GNOME appends a fresh spare; two windows
+    opening together give a maximized single and then a pair, never a new workspace.
+38. **Routing is not an undoable change** (S7): a newly opened window was never on
+    another workspace, so undo leaves it exactly where it is and acts on the previous
+    change, or reports that there is nothing to undo.
 36. **A disconnect rescue preserves the vanished screen's arrangement** (the test
     scenario confirmed it): its windows come back as workspaces inserted immediately
     right of the current one, keeping their order and pairing, and never scavenge free
