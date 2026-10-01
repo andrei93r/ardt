@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { checkPlan } from '../../src/core/invariants.js';
 import type { TilerConfig } from '../../src/core/tiler.js';
-import { computePlans, layoutAll, pairKey, ratioKey } from '../../src/core/tiler.js';
+import { computePlans, layoutAll, pairKey, ratioKey, resolveGaps } from '../../src/core/tiler.js';
 import { SurfaceKind } from '../../src/core/types.js';
 import { rect, screen, size, window } from './helpers.js';
 
@@ -35,7 +35,13 @@ describe('computePlans — work area', () => {
   });
 
   it('tiles inside the work area, leaving the top bar alone', () => {
-    const plan = computePlans([window({ id: 1 }), window({ id: 2, appId: 'b' })], withPanel, config({ gapBase: 8 }));
+    // §10: the outer 8 px must be asked for explicitly now; gapBase alone is the
+    // between-window gap. The point here is that the work area is respected.
+    const plan = computePlans(
+      [window({ id: 1 }), window({ id: 2, appId: 'b' })],
+      withPanel,
+      config({ gapBase: 8, gapLeft: 8, gapRight: 8, gapTop: 8, gapBottom: 8 }),
+    );
     expect(checkPlan(plan, { width: 1920, height: 1080 })).toEqual([]);
     for (const placement of plan.placements) {
       expect(placement.rect.y).toBe(40);
@@ -54,10 +60,19 @@ describe('computePlans — work area', () => {
 });
 
 describe('computePlans — single window', () => {
-  it('fills the monitor minus the gap', () => {
+  it('fills the whole monitor by default: outer gaps are 0 (§10)', () => {
     const plan = computePlans([window({ id: 1 })], landscape, config({ gapBase: 10 }));
     expect(plan.placements).toHaveLength(1);
-    expect(plan.placements[0].rect).toEqual(rect(10, 10, 1900, 1060));
+    expect(plan.placements[0].rect).toEqual(rect(0, 0, 1920, 1080));
+  });
+
+  it('applies explicit per-side outer gaps', () => {
+    const plan = computePlans(
+      [window({ id: 1 })],
+      landscape,
+      config({ gapBase: 0, gapLeft: 20, gapRight: 5, gapTop: 10, gapBottom: 3 }),
+    );
+    expect(plan.placements[0].rect).toEqual(rect(20, 10, 1895, 1067));
   });
 
   it('keeps the current rect when reflow-keeps-edges is off', () => {
@@ -77,13 +92,16 @@ describe('computePlans — single window', () => {
 });
 
 describe('computePlans — landscape pair', () => {
-  it('splits side by side and respects the gap', () => {
+  it('splits side by side, flush at the edges and gapped at the split', () => {
     const plan = computePlans([window({ id: 1 }), window({ id: 2, appId: 'b' })], landscape, config({ gapBase: 10 }));
     expect(checkPlan(plan, size(1920, 1080))).toEqual([]);
     const [left, right] = plan.placements;
-    expect(left.rect.x).toBe(10);
-    expect(right.rect.x).toBeGreaterThan(left.rect.x + left.rect.width);
-    expect(left.rect.width + right.rect.width).toBe(1920 - 20 - 10);
+    // §10: gapBase is the between-window gap; the outer edges are flush (0).
+    expect(left.rect.x).toBe(0);
+    expect(left.rect.y).toBe(0);
+    expect(left.rect.height).toBe(1080);
+    expect(right.rect.x).toBe(left.rect.x + left.rect.width + 10);
+    expect(left.rect.width + right.rect.width).toBe(1920 - 10);
   });
 
   it('gives the primary app its configured ratio', () => {
@@ -219,15 +237,133 @@ describe('layoutAll', () => {
   });
 });
 
-describe('gap overrides', () => {
-  it('prefers the orientation-specific gap over the base', () => {
-    const plan = computePlans([window({ id: 1 })], landscape, config({ gapBase: 10, gapLandscape: 30 }));
+describe('gaps — outer sides and the split (§10)', () => {
+  it('defaults to flush outer edges and a base-sized split', () => {
+    const plan = computePlans([window({ id: 1 }), window({ id: 2, appId: 'b' })], landscape, config({ gapBase: 8 }));
+    const [left, right] = plan.placements;
+    expect(left.rect.x).toBe(0);
+    expect(left.rect.y).toBe(0);
+    expect(left.rect.height).toBe(1080);
+    expect(right.rect.x - (left.rect.x + left.rect.width)).toBe(8);
+    expect(left.rect.width + right.rect.width).toBe(1920 - 8);
+  });
+
+  it('applies per-side outer gaps and the between-window gap together', () => {
+    const plan = computePlans(
+      [window({ id: 1 }), window({ id: 2, appId: 'b' })],
+      landscape,
+      config({ gapBase: 0, gapLeft: 20, gapRight: 5, gapTop: 10, gapBottom: 3, gapBetween: 7 }),
+    );
+    expect(checkPlan(plan, size(1920, 1080))).toEqual([]);
+    const [left, right] = plan.placements;
+    expect(left.rect).toEqual(rect(20, 10, 944, 1067));
+    expect(right.rect).toEqual(rect(971, 10, 944, 1067));
+  });
+
+  it('inherits the base for negative per-side gaps but keeps an explicit 0 flush', () => {
+    const plan = computePlans(
+      [window({ id: 1 })],
+      portrait,
+      config({ gapBase: 12, gapPortrait: -1, gapLeft: -1, gapRight: 0, gapTop: -1, gapBottom: 0 }),
+    );
+    expect(plan.placements[0].rect).toEqual(rect(12, 12, 1068, 1908));
+  });
+
+  it('zero gaps are exactly zero', () => {
+    const plan = computePlans(
+      [window({ id: 1 }), window({ id: 2, appId: 'b' })],
+      landscape,
+      config({ gapBase: 8, gapLeft: 0, gapRight: 0, gapTop: 0, gapBottom: 0, gapBetween: 0 }),
+    );
+    const [left, right] = plan.placements;
+    expect(left.rect).toEqual(rect(0, 0, 960, 1080));
+    expect(right.rect).toEqual(rect(960, 0, 960, 1080));
+    expect(left.rect.x + left.rect.width).toBe(right.rect.x);
+  });
+
+  it('resolves the orientation override into the base that negatives inherit', () => {
+    const plan = computePlans(
+      [window({ id: 1 })],
+      landscape,
+      config({
+        gapBase: 10,
+        gapLandscape: 30,
+        gapLeft: -1,
+        gapRight: -1,
+        gapTop: -1,
+        gapBottom: -1,
+      }),
+    );
     expect(plan.placements[0].rect).toEqual(rect(30, 30, 1860, 1020));
   });
 
-  it('inherits the base gap when the override is negative', () => {
-    const plan = computePlans([window({ id: 1 })], portrait, config({ gapBase: 12, gapPortrait: -1 }));
-    expect(plan.placements[0].rect).toEqual(rect(12, 12, 1056, 1896));
+  it('defaults the split to the orientation-resolved base', () => {
+    const plan = computePlans(
+      [window({ id: 1 }), window({ id: 2, appId: 'b' })],
+      portrait,
+      config({ gapBase: 8, gapPortrait: 14 }),
+    );
+    const [top, bottom] = plan.placements;
+    expect(top.rect.y).toBe(0);
+    expect(bottom.rect.y - (top.rect.y + top.rect.height)).toBe(14);
+    expect(top.rect.height + bottom.rect.height).toBe(1920 - 14);
+  });
+
+  it('changing gaps-between moves only the split, not the outer edges', () => {
+    const base = computePlans([window({ id: 1 }), window({ id: 2, appId: 'b' })], landscape, config({ gapBase: 8 }));
+    const wider = computePlans(
+      [window({ id: 1 }), window({ id: 2, appId: 'b' })],
+      landscape,
+      config({ gapBase: 8, gapBetween: 30 }),
+    );
+    const [b0] = base.placements;
+    const [w0, w1] = wider.placements;
+    expect(w0.rect.x).toBe(b0.rect.x);
+    expect(w0.rect.y).toBe(b0.rect.y);
+    expect(w0.rect.height).toBe(b0.rect.height);
+    expect(w1.rect.x - (w0.rect.x + w0.rect.width)).toBe(30);
+    expect(w0.rect.width + w1.rect.width).toBe(1920 - 30);
+  });
+
+  it('applies gaps per screen (the monitor being planned)', () => {
+    const plans = layoutAll({
+      windows: [
+        window({ id: 1, workspaceId: 0, screenId: 0 }),
+        window({ id: 2, appId: 'b', workspaceId: 0, screenId: 1 }),
+      ],
+      screens: [landscape, { ...portrait, index: 1 }],
+      config: config({
+        gapBase: 10,
+        gapLandscape: 20,
+        gapPortrait: 40,
+        gapLeft: -1,
+        gapRight: -1,
+        gapTop: -1,
+        gapBottom: -1,
+      }),
+    });
+    const on = (screenId: number) => plans.find((p) => p.screenId === screenId)!.plan.placements[0].rect;
+    expect(on(0)).toEqual(rect(20, 20, 1880, 1040));
+    expect(on(1)).toEqual(rect(40, 40, 1000, 1840));
+  });
+});
+
+describe('resolveGaps', () => {
+  it('treats an unset outer side as 0, a negative one as the base, and unset between as the base', () => {
+    expect(resolveGaps(config({ gapBase: 8 }), landscape)).toEqual({
+      left: 0,
+      right: 0,
+      top: 0,
+      bottom: 0,
+      between: 8,
+    });
+    expect(resolveGaps(config({ gapBase: 8, gapLeft: -1, gapBetween: -1 }), landscape)).toEqual({
+      left: 8,
+      right: 0,
+      top: 0,
+      bottom: 0,
+      between: 8,
+    });
   });
 });
 
