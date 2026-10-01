@@ -87,6 +87,29 @@ code changes, MINOR for features, PATCH for fixes.
 - `docs/platform-notes.md`: the public/private/never API table and the
   documented exceptions, probed on GNOME 50.1 rather than remembered.
 
+### Added (Stage 1 — one scheduling path)
+
+- **The event queue** (`core/queue.ts`, adapter wiring): `Map<lane, Map<key,
+  event>>` with lanes 1 feedback / 2 layout / 3 maintenance, per-key coalescing,
+  and one deferred drain armed on demand (lane 1 on `BEFORE_REDRAW`, lane 2 on
+  the compositor's resize-later, lane 3 on a settle timeout) and removed when it
+  empties. Every signal handler now only pushes — `scheduleReconcile`,
+  `screens-changed`, session resume, reset, the post-close sweep and the periodic
+  motion pass all ride the drain; the 60 ms reconcile debounce is gone (the queue
+  coalesces), and the drain waits out a running animation instead of applying a
+  frame onto a moving surface.
+- **Config caching**: the classifier config is memoised and invalidated on any
+  change, so a cached classification no longer rebuilds its inputs; `A66` records
+  the ratio (tens of classifications per rebuild against hundreds before).
+- `DumpState` gains the queue counters `drains`, `queuePending` and `drainMsMax`
+  (extended by Stage 6); scenario `A84` proves ten frame pushes coalesce to one
+  pass, and `core/queue.test.ts` covers the queue (13 tests).
+- The work surfaced and fixed: `InjectVerifyFailure` ignored the window id and
+  failed every window's applies, so another window's shrink looked like a refusal
+  and taught a bogus minimum (A52); a per-window refusal now needs the same
+  target refused twice with the size unchanged, and the border's
+  suppression/release events are journalled with their reason (A02).
+
 ### Changed
 
 - `A22`/`A23`/`A24` (keybindings) run headlessly by injection instead of being
@@ -120,6 +143,10 @@ code changes, MINOR for features, PATCH for fixes.
 - Maximize is in place with the other managed windows minimized on a
   single-workspace screen; on a workspace-capable screen it is a workspace to
   the right. Fullscreen behaves the same.
+- **Classification** (§16): an always-on-top window (a picture-in-picture video,
+  a widget) now floats and **keeps** its flag (reversing the old A61 behaviour);
+  a dialog or transient floats; an app that maps itself maximized is unmaximized
+  and tiled with its sibling; fullscreen is the "does not fit" case.
 - Unmaximize joins the left workspace when it holds exactly one window (into
   slot 1), else the right, else parks minimized left/right, else re-maximizes
   the lone window. No origin memory.
@@ -233,7 +260,10 @@ code changes, MINOR for features, PATCH for fixes.
   description and `version-name` move to `0.2.0`.
 - `PERFORMANCE_PLAN.md` re-scoped: Stage 1 (config caching) and Stage 2 (O(1)
   host lookup) carried onto the v2 code; Stage 3 and the sweep back-off struck
-  (the queue and the lane-3 maintenance pass replace them).
+  (the queue and the lane-3 maintenance pass replace them), and re-measured:
+  idle `configBuilds`/`rulesParses` drop 29.9/s → 3.5/s, `classifyMisses` is 0,
+  and `hostScans` stays **0** across 138 `hostLookups` on the tile/animation
+  path, with the queue empty between bursts.
 
 ### Removed (Stage 8 — dead code and settings)
 
@@ -246,6 +276,29 @@ code changes, MINOR for features, PATCH for fixes.
   (`compat.ts`), `refusalLadder` (`core/placement.ts`), `isTileable`
   (`core/classify.ts`), `sizeEquals` (`core/types.ts`) and `EventQueue.isEmpty`
   (`core/queue.ts`): all were unreferenced.
+
+### Added (Stage 8 — long-run invariant test)
+
+- `A125-long-mixed-run`, opt-in behind `ADRT_LONG_RUN=1` (180 s by default,
+  overridable with `ADRT_LONG_RUN_SECONDS`): a loop of
+  spawn/close/move/minimize/maximize/drag/workspace-switch that asserts the
+  journal and the in-memory decision tail record no `invariant_violated` entry,
+  proving the packing invariant (§5) holds under sustained churn.
+
+### Fixed
+
+- **A maximize is no longer reversed 20–45 ms after it lands.** A stale verify
+  from the pre-maximize plan applied a tile frame, `applyFrame` unmaximized the
+  window to fit, and the signal path read that as a *user* unmaximize and dragged
+  the window back. `TrackedWindow.selfUnmaximize` now marks the tiler's own
+  unmaximize, and a user maximize is kept as a property (`maximizeRequested`)
+  that the lane-2 drain re-asserts, so a missed or raced signal cannot leave a
+  maximized window sharing its pair.
+- **The float key no longer persists a durable `neverTile`.** Pressing `Super+F`
+  wrote the registry's `neverTile` flag on every float, so one float permanently
+  floated that app (and cascaded into later scenarios). It now persists only when
+  `float-persistence` is on; the float is otherwise session-scoped as the model
+  says.
 
 ## [0.1.0] - 2026-09-29
 

@@ -46,6 +46,13 @@ import { GnomeSettings } from './settings.js';
 import { Tiling } from './tiling.js';
 import type { TraceInitial, TraceWorkspace, TraceEntry } from '../../core/replay.js';
 
+/**
+ * The release version the user sees (metadata.json / package.json). Distinct
+ * from `EXTENSION_VERSION`, which is the *settings and state format* version the
+ * migration gate compares against — the two must not be conflated in DumpState.
+ */
+const RELEASE_VERSION = '0.2.0';
+/** The settings/state format version (the migration gate). */
 const EXTENSION_VERSION = 1;
 /** §23.2: how often the focused actor's position is sampled, and how many
  * stable samples end a transition. */
@@ -1161,7 +1168,7 @@ export default class AdrtExtension extends Extension {
     }
     return JSON.stringify({
       format: 'adrt.probe',
-      version: EXTENSION_VERSION,
+      version: RELEASE_VERSION,
       platform: 'gnome',
       gnome,
       session: Meta.is_wayland_compositor?.() === true ? 'wayland' : 'x11',
@@ -1501,7 +1508,7 @@ export default class AdrtExtension extends Extension {
       },
       activeWorkspace: this.host.activeWorkspaceId(),
       workspaceLayoutRows: global.workspace_manager.layout_rows,
-      build: { version: EXTENSION_VERSION, dirMtimeMs: this.buildDirMtimeMs },
+      build: { version: RELEASE_VERSION, dirMtimeMs: this.buildDirMtimeMs },
       tileAxis: this.session.tileAxis(),
       focusedReason: this.focusReason,
       gaps: {

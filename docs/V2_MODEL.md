@@ -442,6 +442,11 @@ and the pure-core/`platform` split.
 
 ## 16. Classification: what is tiled, and the escape rule
 
+*(There is no §15: an earlier revision merged it into §14 and §16. The numbers after
+it were deliberately not shifted, so every reference in the code, the plan and the
+tests keeps pointing at the same section.)*
+
+
 Two categories, and one rule.
 
 **Never managed** (no slot, never moved or resized by adrt):
