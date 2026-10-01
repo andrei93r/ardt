@@ -265,8 +265,10 @@ Implementation (parallelisable: the pure module by another agent):
 - [ ] `core/record.ts`: `WindowRecord` plain object + predicates (`isTileable`,
       `isFloating`, `isMinimized`, `isMaximized`, `isSticky`, `isUserMoving`);
       `TrackedWindow` deleted (strangler).
-- [ ] Adapter: one drain on `global.compositor.get_laters().add(BEFORE_REDRAW, cb)`;
-      later ids tracked and removed on `disable()`; `mutatingWorkspaces` guard.
+- [ ] Adapter: one deferred drain, **armed on demand and removed when empty** — lane 1 on
+      `BEFORE_REDRAW`, lane 2 on `META_LATER_RESIZE`, lane 3 on `IDLE`, through
+      `get_laters().add(...)`; later ids tracked and removed on `disable()`;
+      `mutatingWorkspaces` guard.
 - [ ] Convert `scheduleReconcile`, `scheduleRetile`, the `addTimeout` users, the motion
       watch, the coherence sweep and the drag watchdog to pushes/drains.
 - [ ] `core/queue.test.ts` (12+), `core/record.test.ts` (10+).
@@ -305,6 +307,8 @@ Implementation:
       it.
 - [ ] The **toast policy** (§21): a request that changes nothing toasts with its reason;
       a direction with nothing stays silent.
+- [ ] **Adoption** (§20): existing windows are adopted without being moved until the
+      first drain, which waits for `startup-complete`.
 - [ ] `core/workspaces.ts`: `workspaceOps(state, env) → { create, reap }` with the
       single trailing spare (global, GNOME's own) and emptying as a property.
 - [ ] Adapter: routing/reaping only from the lane-2 drain; windows on a
