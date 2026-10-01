@@ -648,6 +648,13 @@ happens. All default off, deduplicated and rate-limited per event.
     window is never pulled onto the viewed workspace; a workspace whose only window
     is minimized counts as free.
 
+45. **Fullscreen in the middle of a pair** (test scenario S17, confirmed with the
+    order `A | B` on exit): the fullscreen window gets a workspace immediately right
+    of its own, its geometry is untouched while fullscreen, the other half of the
+    pair maximizes, and the view follows. On exit it rejoins as slot 1, the workspace
+    it left is reaped and the view returns. An app's own fullscreen request and the
+    shortcut are identical.
+
 ## Deliberate non-goals
 
 
