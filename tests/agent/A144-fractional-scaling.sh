@@ -3,7 +3,7 @@
 # Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
 # and can maintain this code.
 #
-# A143 Fractional scaling (§10/§25): on a fractional-scale monitor the two tiles
+# A144 Fractional scaling (§10/§25): on a fractional-scale monitor the two tiles
 # of a pair must meet at a single boundary — no sub-pixel seam and no 1 px
 # overlap — and both must stay inside the work area.
 #
@@ -12,8 +12,11 @@
 # the scale grid (an offset origin, a width the scale does not divide), which is
 # where `snapRect`'s independent rounding used to break the pair: the old plan
 # gave the tiles a 1 px overlap, and the compositor's integer frames then showed
-# it. The scenarios assert the *compositor's* frames, so this is the end-to-end
-# check; the pure math (1.25, 1.5, 1.75, 2.0) is covered by
+# it. Those frames are integers (`move_resize_frame` takes ints), so the adapter
+# rounds the *shared* boundary once and derives both tiles from it; an offset
+# origin at scale 1.5 is where truncating each tile's `x`/`width` separately
+# reopens the seam. The scenarios assert the *compositor's* frames, so this is
+# the end-to-end check; the pure math (1.25, 1.5, 1.75, 2.0) is covered by
 # tests/core/fractional-scaling.test.ts.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
@@ -47,9 +50,12 @@ print(json.dumps([{
 "
 }
 
-# Assert the two tiles share one boundary and both lie inside the work area.
+# Assert the two compositor frames share one integer boundary with `gap`
+# between them, and both lie inside the work area. The frames are the integers
+# Mutter stored, so `a.x + a.width` and `b.x` must be the same integer edge
+# (gap 0) or differ by exactly the configured gap.
 check_pair() {
-  local label="$1" x="$2" width="$3"
+  local label="$1" x="$2" width="$3" gap="${4:-0}"
   poll "$label" "
 import json, sys
 d = json.load(sys.stdin)
@@ -58,21 +64,23 @@ tiles = sorted([w for w in d['windows'] if w['tileable'] and not w['minimized'] 
 if len(tiles) != 2:
     print('expected two tiles, got', len(tiles)); sys.exit(1)
 a, b = tiles[0]['rect'], tiles[1]['rect']
-# No seam and no overlap: one shared boundary.
-if a['x'] + a['width'] != b['x']:
+# No seam and no overlap: one shared integer boundary, then the gap.
+if b['x'] - (a['x'] + a['width']) != $gap:
     print('split not reconciled', a, b, 'monitors', d['monitors'], 'gaps', d.get('gaps')); sys.exit(1)
 # Inside the simulated work area, both axes.
 if a['x'] < $x or b['x'] + b['width'] > $x + $width:
     print('outside horizontally', a, b); sys.exit(1)
 if a['y'] < 0 or a['y'] + a['height'] > 800 or b['height'] < 0 or b['y'] + b['height'] > 800:
     print('outside vertically', a, b); sys.exit(1)
-print('met at', a['x'] + a['width'])
+print('met at', a['x'] + a['width'], 'gap', b['x'] - (a['x'] + a['width']))
 " 25
 }
 
-# One fractional scale: set the fixture, open a pair, assert.
+# One fractional scale: set the fixture, open a pair, assert. `gap` overrides
+# the between-window gap (it defaults to the base gap) and is restored afterwards.
 fractional_pair() {
-  local scale="$1" x="$2" width="$3"
+  local scale="$1" x="$2" width="$3" gap="${4:-0}"
+  [ "$gap" = 0 ] || set_setting gaps-base "$gap"
   adrt SimulateScreens "$(scale_fixture "$scale" "$x" "$width")" >/dev/null
   poll "the simulated monitor reports scale $scale at x=$x" '
 import json, sys
@@ -81,14 +89,23 @@ sys.exit(0 if len(m) == 1 and abs(m[0]["scale"] - '"$scale"') < 1e-9
          and m[0]["geometry"]["x"] == '"$x"' else 1)' 15
   open_pair
   wait_settled 20
-  check_pair "at scale $scale the pair meets exactly inside the work area" "$x" "$width"
+  check_pair "at scale $scale x=$x gap=$gap the pair meets exactly inside the work area" "$x" "$width" "$gap"
   ensure_clean
+  [ "$gap" = 0 ] || set_setting gaps-base 0
 }
 
 # 1.25: offset origin 2, width 1278 (right edge 1280; 1278 is not a multiple of 4).
 fractional_pair 1.25 2 1278
 # 1.75: offset origin 1, width 1220 (not a multiple of 4).
 fractional_pair 1.75 1 1220
+# 1.5: offset origin 1, width 1278 (right edge 1279). The plan's tiles meet at
+# logical 640 with widths of 1918/3 and 1916/3; truncating x and width
+# independently gave tile0 [1, 639) and tile1 [640, ...) — a 1 px seam. The
+# adapter's single rounded boundary closes it.
+fractional_pair 1.5 1 1278
+# 1.5 with a configured between-window gap: the same offset origin must leave
+# exactly that gap between the integer frames, not a seam or an overlap.
+fractional_pair 1.5 1 1278 8
 
 adrt SimulateScreens null >/dev/null
 set_setting gaps-base "$orig_gap_base"

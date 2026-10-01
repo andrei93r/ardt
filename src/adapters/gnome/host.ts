@@ -350,7 +350,12 @@ export class GnomeHost implements PlatformHost {
   applyFrame(id: number, rect: Rect): void {
     const win = this.windowById(id);
     if (win === null) return;
-    win.move_resize_frame(true, rect.x, rect.y, rect.width, rect.height);
+    // `move_resize_frame` takes integer logical pixels and GI truncates each
+    // argument on its own, which at a fractional scale would drop a sub-pixel
+    // each side. Round explicitly; the tiler has already reconciled a pair's
+    // shared boundary before it calls here (see `compositorFrames`), so this is
+    // a no-op for a plan and the correct grid for every other caller.
+    win.move_resize_frame(true, Math.round(rect.x), Math.round(rect.y), Math.round(rect.width), Math.round(rect.height));
   }
 
   applyLayer(id: number, layer: Layer, _order: number): void {

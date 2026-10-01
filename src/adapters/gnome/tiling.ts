@@ -12,7 +12,7 @@ import GLib from 'gi://GLib';
 import { ratioKey, screenArea } from '../../core/tiler.js';
 import type { SplitAxis } from '../../core/tiler.js';
 import { clamp, rectEquals } from '../../core/types.js';
-import type { Rect, Screen, TilePlan } from '../../core/types.js';
+import type { Placement, Rect, Screen, TilePlan } from '../../core/types.js';
 import * as compat from './compat.js';
 import type { RegistryStore } from './registry.js';
 import type { FrameClockAnimator } from './frame-clock.js';
@@ -221,10 +221,17 @@ export class Tiling {
       this.deps.changes.set({ instances, ratios });
     }
 
-    for (const placement of placements) {
+    // §25: the plan is exact in logical pixels, but the compositor stores
+    // integers. Convert once for the whole plan so a pair's shared boundary is
+    // rounded a single time and both frames derive from it (see
+    // `compositorFrames`); applying each tile independently would let GI
+    // truncation reintroduce the seam the plan reconciled.
+    const frames = compositorFrames(placements, screen);
+    for (let i = 0; i < placements.length; i += 1) {
+      const placement = placements[i];
       const tracked = this.deps.windows().get(placement.surfaceId);
       if (tracked === undefined) continue;
-      this.applyFrame(tracked, placement.rect, screen, animate, reason, 0);
+      this.applyFrame(tracked, frames[i], screen, animate, reason, 0);
     }
     return true;
   }
@@ -454,4 +461,81 @@ export class Tiling {
 
 function settleFor(tracked: TrackedWindow): number {
   return Math.max(MIN_SETTLE_MS, tracked.profile.retriesMs[0] ?? MIN_SETTLE_MS);
+}
+
+/**
+ * §10/§25: turn a plan's exact logical rects into the integer logical pixels the
+ * compositor actually stores.
+ *
+ * `Meta.Window.move_resize_frame` takes ints and GI truncates each argument on
+ * its own. At a fractional scale the plan's shared split boundary can sit
+ * between two logical pixels, so truncating each tile's `x` and `width`
+ * independently reintroduces the seam the tiler reconciled: one tile ends a
+ * pixel short and the other starts a pixel late. Here the shared boundary is
+ * rounded *once* and both tiles are measured from the resulting integer edges —
+ * the first ends at the boundary, the second starts at `boundary + gap` — so
+ * the compositor frames meet exactly. Outer edges are kept inside the work
+ * area. At an integer scale the plan is already integral and this returns the
+ * rects untouched, so scale 1/2 geometry is byte-identical.
+ */
+function compositorFrames(placements: readonly Placement[], screen: Screen): Rect[] {
+  const rects = placements.map((placement) => ({ ...placement.rect }));
+  if (rects.length === 0 || Number.isInteger(screen.scale)) return rects;
+  if (rects.length === 2) {
+    const [a, b] = rects;
+    const splitX = a.y === b.y && a.height === b.height;
+    const splitY = a.x === b.x && a.width === b.width;
+    if (splitX && !splitY) return reconcileSplitAxis(rects, 'x', screen);
+    if (splitY && !splitX) return reconcileSplitAxis(rects, 'y', screen);
+  }
+  return rects.map((rect) => clampRoundRect(rect, screenArea(screen)));
+}
+
+/**
+ * Round the two rects of a pair about their shared boundary on `axis`. The
+ * first (leading) rect ends at the rounded boundary, the second (trailing) one
+ * starts at `boundary + gap`; both perpendicular edges are rounded once and
+ * kept inside the work area. The returned order matches the input order.
+ */
+function reconcileSplitAxis(rects: readonly Rect[], axis: 'x' | 'y', screen: Screen): Rect[] {
+  const size = axis === 'x' ? 'width' : 'height';
+  const area = screenArea(screen);
+  const lo = Math.ceil(area[axis]);
+  const hi = Math.floor(area[axis] + area[size]);
+  const forward = rects[0][axis] <= rects[1][axis];
+  const first = forward ? rects[0] : rects[1];
+  const second = forward ? rects[1] : rects[0];
+  const gap = Math.max(0, Math.round(second[axis] - (first[axis] + first[size])));
+  const boundary = clamp(Math.round(first[axis] + first[size]), lo, hi);
+  const start0 = clamp(Math.round(first[axis]), lo, boundary);
+  const start1 = clamp(boundary + gap, boundary, hi);
+  const end1 = clamp(Math.round(second[axis] + second[size]), start1, hi);
+  const lead: Rect = { ...first, [axis]: start0, [size]: Math.max(0, boundary - start0) };
+  const trail: Rect = { ...second, [axis]: start1, [size]: Math.max(0, end1 - start1) };
+  roundPerpendicular(lead, axis, area);
+  roundPerpendicular(trail, axis, area);
+  return forward ? [lead, trail] : [trail, lead];
+}
+
+/** Round the axis a split does not use, and keep it inside `area`. */
+function roundPerpendicular(rect: Rect, axis: 'x' | 'y', area: Rect): void {
+  const other = axis === 'x' ? 'y' : 'x';
+  const otherSize = axis === 'x' ? 'height' : 'width';
+  const lo = Math.ceil(area[other]);
+  const hi = Math.floor(area[other] + area[otherSize]);
+  const start = clamp(Math.round(rect[other]), lo, hi);
+  rect[other] = start;
+  rect[otherSize] = clamp(Math.round(rect[otherSize]), 0, hi - start);
+}
+
+/** Round every edge of a lone rect to integer logical pixels, inside `area`. */
+function clampRoundRect(rect: Rect, area: Rect): Rect {
+  const x = clamp(Math.round(rect.x), Math.ceil(area.x), Math.floor(area.x + area.width));
+  const y = clamp(Math.round(rect.y), Math.ceil(area.y), Math.floor(area.y + area.height));
+  return {
+    x,
+    y,
+    width: clamp(Math.round(rect.width), 0, Math.floor(area.x + area.width) - x),
+    height: clamp(Math.round(rect.height), 0, Math.floor(area.y + area.height) - y),
+  };
 }
