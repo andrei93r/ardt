@@ -9,6 +9,7 @@ Run:  python3 scripts/gen-core-cases.py
 """
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -95,8 +96,10 @@ def target_role(screens, needs):
 
 
 def vary_order(text):
-    """Swap the two window names A and B (for the ab/ba order axis)."""
-    return text.replace("A", "\x00").replace("B", "A").replace("\x00", "B")
+    """Swap the window names A and B as whole words (for the ab/ba order axis)."""
+    text = re.sub(r"\bA\b", "\x00", text)
+    text = re.sub(r"\bB\b", "A", text)
+    return re.sub(r"\x00", "B", text)
 
 
 def apply_geom(scr, scale, bar):
