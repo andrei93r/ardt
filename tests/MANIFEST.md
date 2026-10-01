@@ -39,24 +39,24 @@ Totals: 117 agent scenarios, 16 session scenarios.
 | `A106-no-cross-monitor-exile` | headless | — | A106 needs two monitors to exercise cross-monitor routing | ActivateWindow, MoveDirection |
 | `A107-cross-monitor-drag-takes-the-free-slot-or-swaps` | headless | — | A107 needs two monitors to exercise a cross-screen move | ActivateWindow, MoveDirection |
 | `A108-maximised-drag-still-maximised-at-drop` | headless | — | A108 needs two monitors to exercise a cross-screen drag | ActivateWindow, MaximizeWindow, MoveDirection |
-| `A109-disconnect-routes` | headless | — | A109 needs two monitors to exercise a disconnect | SimulateScreens |
+| `A109-disconnect-routes` | headless | — | A109 needs two monitors to exercise a disconnect; A109-disconnect-routes: needs exactly 2 screens (this harness has $screens) | SimulateScreens |
 | `A11-float-toggle` | headless | — | — | ToggleFloat |
-| `A110-reconnect-replays-state` | headless | — | A110 needs two monitors to exercise a reconnect | SimulateScreens |
-| `A111-primary-change-keeps-slots-and-the-extra-window-floats` | headless | — | A111 needs two monitors to exercise a primary change | ActivateWorkspace, SimulateScreens |
+| `A110-reconnect-replays-state` | headless | — | A110 needs two monitors to exercise a reconnect; A110-reconnect-replays-state: needs exactly 2 screens (this harness has $screens) | SimulateScreens |
+| `A111-primary-change-keeps-slots-and-the-extra-window-floats` | headless | — | A111 needs two monitors to exercise a primary change; A111-primary-change-keeps-slots-and-the-extra-window-floats: needs exactly 2 screens (this harness has $screens) | ActivateWorkspace, SimulateScreens |
 | `A112-workarea-change-replans-one-monitor` | headless | — | — | SimulateWorkArea |
-| `A113-trigger-wins-and-trades` | headless | — | — | ActivateWindow |
+| `A113-trigger-wins-and-trades` | headless | — | A113-trigger-wins-and-trades: needs exactly 1 screen (this harness has $screens) | ActivateWindow |
 | `A114-fullscreen-in-place-minimises` | headless | — | — | ToggleFullscreen |
 | `A115-look-empty-workspace-is-free` | headless | — | — | MinimizeWindow |
-| `A116-escape-clamped-own-workspace` | headless | — | — |  |
+| `A116-escape-clamped-own-workspace` | headless | — | A116-escape-clamped-own-workspace: needs exactly 1 screen (this harness has $screens) |  |
 | `A117-arrival-side-rule` | headless | — | — | MoveToWorkspace |
 | `A118-nothing-happened-toasts` | headless | — | — | ActivateWindow, DumpDecisions, MoveFocusedToWorkspace, NudgeSplit, Undo |
 | `A119-float-key-leaves-in-place` | headless | — | — | ToggleFloat |
 | `A12-workspace-switch` | headless | — | — | ActivateWindow, ActivateWorkspace |
 | `A120-dialog-centred-and-raised` | headless | — | — |  |
 | `A121-focus-cycle-order` | headless | — | A121 needs a single-workspace pair plus an overflow float | ActivateWindow, FocusCycle, MinimizeWindow |
-| `A122-rescue-side-and-order` | headless | — | A122 needs two monitors to exercise the rescue side | SimulateScreens |
+| `A122-rescue-side-and-order` | headless | — | A122 needs two monitors to exercise the rescue side; A122-rescue-side-and-order: needs exactly 2 screens (this harness has $screens) | SimulateScreens |
 | `A123-session-modes` | headless | — | — | ActivateWindow, SimulateBurst, SimulateSessionMode |
-| `A124-screen-side-rule` | headless | — | A124 needs two monitors to exercise the cross-screen arrival side | ActivateWindow, MoveDirection |
+| `A124-screen-side-rule` | headless | — | A124 needs two monitors to exercise the cross-screen arrival side | ActivateWindow, MinimizeWindow, MoveDirection |
 | `A125-long-mixed-run` | headless | — | A125 long mixed run: set ADRT_LONG_RUN=1 (and optionally ADRT_LONG_RUN_SECONDS) to run it | ActivateWorkspace, BeginDrag, DumpDecisions, EndDrag, MaximizeWindow, MinimizeWindow… |
 | `A13-lock-screen` | headless | — | — | ActivateWindow, SimulateSessionMode |
 | `A14-monitor-change` | headless | — | — | InjectSignal |

@@ -8,6 +8,14 @@
 # fills its screen.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
+# This scenario describes 1 screen; on another
+# count the same rules are exercised by the matrix runs, so skip with a reason.
+screens="$(screen_count)"
+if [ "$screens" -ne 1 ]; then
+  skip "A116-escape-clamped-own-workspace: needs exactly 1 screen (this harness has $screens)"
+  exit 0
+fi
+
 ensure_clean
 spawn_window >/dev/null
 wait_count 1 15 || true

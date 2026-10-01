@@ -381,6 +381,13 @@ keyboard_injection_ready() {
 # Real input through the compositor's own seat (Stage 0). The nested Shell is
 # started with ADRT_INJECT=1 by the harness; without it these are no-ops.
 
+# How many screens the nested Shell has. Scenarios whose assumptions only hold
+# for a specific count use this to skip with a recorded reason instead of
+# asserting a layout the harness cannot produce.
+screen_count() {
+  dump | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["monitors"]))' 2>/dev/null || echo 1
+}
+
 probe_json() {
   adrt ProbePlatform 2>/dev/null | python3 "$PARSE" 2>/dev/null || true
 }

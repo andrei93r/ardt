@@ -7,6 +7,14 @@
 # maximized and the other minimizes; restoring the other reverses the two.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
+# This scenario describes 1 screen; on another
+# count the same rules are exercised by the matrix runs, so skip with a reason.
+screens="$(screen_count)"
+if [ "$screens" -ne 1 ]; then
+  skip "A113-trigger-wins-and-trades: needs exactly 1 screen (this harness has $screens)"
+  exit 0
+fi
+
 ensure_clean
 set_static_workspaces 1
 

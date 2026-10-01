@@ -7,6 +7,14 @@
 # order (the left window stays in slot 0).
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
+# This scenario describes 2 screens; on another
+# count the same rules are exercised by the matrix runs, so skip with a reason.
+screens="$(screen_count)"
+if [ "$screens" -ne 2 ]; then
+  skip "A122-rescue-side-and-order: needs exactly 2 screens (this harness has $screens)"
+  exit 0
+fi
+
 ensure_clean
 monitors="$(state_expr 'len(d["monitors"])')"
 if [ "${monitors:-1}" -lt 2 ]; then

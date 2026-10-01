@@ -13,7 +13,9 @@ check_python "DumpState reports the running build" '
 import json, sys
 d = json.load(sys.stdin)
 b = d.get("build") or {}
-if not isinstance(b, dict) or int(b.get("version", 0)) < 1 or int(b.get("dirMtimeMs", 0)) <= 0:
+# The build reports the release version, a string such as 0.2.0, plus the
+# install dir mtime; both must be present.
+if not isinstance(b, dict) or not str(b.get("version", "")).strip() or int(b.get("dirMtimeMs", 0)) <= 0:
     print("build marker missing:", b); sys.exit(1)
 print("build", b)
 '
