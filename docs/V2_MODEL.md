@@ -83,35 +83,40 @@ It **is** recorded and restored by display memory when the window still exists (
 1. the **left** workspace, if it holds **exactly one** window — the result is a pair,
    with the unmaximized window in the right slot;
 2. otherwise the **right** workspace, if it holds exactly one window;
-3. otherwise the window is **minimized and parked**: in the left workspace if one
-   exists, else in the right one, else it stays where it is.
+3. otherwise the window is **minimized and moved**: into the left workspace if it
+   holds any window, else into the right one if it does, else it stays where it is.
 
 An **empty** neighbouring workspace is not a target for unmaximize: joining it would
 leave the window alone and therefore maximized again, a move that changes nothing.
-Parking into a workspace that is already full is exactly the minimize law's park
-(§4 below), and the workspace it left is reaped (§5).
+Moving a minimized window into an already full workspace is not a problem, because a
+minimized window holds no slot (§5), and the workspace it left is reaped (§5).
 
 Any workspace emptied by the move is reaped (§5).
 
 **Minimize** never navigates the view and never moves another window. The window
-keeps its slot, and while its partner is minimized the visible window fills the
-monitor; restoring re-splits. If a workspace would be left holding **only minimized
-windows**, its occupant is relocated in this order: the **left** workspace if it has a
-free slot, otherwise the **right** workspace if it has one, and otherwise the window
-**stays where it is** and the workspace is allowed to persist holding only minimized
-windows. That last branch is the one case where a workspace that looks empty is legal
-(there is nowhere to put its window), and it is the normal case on a
-single-workspace-capable screen, which has no neighbours at all.
+**releases its slot while it is minimized**, so the visible partner fills the monitor
+and a window opening on that workspace takes the free slot. If a workspace would be
+left holding **only minimized windows**, its occupant is relocated in this order: the
+**left** workspace if it holds any window at all, otherwise the **right** workspace
+if it holds any, and otherwise the window **stays where it is** and the workspace is
+allowed to persist holding only minimized windows. A minimized window is never a
+problem for a full workspace, because it holds no slot. That last branch is the one
+case where a workspace that looks empty is legal (no neighbour holds windows to take
+its own), and it is the normal case on a single-workspace-capable screen, which has
+no neighbours at all.
 
 **A lone managed window is always maximized** — there is no un-maximized lone window
 anywhere except §7's single-workspace-capable pair rule.
 
 ## 5. Emptiness and packing
 
-- Every workspace holds a **maximized single** or a **full pair** — counting
-  occupancy, so a minimized window still counts. The only *empty* workspace is the
-  **spare**; the only workspace that may *look* empty is one whose single window is
-  minimized with no neighbour able to take it (§4).
+- Every workspace holds a **maximized single** or a **full pair** of *visible*
+  windows. **A slot is held only while its window is visible**: minimizing releases
+  the slot, so a window opening on that workspace takes it and splits with the
+  visible partner; the minimized window takes a free slot again — or floats — when it
+  is restored. The only *empty* workspace is the **spare**; the only workspace that
+  may *look* empty is one whose single window is minimized with no neighbour holding
+  windows to take it (§4).
 - **Reaping is a property, not an event**: at every drain, any empty workspace other
   than the spare is reaped, whoever emptied it — a close, a move, a drop, a routing,
   a reconnect. A workspace holding any window, including one on another screen, is not
@@ -132,8 +137,9 @@ anywhere except §7's single-workspace-capable pair rule.
   flag is the durable path, §12);
 - an app with `neverTile`;
 - modals, dialogs and popups;
-- a **user placement with no room**: an overview drop onto a full pair, a window
-  restored from minimized onto a full workspace, and overflow on a
+- a **user placement with no room**: an overview drop onto a full pair, **a window
+  the user moves by keyboard or menu onto a workspace whose slots are taken**, a
+  window restored from minimized onto a full workspace, and overflow on a
   single-workspace-capable screen;
 - a window the user resized beyond its slot when the sibling cannot adapt (§10).
 - **A float adrt places is offset, never perfectly aligned with what is under it**: the
@@ -167,8 +173,9 @@ anywhere except §7's single-workspace-capable pair rule.
   lands on the window whose position matches the one you came from — "the correct
   orientation": moving left out of a landscape screen onto a portrait one picks the
   window nearest your current vertical position, and the reverse likewise.
-- **Focus never switches workspace, and neither does a keyboard move**: there is no
-  keyboard path between workspaces.
+- **Focus never switches workspace.** A keyboard **move** reaches another workspace
+  only through the dedicated move shortcuts (§17); crossing a screen edge only
+  re-slots the window on the target screen, it never changes its workspace.
 - A keyboard **move** follows the same plane rule — into a free slot, a swap when the
   plane is joined — and the target screen's own rules (§6, §7) when it crosses an edge.
 
@@ -193,10 +200,11 @@ emergent:
 
 Never create, reap or navigate workspaces there.
 
-- **Single-workspace-capable**: the first window is maximized; a second splits it; the
-  third and later windows **float**. The two slots are a persistent pair on that
-  screen — they do not move when the primary switches workspace. Maximize is in place
-  with `maximize-minimizes-others`.
+- **Single-workspace-capable**: the first *visible* window is maximized; a second
+  splits it; a third **floats** (a minimized window holds no slot, so it never forces
+  the float). The two slots are a persistent pair on that screen — they do not move
+  when the primary switches workspace. Maximize is in place with
+  `maximize-minimizes-others`.
 - **Fixed-workspace**: routing fills existing workspaces (right, then left); a window
   with no free slot floats. Maximize behaves as on a workspace-capable screen, except
   that it may only use existing workspaces; if none is free it maximizes in place.
@@ -496,10 +504,13 @@ happens. All default off, deduplicated and rate-limited per event.
    windows on that monitor only (`maximize-minimizes-others`, default on).
 5. **Fullscreen** behaves as maximize and is recorded and restored when the window
    still exists.
-6. **Unmaximize** joins the left workspace's right slot; failing that, the right
-   workspace; failing that, it is minimized and moved left.
-7. **Minimize** keeps occupancy; a workspace left holding only minimized windows has
-   that window moved (left, else right) so the workspace reaps.
+6. **Unmaximize** joins the left workspace when it holds exactly one window (the
+   result is a pair), else the right when it does; failing that the window is
+   minimized and moved into the left workspace if it holds windows, else the right,
+   else it stays.
+7. **Minimize releases the slot** while the window is hidden; a workspace left
+   holding only minimized windows has that window moved into a neighbour that holds
+   windows (left, else right, else it stays).
 8. **Single-workspace-capable screens**: maximize once, split twice, float thereafter;
    the pair is persistent per screen.
 9. **Fixed-workspace screens** route to existing workspaces only, else float.
@@ -559,6 +570,17 @@ happens. All default off, deduplicated and rate-limited per event.
     parks the window minimized left, else right, else in place; and a workspace
     emptied by the last close is reaped with the view moving to the nearest
     workspace that holds windows.
+33. **Slots are held only while a window is visible** (§5): minimizing releases the
+    slot, a new window takes it and splits with the visible partner, and restoring
+    with no free slot floats. This replaces the earlier "a minimized window still
+    counts" reading and removes the invented "park" concept — a minimized window
+    never holds a slot anywhere.
+34. **A user move onto a full workspace floats the moved window there** (§6, §17):
+    the destination is the user's choice, and a float honours it without evicting
+    anyone. The minimized park survives only inside our own unmaximize.
+35. **Both the unmaximize park and the alone-minimized relocation target a
+    neighbour that holds windows** (§4) — a free slot is not required, and an empty
+    neighbour is never a target, since the window would be alone there.
 32. **Enable-time normalisation is two-branch** (§20): a dominating window (at least
     three quarters of the work area) is maximized with every other managed window on
     its workspace minimized; otherwise the **two** largest by visible surface become

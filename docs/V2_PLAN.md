@@ -61,14 +61,17 @@ misbehaving-client path. The families the last revision added:
 - **packing and reaping**: pair → close one → survivor maximized; close the last → reap
   and the view moves; a drop that empties a workspace → reap; a reconnect that empties
   one → reap; the spare is never removed; a reorder of loaded workspaces survives.
-- **minimize law**: occupancy kept; the visible partner fills; restore re-splits; and
-  the three branches of the alone-minimized rule — moved left, else moved right, else
-  left in place with the workspace allowed to persist.
+- **minimize law**: the slot is released while the window is hidden, a new window
+  takes it and splits with the visible partner, and restoring with no free slot
+  floats; then the three branches of the alone-minimized rule — moved into a
+  neighbour that holds windows, else into the right one, else left in place with the
+  workspace allowed to persist.
 - **maximize / unmaximize / fullscreen**: own workspace to the right; in place plus
   `maximize-minimizes-others` on a single-workspace screen; unmaximize joins a
   neighbour only when that neighbour holds **exactly one** window (left first, then
-  right), and otherwise parks the window minimized (left, else right, else in place);
-  fullscreen recorded and restored.
+  right), and otherwise moves it minimized into a neighbour that holds windows (left,
+  else right, else it stays); fullscreen recorded and restored; and a **user move**
+  onto a full workspace floats the window there rather than parking it.
 - **resize / refusal ladder**: the sibling follows an inner-edge drag; a refusing client
   keeps its size and the sibling adapts; the sibling cannot adapt → own workspace,
   size clamped to [1/6, full screen]; on a single-workspace screen the clamped size stays.
