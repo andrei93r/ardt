@@ -19,7 +19,10 @@ TEST_IDS="$(test_ids)" poll "the maximized app was tiled with its sibling" '
 import os, json, sys
 ids = set(int(x) for x in os.environ["TEST_IDS"].split())
 d = json.load(sys.stdin)
-area = d["monitors"][0].get("workArea") or d["monitors"][0]["geometry"]
+# Each screen has its own axis, so a tiled pair on a portrait monitor splits
+# vertically and each tile is full *width*. A window "fills its monitor" only
+# when it spans both dimensions; use the window own monitor work area.
+areas = {m["index"]: (m.get("workArea") or m["geometry"]) for m in d["monitors"]}
 ws = [w for w in d["windows"] if w["id"] in ids]
 if len(ws) < 2:
     print("only", len(ws), "test windows"); sys.exit(1)
@@ -28,7 +31,9 @@ if len({w["workspace"] for w in ws}) != 1:
 if any(w["maximized"] for w in ws):
     print("a window is still maximized"); sys.exit(1)
 for w in ws:
-    if w["rect"]["width"] >= area["width"] - 1:
+    a = areas.get(w["monitor"]) or next(iter(areas.values()))
+    r = w["rect"]
+    if r["width"] >= a["width"] - 1 and r["height"] >= a["height"] - 1:
         print("window fills the monitor", w["id"]); sys.exit(1)
 print("paired")
 ' 20
