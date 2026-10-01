@@ -85,10 +85,47 @@ describe('cycleOrder — the focus cycle (§6/§17)', () => {
     expect(cycleOrder(3, entries)).toBe(1);
   });
 
-  it('breaks a perfect overlap by stacking order', () => {
-    const entries = [float(1, 0, 0, 5), float(2, 0, 0, 1)];
-    expect(cycleOrder(null, entries)).toBe(2);
+  it('visits both perfectly-overlapping floats in one lap', () => {
+    // `focusCycle` rebuilds the entries on every step and focusing a float
+    // raises it, so the stacking order changes between the steps of a single
+    // lap. Both floats must still be reached before the lap wraps.
+    const entries = [managed(4, 0), float(1, 0, 0, 5), float(2, 0, 0, 1)];
+    expect(cycleOrder(4, entries)).toBe(1); // managed -> first float
+    const raised = [managed(4, 0), float(1, 0, 0, 9), float(2, 0, 0, 1)]; // focus raised 1
+    expect(cycleOrder(1, raised)).toBe(2); // -> the other float, not skipped
+    expect(cycleOrder(2, raised)).toBe(4); // -> wraps back to the managed window
+  });
+
+  it('does not change the rest of the lap when focus raises a float', () => {
+    const before = [float(1, 0, 0, 1), float(2, 0, 0, 5), float(3, 300, 0, 2)];
+    const after = [float(1, 0, 0, 9), float(2, 0, 0, 5), float(3, 300, 0, 2)]; // 1 raised
+    expect(cycleOrder(1, before)).toBe(2);
+    expect(cycleOrder(1, after)).toBe(2);
+    expect(cycleOrder(2, before)).toBe(3);
+    expect(cycleOrder(2, after)).toBe(3);
+  });
+
+  it('keeps managed windows first in slot order regardless of float stacking', () => {
+    const entries = [float(1, 0, 0, 9), managed(2, 1), managed(3, 0)];
+    expect(cycleOrder(null, entries)).toBe(3);
+    expect(cycleOrder(3, entries)).toBe(2);
     expect(cycleOrder(2, entries)).toBe(1);
+  });
+
+  it('skips a minimized float', () => {
+    const entries = [managed(1, 0), { ...float(2, 0, 0, 1), minimized: true }, float(3, 0, 0, 5)];
+    expect(cycleOrder(1, entries)).toBe(3);
+    expect(cycleOrder(3, entries)).toBe(1);
+  });
+
+  it('orders a perfect overlap by a stable key, not the live stacking order', () => {
+    const entries = [float(1, 0, 0, 5), float(2, 0, 0, 1)];
+    expect(cycleOrder(null, entries)).toBe(1);
+    expect(cycleOrder(1, entries)).toBe(2);
+    // Raising id 1 (as focusing it would) must not move it in the lap.
+    const raised = [float(1, 0, 0, 9), float(2, 0, 0, 1)];
+    expect(cycleOrder(null, raised)).toBe(1);
+    expect(cycleOrder(1, raised)).toBe(2);
   });
 
   it('returns null when there is nothing to cycle', () => {

@@ -32,9 +32,13 @@ export interface CycleEntry {
   kind: 'managed' | 'float';
   /** The slot, for a managed window. */
   slot?: 0 | 1;
-  /** Position, for a float: left-to-right, then stacking order. */
+  /** Position, for a float: left to right, then a stable tiebreak. */
   rect?: Rect;
-  /** Compositor stacking position, used to break a perfect overlap. */
+  /**
+   * Compositor stacking position. Recorded by callers, but deliberately *not*
+   * used to order the cycle: focusing a float raises it, so a live stacking
+   * order would flip two perfectly-overlapping floats mid-lap.
+   */
   z?: number;
   minimized?: boolean;
 }
@@ -53,18 +57,21 @@ function compareCycle(a: CycleEntry, b: CycleEntry): number {
   if (Math.abs(dx) > 1) return dx;
   const dy = ra.y - rb.y;
   if (Math.abs(dy) > 1) return dy;
-  // Perfect overlap: resolve by stacking order, then id as a stable tiebreak.
-  const dz = (a.z ?? 0) - (b.z ?? 0);
-  if (dz !== 0) return dz;
+  // Perfect overlap: order by a stable key, never the live stacking order.
+  // Focusing a float raises it, so a `z` tiebreak would flip two
+  // perfectly-overlapping floats as the cycle steps between them and one would
+  // be skipped. A fixed id tiebreak makes each lap a deterministic permutation
+  // that visits every member exactly once.
   return a.id - b.id;
 }
 
 /**
  * §6/§17 focus cycle order: the managed windows of the current screen and
  * workspace in slot order, then the floats left to right (a perfect overlap
- * resolves by stacking order); minimized windows are skipped. Returns the next
- * id after `current`, wrapping, or the first entry when `current` is not in the
- * cycle. `null` when there is nothing to focus.
+ * resolves by a stable id tiebreak, not the live stacking order); minimized
+ * windows are skipped. Returns the next id after `current`, wrapping, or the
+ * first entry when `current` is not in the cycle. `null` when there is nothing
+ * to focus.
  */
 export function cycleOrder(current: number | null, entries: readonly CycleEntry[]): number | null {
   const live = entries.filter((entry) => entry.minimized !== true).sort(compareCycle);
