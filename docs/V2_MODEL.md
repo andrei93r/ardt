@@ -15,6 +15,12 @@ Companion: `docs/V2_PLAN.md` (order of work, tests per stage).
     `workspaces-only-on-primary` is on, or dynamic workspaces off with one workspace);
   - **fixed-workspace**: several workspaces exist but GNOME cannot create more
     (dynamic off, two or more workspaces).
+
+  **Which state a screen is in is GNOME's decision, never the connector's.** With
+  `workspaces-only-on-primary` on, only the primary has dynamic workspaces and every
+  other screen is single-workspace-capable; with static workspaces every screen is
+  fixed. adrt asks GNOME and never assumes which screen is which, and never infers it
+  from "internal" or "external".
 - **Slot** — one of the screen's two tiling halves: `0`/`1` along the screen's split
   axis. Landscape → left/right; portrait, or a vertical workspace layout
   (`layout_rows === -1`) → top/bottom. In this document "left" means slot 0 and
@@ -24,8 +30,8 @@ Companion: `docs/V2_PLAN.md` (order of work, tests per stage).
 - **Managed** — tiled: it owns a slot.
 - **Floated** — unmanaged: no slot, never moved or resized by adrt. Floated windows
   still belong to a workspace for the emptiness rule (§5).
-- **Occupancy** — a slot is occupied by a window that *exists*, not by what is
-  visible: a minimized managed window still occupies its slot.
+- **Occupancy** — a slot is held only while its window is **visible**: a minimized
+  managed window releases its slot (§5).
 - **Spare** — the single empty workspace GNOME keeps at the end of the list. Global,
   not per screen. adrt never creates it and never removes it.
 - **Instance id** — a window's identity within the session (its stable sequence);
@@ -775,8 +781,9 @@ never debug-gated (the deduplication and rate limits still apply).
 62. **When a split is impossible the trigger wins** (round scenarios 2-4): the window
     the action is about keeps the screen — alone, so maximized. The other gives way:
     its own workspace at its own clamped width on a workspace-capable screen,
-    minimized on a single-workspace screen. On the laptop this means "open B, B
-    maximizes, A is minimized"; restoring A makes it the trigger and reverses the two.
+    minimized on a single-workspace screen. Where the trigger is a newly opened
+    window that means "open B, B maximizes, A is minimized"; restoring A makes it the
+    trigger and reverses the two.
 
 63. **The trade is symmetric** (round scenario 4, confirmed): restoring the minimized
     window makes it the trigger, so it takes the screen maximized and the other is
