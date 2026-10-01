@@ -896,6 +896,10 @@ never debug-gated (the deduplication and rate limits still apply).
     5): pressing maximize or fullscreen on an already-maximized window leaves it as it
     is and says so.
 
+80. **Disabling the extension stops it without undoing the session** (review gap 6):
+    every window is left exactly as it is — positions, minimized windows, floats — and
+    only the border disappears. Turning it back on normalises again (§20).
+
 ## Deliberate non-goals
 
 
