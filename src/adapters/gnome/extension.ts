@@ -97,6 +97,7 @@ interface ExtraHandlers {
   SimulateSticky(id: number, sticky: boolean): boolean;
   SimulateWorkspaceReorder(from: number, to: number): boolean;
   SimulateWorkspaceOrientation(vertical: boolean): boolean;
+  CursorToCentre(): boolean;
 }
 
 type Handlers = DbusHandlers & ExtraHandlers;
@@ -911,6 +912,7 @@ export default class AdrtExtension extends Extension {
       'kb-move-workspace-9',
       'kb-toggle-fullscreen',
       'kb-quit',
+      'kb-cursor-centre',
     ];
   }
 
@@ -989,6 +991,9 @@ export default class AdrtExtension extends Extension {
         break;
       case 'kb-quit':
         this.session.closeFocused();
+        break;
+      case 'kb-cursor-centre':
+        this.session.centreCursorNow();
         break;
       default:
         if (name.startsWith('kb-move-workspace-')) {
@@ -1246,6 +1251,10 @@ export default class AdrtExtension extends Extension {
       },
       virtualInput,
       remoteDesktop,
+      cursor: {
+        ...compat.cursorCapabilities(),
+        method: compat.cursorWarpMethod(),
+      },
       injection: this.injectionEnabled,
       grabOp: this.host.canDetectUserGrab(),
       devkit: compat.hasDevkit(),
@@ -1425,6 +1434,7 @@ export default class AdrtExtension extends Extension {
       SimulateSticky: (id, sticky) => this.session.simulateSticky(id, sticky),
       SimulateWorkspaceReorder: (from, to) => this.session.simulateWorkspaceReorder(from, to),
       SimulateWorkspaceOrientation: (vertical) => this.session.simulateWorkspaceOrientation(vertical),
+      CursorToCentre: () => this.session.centreCursorNow(),
       MinimizeWindow: (id) => {
         if (!this.session.windows.has(id)) return false;
         this.host.minimize(id);
@@ -1579,6 +1589,14 @@ export default class AdrtExtension extends Extension {
       },
       workspaceAnimating: this.workspaceAnimationActive(),
       focused: this.session.focused()?.id ?? null,
+      pointer: (() => {
+        try {
+          const [px, py] = global.get_pointer();
+          return { x: px, y: py };
+        } catch {
+          return null;
+        }
+      })(),
       workspaces: this.session.countWorkspaces(),
       monitors,
       windows,

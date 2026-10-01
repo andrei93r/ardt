@@ -488,7 +488,15 @@ Two clarifications that follow from this:
 
 - `undo`, `focus cycle`, the four **focus** directions, the four **move** directions,
   `move window to workspace` (next, previous, and by index), `float toggle`,
-  `nudge resize` (**both axes**), `fullscreen toggle`, `close focused`.
+  `nudge resize` (**both axes**), `fullscreen toggle`, `close focused`,
+  `cursor to centre`.
+- `cursor to centre` (`kb-cursor-centre`) puts the pointer in the middle of the
+  focused window, clamped inside the work area; it is a no-op with no focused
+  window. `cursor-follows-focus` (default **off**) makes every focus change move
+  the pointer the same way, as a property of the drain (lane 1 feedback), never
+  inside the Mutter `notify::focus-window` handler. Moving the pointer needs the
+  public `Clutter.Seat.warp_pointer`; `global.display.warp_pointer` does not exist
+  in GNOME 50 (see `docs/platform-notes.md`).
 - **Focus never crosses a workspace.** A **move** may: it is the only keyboard way a
   window changes workspace, and `follow-moved-window` (default **on**) decides whether
   the view follows it.

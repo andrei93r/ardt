@@ -51,6 +51,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
     group.add(this.entryRow(settings, 'exception-apps', 'Exception apps', 'Comma-separated globs.'));
     group.add(this.switchRow(settings, 'adaptation-enabled', 'Adapt to problem windows'));
     group.add(this.switchRow(settings, 'float-persistence', 'Remember floats per app'));
+    group.add(this.switchRow(settings, 'cursor-follows-focus', 'Move the pointer to each focused window'));
     page.add(group);
 
     const animation = new Adw.PreferencesGroup({ title: 'Animation' });
@@ -228,6 +229,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
       ['kb-toggle-float', 'Toggle float'],
       ['kb-toggle-fullscreen', 'Toggle fullscreen'],
       ['kb-quit', 'Quit window'],
+      ['kb-cursor-centre', 'Cursor to centre'],
       ['kb-nudge-left', 'Nudge split left'],
       ['kb-nudge-right', 'Nudge split right'],
       ['kb-undo', 'Undo'],

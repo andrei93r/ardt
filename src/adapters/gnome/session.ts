@@ -16,6 +16,7 @@ import type { HeuristicContext } from '../../core/classify.js';
 import { classifyAdjust } from '../../core/adjust.js';
 import type { AdjustMode } from '../../core/adjust.js';
 import { EventQueue } from '../../core/queue.js';
+import { centreInWorkArea } from '../../core/cursor.js';
 import type { DisplayMove, DisplayState, DisplayWorkspace, MemoryEntry, NewWorkspace } from '../../core/displays.js';
 import { displayPlan } from '../../core/displays.js';
 import { normalizePlan } from '../../core/normalize.js';
@@ -114,7 +115,7 @@ export class WindowSession {
   private drainDeferrals = 0;
   /** §19: set while the drain finishes the backlog a pause caught. */
   private drainingBacklog = false;
-  private drainArmed: { 2: boolean; 3: boolean } = { 2: false, 3: false };
+  private drainArmed: { 1: boolean; 2: boolean; 3: boolean } = { 1: false, 2: false, 3: false };
   private drains = 0;
   private drainMsMax = 0;
   /** §22 perf: bounded samples for p50/p95 of drain and apply latency. */
@@ -197,7 +198,12 @@ export class WindowSession {
     this.displaySignals.push(
       global.display.connect('window-entered-monitor', () => this.scheduleReconcile('window-monitor')),
       global.display.connect('window-left-monitor', () => this.scheduleReconcile('window-monitor')),
-      global.display.connect('notify::focus-window', () => this.scheduleReconcile('focus')),
+      global.display.connect('notify::focus-window', () => {
+        // §11/§17: no policy here. Push the lane-1 feedback event; the drain
+        // re-derives the live focused window and moves the pointer.
+        this.scheduleCursorCentre(false);
+        this.scheduleReconcile('focus');
+      }),
     );
     this.managerSignals.push(
       global.workspace_manager.connect('active-workspace-changed', () => this.scheduleReconcile('workspace-active')),
@@ -1194,7 +1200,48 @@ export class WindowSession {
     if (this.queue.push(3, `maintenance:${kind}`, 'maintenance', { kind, ...data })) this.armDrain(3);
   }
 
-  private armDrain(lane: 2 | 3): void {
+  /**
+   * §17 cursor-centre / §11 lane 1 feedback. Pushing only: the drain re-derives
+   * the focused window's live rect, so a coalesced focus storm still ends with
+   * the pointer at the *current* window, never a stale one. `explicit` is the
+   * keybinding/`CursorToCentre` path, which acts even when the automatic
+   * `cursor-follows-focus` setting is off.
+   */
+  scheduleCursorCentre(explicit: boolean): void {
+    if (this.deps.isPaused() || this.suspended) return;
+    if (this.queue.push(1, 'cursor-centre', 'cursor', { explicit })) this.armDrain(1);
+  }
+
+  /** The keybinding/trigger path: move now (through the drain). False when
+   * there is no focused window to aim at. */
+  centreCursorNow(): boolean {
+    const hasFocus = this.focused() !== null;
+    this.scheduleCursorCentre(true);
+    return hasFocus;
+  }
+
+  /** The drain half of the cursor-centre property (§17). */
+  private applyCursorCentre(data: Record<string, unknown>): void {
+    const explicit = data.explicit === true;
+    if (!explicit && !this.deps.settings.boolean('cursor-follows-focus', false)) return;
+    const focused = this.focused();
+    if (focused === null) return;
+    // The live rect, never the one captured when the focus signal fired.
+    focused.refreshFrame();
+    const screen = this.deps.host.screens().find((s) => s.index === focused.surface.screenId);
+    const area = screen === undefined ? focused.surface.frame : screen.workArea ?? screen.geometry;
+    const target = centreInWorkArea(focused.surface.frame, area);
+    const moved = this.deps.host.warpPointer(target.x, target.y);
+    this.deps.history.log('cursor_centre', {
+      id: focused.id,
+      x: target.x,
+      y: target.y,
+      explicit,
+      moved,
+    });
+  }
+
+  private armDrain(lane: 1 | 2 | 3): void {
     if (this.drainArmed[lane]) return;
     this.drainArmed[lane] = true;
     const run = (): number => {
@@ -1211,14 +1258,16 @@ export class WindowSession {
     try {
       const laters = global.compositor.get_laters();
       const laterTypes: Record<string, unknown> = Meta.LaterType ?? {};
-      const type = lane === 2
-        ? (laterTypes.META_LATER_RESIZE ?? laterTypes.BEFORE_REDRAW)
-        : (laterTypes.IDLE ?? laterTypes.BEFORE_REDRAW);
+      const type = lane === 1
+        ? (laterTypes.BEFORE_REDRAW ?? laterTypes.META_LATER_RESIZE)
+        : lane === 2
+          ? (laterTypes.META_LATER_RESIZE ?? laterTypes.BEFORE_REDRAW)
+          : (laterTypes.IDLE ?? laterTypes.BEFORE_REDRAW);
       laters.add(type, run);
     } catch {
       // No later machinery (or the enum moved): a short timeout is still one
       // deferred pass, never policy inside the signal handler.
-      GLib.timeout_add(GLib.PRIORITY_DEFAULT, lane === 2 ? 16 : 32, run);
+      GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, run);
     }
   }
 
@@ -1245,7 +1294,10 @@ export class WindowSession {
   private drainEvents(events: ReturnType<EventQueue['drain']>): void {
     for (const event of events) {
       const data = (event.data ?? {}) as Record<string, unknown>;
-      if (event.kind === 'reconcile') {
+      if (event.kind === 'cursor') {
+        // §17 lane-1 feedback: pure geometry, then one warp.
+        this.applyCursorCentre(data);
+      } else if (event.kind === 'reconcile') {
         // A frame applied while another window is animating lands on a moving
         // surface and drifts (A72): wait for the animation instead of fighting
         // it, bounded so a stuck animation cannot starve the layout.
@@ -2125,7 +2177,7 @@ export class WindowSession {
     this.signals.clear();
     this.stopScan();
     this.queue.clear();
-    this.drainArmed = { 2: false, 3: false };
+    this.drainArmed = { 1: false, 2: false, 3: false };
     for (const id of this.timeoutSources) GLib.source_remove(id);
     this.timeoutSources.clear();
     if (this.adjustSource !== null) {
@@ -3302,7 +3354,7 @@ export class WindowSession {
   memoryBounds(): { windows: number; sources: number; signals: number } {
     let signalCount = 0;
     for (const handlers of this.signals.values()) signalCount += handlers.length;
-    const armed = (this.drainArmed[2] ? 1 : 0) + (this.drainArmed[3] ? 1 : 0);
+    const armed = (this.drainArmed[1] ? 1 : 0) + (this.drainArmed[2] ? 1 : 0) + (this.drainArmed[3] ? 1 : 0);
     return { windows: this.windows.size, sources: this.queue.pending > 0 ? armed : 0, signals: signalCount };
   }
 

@@ -84,6 +84,7 @@ const INTERFACE_XML = `
     <method name="SimulateSticky"><arg type="u" direction="in"/><arg type="b" direction="in"/><arg type="b" direction="out"/></method>
     <method name="SimulateWorkspaceReorder"><arg type="u" direction="in"/><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
     <method name="SimulateWorkspaceOrientation"><arg type="b" direction="in"/><arg type="b" direction="out"/></method>
+    <method name="CursorToCentre"><arg type="b" direction="out"/></method>
 
     <!-- Stage 4/5: the app registry and the display fixtures. -->
     <method name="GetRegistry"><arg type="s" direction="out"/></method>

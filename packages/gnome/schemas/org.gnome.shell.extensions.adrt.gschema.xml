@@ -86,6 +86,11 @@
       <summary>Follow a moved window</summary>
       <description>When a window is moved to another workspace with the keyboard, switch the view to it.</description>
     </key>
+    <key name="cursor-follows-focus" type="b">
+      <default>false</default>
+      <summary>Cursor follows focus</summary>
+      <description>Move the pointer to the middle of each newly focused window. Off by default.</description>
+    </key>
     <key name="log-workspace-reorder" type="b">
       <default>false</default>
       <summary>Log workspace reorders</summary>
@@ -400,6 +405,11 @@
       <default>['&lt;Super&gt;&lt;Alt&gt;q']</default>
       <summary>Quit window</summary>
       <description>Close the focused window.</description>
+    </key>
+    <key name="kb-cursor-centre" type="as">
+      <default>['&lt;Super&gt;c']</default>
+      <summary>Cursor to centre</summary>
+      <description>Move the pointer to the middle of the focused window.</description>
     </key>
     <key name="kb-move-workspace-next" type="as">
       <default>['&lt;Super&gt;&lt;Control&gt;Page_Down']</default>

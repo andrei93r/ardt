@@ -11,6 +11,7 @@ used only behind a compat check) and **never** (a trap that has bitten this code
 | --- | --- | --- |
 | `global.compositor.get_laters().add(BEFORE_REDRAW \| META_LATER_RESIZE \| IDLE, cb)` | public | the deferred-work idiom; `Meta.later_add` no longer exists |
 | `global.get_pointer()`, `Clutter.Seat.create_virtual_device()` | public | input state and the harness's real injection (Stage 0) |
+| `Clutter.Seat.warp_pointer(x, y)` | public | the only pointer warp in GNOME 50; `global.display.warp_pointer` does **not** exist. The extension runs inside the compositor, so warping its own seat is allowed |
 | `global.display.list_all_windows()`, `get_focus_window()`, `notify::focus-window` | public | the only window authority |
 | `Meta.Window.move_resize_frame`, `maximize`, `unmaximize`, `minimize`, `change_workspace_by_index`, `make_above`/`unmake_above` | public | every geometry and state change goes through these (in the drain) |
 | `global.workspace_manager` (`append_new_workspace`, `remove_workspace`, `reorder_workspace`, `layout_rows`) | public | workspaces; `layout_rows === -1` is the vertical layout |
@@ -46,3 +47,14 @@ used only behind a compat check) and **never** (a trap that has bitten this code
 | `global.display.get_grab_op` | not a function here; user-driven geometry is detected with `compat.button1Pressed()` (the drag's held button) |
 | `ydotool` | not usable (no libinput seat in a nested Shell) |
 | `session-like` target | **not runnable here**: `gnome-settings-daemon`, `xdg-desktop-portal`, `polkitd` and `gnome-remote-desktop` are not installed |
+
+## Cursor (probed in a nested Shell, 2026-10-01)
+
+| Fact | Value |
+| --- | --- |
+| `global.display.warp_pointer` | **does not exist** (a `TypeError`, not a function) |
+| `Clutter.Seat.warp_pointer(x, y)` | exists and moves the pointer; `global.get_pointer()` reports it |
+| `global.backend.get_cursor_renderer` / `get_cursor_tracker` | not exposed (neither moves a Wayland pointer) |
+| `org.gnome.Mutter.RemoteDesktop` on the bus | present, but a remote-desktop session is not needed to warp the compositor's own seat |
+| First synthetic pointer motion | a freshly-started headless seat can apply only **one axis** of the first warp; a second, idempotent `warp_pointer` in the same pass sets both (what `GnomeHost.warpPointer` does) |
+| Pointer event before the first injected key chord | in the nested Shell, any pointer injection/warp stops later virtual-keyboard delivery, so a keybinding scenario must inject its chord **first** (A132 does) |

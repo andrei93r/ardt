@@ -132,3 +132,50 @@ export function button1Pressed(): boolean {
   const [, , modifiers] = global.get_pointer();
   return (modifiers & Clutter.ModifierType.BUTTON1_MASK) !== 0;
 }
+
+/**
+ * §17 cursor: which public mechanism this Shell exposes to move the pointer.
+ * Probed, never assumed: `global.display.warp_pointer` exists in some Mutter
+ * versions, `Clutter.Seat.warp_pointer` (public API) in this one. The cursor
+ * renderer/tracker are reported for honesty even though neither moves a
+ * Wayland pointer.
+ */
+export function cursorCapabilities(): {
+  displayWarp: boolean;
+  seatWarp: boolean;
+  cursorRenderer: boolean;
+  cursorTracker: boolean;
+} {
+  let displayWarp = false;
+  try {
+    displayWarp = typeof (global.display as any)?.warp_pointer === 'function';
+  } catch {
+    displayWarp = false;
+  }
+  let seatWarp = false;
+  try {
+    const seat = Clutter.get_default_backend()?.get_default_seat?.();
+    seatWarp = typeof seat?.warp_pointer === 'function';
+  } catch {
+    seatWarp = false;
+  }
+  let cursorRenderer = false;
+  let cursorTracker = false;
+  try {
+    const backend = (global as any).backend;
+    cursorRenderer = typeof backend?.get_cursor_renderer === 'function';
+    cursorTracker = typeof backend?.get_cursor_tracker === 'function';
+  } catch {
+    cursorRenderer = false;
+    cursorTracker = false;
+  }
+  return { displayWarp, seatWarp, cursorRenderer, cursorTracker };
+}
+
+/** The simplest pointer-warp mechanism available, or `'none'`. */
+export function cursorWarpMethod(): 'display' | 'seat' | 'none' {
+  const caps = cursorCapabilities();
+  if (caps.displayWarp) return 'display';
+  if (caps.seatWarp) return 'seat';
+  return 'none';
+}

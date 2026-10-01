@@ -12,6 +12,7 @@
 import { layoutManager } from 'resource:///org/gnome/shell/ui/main.js';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Clutter from 'gi://Clutter';
 
 import { Layer } from '../../core/types.js';
 import type { Rect, Screen, Size, Surface } from '../../core/types.js';
@@ -379,6 +380,46 @@ export class GnomeHost implements PlatformHost {
     const win = this.windowById(id);
     if (win === null) return;
     win.maximize();
+  }
+
+  /**
+   * §17: move the pointer to (x, y). `global.display.warp_pointer` does not
+   * exist in GNOME 50; the public `Clutter.Seat.warp_pointer` does, and the
+   * extension runs inside the compositor, so it is allowed to warp its own
+   * seat. Returns false when neither mechanism is available (the caller then
+   * reports honestly instead of pretending the pointer moved).
+   *
+   * The warp is issued twice: a freshly-started (headless) seat can apply only
+   * one axis of the *first* synthetic motion it ever sees (probed, see
+   * docs/platform-notes.md), and the call is idempotent, so the second warp in
+   * the same pass guarantees both axes without a visible double move.
+   */
+  warpPointer(x: number, y: number): boolean {
+    const px = Math.trunc(x);
+    const py = Math.trunc(y);
+    const once = (): boolean => {
+      try {
+        if (typeof (global.display as any)?.warp_pointer === 'function') {
+          (global.display as any).warp_pointer(px, py);
+          return true;
+        }
+      } catch {
+        /* fall through to the seat */
+      }
+      try {
+        const seat = Clutter.get_default_backend().get_default_seat();
+        if (typeof seat?.warp_pointer === 'function') {
+          seat.warp_pointer(px, py);
+          return true;
+        }
+      } catch {
+        /* no seat */
+      }
+      return false;
+    };
+    if (!once()) return false;
+    once();
+    return true;
   }
 
   minSize(id: number): Size | null {
