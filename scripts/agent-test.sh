@@ -263,6 +263,6 @@ fi
 } > "$ROOT/TEST_RESULTS.md"
 
 echo
-echo "bash "$ROOT/scripts/notify.sh" "Adrt — tests done" "failures=$failures skips=$skips of $scenario_count" "$([ "$failures" -eq 0 ] && echo dialog-information || echo dialog-error)" normal 1 10000
-agent-test: wrote $ROOT/TEST_RESULTS.md"
+echo "agent-test: wrote $ROOT/TEST_RESULTS.md"
+bash "$ROOT/scripts/notify.sh" "Adrt — tests done" "failures=$failures skips=$skips of ${#names[@]}" "$([ "$failures" -eq 0 ] && echo dialog-information || echo dialog-error)" normal 1 10000
 [ "$failures" -eq 0 ] && [ "$LINT_RC" -eq 0 ] && [ "$CORE_RC" -eq 0 ]
