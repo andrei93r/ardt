@@ -378,6 +378,41 @@ export function button1Pressed(): boolean {
 }
 
 /**
+ * §6: whether the compositor currently holds a **window** move/resize grab — a
+ * real window drag. GNOME 50 exposes `Meta.Display.is_grabbed()` ("there is an
+ * ongoing grab operation", i.e. `grab_op != NONE`); some builds also expose
+ * `get_grab_op()`, whose `WINDOW_BASE` bit marks the window ops. Returns `null`
+ * when neither reading exists, so callers keep their own fallback rather than
+ * guessing.
+ *
+ * This is what tells a window move apart from an application drag-and-drop: a
+ * Chrome tab tear-off, a VS Code editor-tab or panel drag and a GTK DnD all
+ * hold the pointer button but start **no** compositor window grab, so they must
+ * never be mistaken for adrt's own move gesture.
+ */
+export function displayGrabActive(): boolean | null {
+  const display: any = (global as any)?.display;
+  try {
+    if (typeof display?.get_grab_op === 'function') {
+      const op: unknown = display.get_grab_op();
+      if (typeof op === 'number') {
+        const base: unknown = (Meta as any)?.GrabOp?.WINDOW_BASE;
+        const mask = typeof base === 'number' ? base : 1;
+        return (op & mask) !== 0;
+      }
+    }
+  } catch {
+    /* fall through to the boolean reading */
+  }
+  try {
+    if (typeof display?.is_grabbed === 'function') return display.is_grabbed() === true;
+  } catch {
+    /* no grab reading on this Shell */
+  }
+  return null;
+}
+
+/**
  * §17 cursor: which public mechanism this Shell exposes to move the pointer.
  * Probed, never assumed: `global.display.warp_pointer` exists in some Mutter
  * versions, `Clutter.Seat.warp_pointer` (public API) in this one. The cursor

@@ -115,6 +115,7 @@ A23-keybinding-focus
 A24-keybinding-float
 A80-platform-probe
 A83-injected-drag-is-event-confirmed
+A150-app-dnd-is-not-a-window-move
 
 # reason: describes exactly one screen; the default smoke is already a
 #   single-screen run, and the matrix runs cover the other counts, so it stays

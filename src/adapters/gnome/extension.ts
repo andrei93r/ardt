@@ -995,8 +995,12 @@ export default class AdrtExtension extends Extension {
       this.motionSkip = 'paused';
       return;
     }
-    if (this.session.isDragging || this.animator.activeCount > 0) {
-      this.motionSkip = this.session.isDragging ? 'dragging' : 'animating';
+    if (this.session.isDragging || this.session.clientInteractionActive || this.animator.activeCount > 0) {
+      this.motionSkip = this.session.isDragging
+        ? 'dragging'
+        : this.session.clientInteractionActive
+          ? 'client-dnd'
+          : 'animating';
       return;
     }
     if (this.workspaceAnimationActive()) {
@@ -2103,6 +2107,7 @@ export default class AdrtExtension extends Extension {
       motionRetiles: this.motionRetiles,
       motionTicks: this.motionTicks,
       motionSkip: this.motionSkip,
+      drag: this.session.dragState(),
       adaptations: this.registry.size,
       registry: this.registry.entries(),
       registrySize: this.registry.size,
