@@ -57,6 +57,10 @@
 #   crash: popups never tracked      A134-popup-never-tracked
 #   screen clamp (all windows       A136-clamp-to-screen
 #     stay inside the monitor)
+#   preferences / options (every    A140-prefs-options
+#     user-facing key has a working
+#     row; app pickers; a few
+#     options toggled and observed)
 #
 # Out of scope for a one-configuration smoke (kept in the full suite):
 #   multi-monitor routing/drags/rescue/replay (A105-A111, A122, A124),
@@ -118,3 +122,5 @@ A134-popup-never-tracked
 A136-clamp-to-screen
 # --- OS-sourced animation timing (refresh change, animation state) ---
 A138-os-timing
+# --- preferences / options: rows match the schema, a few toggles observed ---
+A140-prefs-options
