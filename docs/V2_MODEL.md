@@ -339,7 +339,126 @@ animation, all keybindings, gesture control, the prefs UI, session modes, histor
 rotation and retention, the D-Bus observability surface, profiles (as part of §12),
 and the pure-core/`platform` split.
 
-## 15. Decisions log
+## 16. Classification: what is tiled, and the escape rule
+
+Two categories, and one rule.
+
+**Never managed** (no slot, never moved or resized by adrt):
+
+| Window | Why |
+| --- | --- |
+| override-redirect (menus, tooltips, popups) | never even tracked |
+| desktop, dock, notification, splash, popup-menu, dropdown, tooltip | non-tileable kinds |
+| skip-taskbar (a drop-down terminal) | not part of the workspace layout |
+| genuinely sticky (pinned to every workspace) | belongs everywhere, not to one workspace |
+| a manual float: the float keybinding, or `neverTile` in the registry | the user's own decision |
+| **always-on-top (`above`)** — a picture-in-picture video, a widget | it asked to float above; we no longer tile it and no longer clear the flag (this reverses the old A61 behaviour) |
+| a **dialog, transient or attached dialog** | floats, is **centred on its parent** and raised |
+
+**Managed** (tiles): everything else, including a window on a non-primary monitor
+(monitor-implied `on-all-workspaces` is *not* stickiness), a window with no `wm_class`,
+and an XWayland window, which has no special path.
+
+**The escape rule**: a managed window that **does not fit its slot** — oversized,
+fixed-size (`min == max`), or refusing the geometry — is given **its own workspace to
+the right**, sized to itself and clamped between one sixth of the screen and the full
+screen (§10). Floats are therefore not the escape for "doesn't fit"; they are only
+the categories above. On a single-workspace-capable screen there is no workspace to
+give it, so it keeps its clamped size there (§10, §7).
+
+Two clarifications that follow from this:
+
+- An **app that opens maximized** (Files, Nautilus) is *not* a user maximise: it is
+  unmaximized and tiled with its sibling, and only a window left alone is maximized.
+- **Fullscreen** is the "does not fit" case: the *transition* moves the window to its
+  own workspace on a workspace-capable screen (in place otherwise), it is untouched
+  while fullscreen, it is recorded and restored by display memory, and leaving
+  fullscreen returns it to a slot like unmaximize.
+- **Heuristic modal detection** stays (title suffix after the last `" — "` matching
+  another live window's title), gated by `heuristic-modal-detect`, default on, and now
+  with an integration test.
+
+## 17. Keybindings (frozen surface)
+
+- `undo`, `focus cycle`, the four **focus** directions, the four **move** directions,
+  `move window to workspace` (next, previous, and by index), `float toggle`,
+  `nudge resize` (**both axes**), `fullscreen toggle`, `close focused`.
+- **Focus never crosses a workspace.** A **move** may: it is the only keyboard way a
+  window changes workspace, and `follow-moved-window` (default **on**) decides whether
+  the view follows it.
+- Nudge is a no-op on a lone maximized window (nothing to split) and on a
+  single-workspace screen with no free slot.
+- View switching (Super+1..9, Super+arrows) stays GNOME's.
+
+## 18. Animation policy
+
+- `disable-animations` turns off **everything**, including GNOME's own animations
+  (the Shell-wide `St.Settings.enable_animations`) as well as adrt's frame animations
+  and workspace slides.
+- With animations enabled: every model-driven geometry change animates using
+  `animation-duration`; our own workspace slides are **clone-free** (the
+  `animateSwitch` exception) so no window is ever drawn twice; the close ghost keeps
+  its settings.
+- The previous **maximise → workspace-switch** behaviour is the reference: the view
+  changes without clones and the window's own geometry animates. No jumps, no doubles,
+  no overshoot.
+
+## 19. Session modes
+
+- **Lock/unlock** pauses *new* work, hides the highlight, and **lets the queue finish
+  what is already in it** — nothing is dropped — then retiles once on resume.
+- **Screen sharing** keeps tiling and hides the highlight.
+- **Suspend** is treated as lock.
+
+## 20. Startup, adoption and enable-time normalisation
+
+- **On every enable, including mid-session**, each existing workspace is normalised:
+  the window with the **most visible surface** (its rect minus whatever is stacked
+  above it) is kept and **maximized**; **every other window on that workspace is
+  minimized**. If the workspace holds a single window, it is simply maximized.
+- Otherwise, existing windows are **adopted without being moved** until the first
+  drain, and the first lane-2 drain waits for `startup-complete`.
+- A window that opens on a workspace the user is **not** viewing is routed **in that
+  workspace** (tiled there, silently); only a window that opens on the workspace being
+  viewed can move the view, and only by creating a workspace to the right (§3).
+- Display memory may additionally put a window back on the **connector** it was on when
+  that connector is present at enable time (§9). There is no other session restore.
+- The first-run notification is kept, with `first-run-complete`.
+
+## 21. Debug notifications (the decision catalogue)
+
+Each entry is a checkbox in the debug settings; when ticked, that decision raises a
+live notification phrased as the decision itself, so the logic can be followed as it
+happens. All default off, deduplicated and rate-limited per event.
+
+| Notification | When |
+| --- | --- |
+| *"Workspace full → created one to the right"* | routing overflow |
+| *"Window did not fit → maximizing on the next workspace"* | the escape rule (§16) |
+| *"A client refused the split → the sibling adapted"* | §10 step 2 |
+| *"The sibling could not adapt → own workspace"* | §10 step 3 |
+| *"No room on this screen → floating"* | single-workspace / fixed-workspace overflow |
+| *"Maximizing → moving it to its own workspace"* | §4 |
+| *"Minimizing the other windows on this screen"* | §4, single-workspace maximise |
+| *"Empty workspace reaped"* | §5 |
+| *"Undo is no longer possible: the window is gone"* | §13 (also a user-facing toast) |
+| *"Highlight suppressed: <reason>"* / *"Highlight released"* | §11 |
+| *"Screen changed: <connector> <appeared|vanished>"* | §9 |
+| *"Window adopted and normalised"* | §20 |
+
+## 22. Journal and instrumentation
+
+- The journal is **append-only, one file per day, kept for at most 30 days**, rotated
+  by size into numbered parts exactly like the event history, with an in-memory tail
+  for `DumpEvents`.
+- Every entry carries a **monotonic sequence shared with the decision log**, so a
+  decision can be followed across the file.
+- Instrumentation is placed where it matters for later optimisation: the queue (depth,
+  drain time, items per drain), planning (plans computed), application (latency,
+  retries, refusals), host lookups, identity resolution, and journal writes. The Stage
+  0 counters remain the base.
+
+## 23. Decisions log
 
 1. **No eviction**; the only workspace changes are routing, maximize/unmaximize/
    fullscreen, a user move, and a disconnect (§2).
@@ -400,3 +519,15 @@ and the pure-core/`platform` split.
 - Changing the primary monitor.
 - A multi-entry or persisted undo history.
 - Any policy that runs inside a Mutter signal handler.
+24. **Classification** is ported as §16: never-managed categories stay untouched,
+    always-on-top floats (reversing A61), dialogs float/centre/raise, and the escape
+    for a window that does not fit is **its own workspace**, not a float.
+25. **Keybindings** are frozen with a workspace-move shortcut (the only keyboard
+    workspace change), `follow-moved-window` default on, and nudge on both axes.
+26. **`disable-animations` disables everything**, GNOME's animations included.
+27. **The queue finishes what is in it** when the session pauses; nothing is dropped.
+28. **Enable-time normalisation** runs on every enable: most-visible window maximized,
+    the rest minimized, per workspace.
+29. **Debug notifications** are per-decision checkboxes phrased as the decision (§21),
+    and the journal is append-only per day with 30-day retention (§22).
+

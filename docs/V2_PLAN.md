@@ -87,6 +87,16 @@ misbehaving-client path. The families the last revision added:
 - **screen-edge shifts**: axis change, work-area change (primary-only panel strut),
   gap change and occupancy rules when a window or focus crosses between two screens.
 
+## Business logic vs implementation tests
+
+The model's rules are **business logic and are tested as pure core tests** - fast,
+deterministic, no Shell and no compositor. The harness scenarios test only the
+**implementation**: that the adapter feeds the core the right inputs, applies the
+decisions to the right Mother calls, and produces the right events. A rule that cannot
+be expressed as a pure-core test is a rule that belongs further down the stack, so the
+split is enforced, not merely encouraged. Behaviour must be identical on `headless` and
+on a headful session; the harness proves the same scenarios hold on both.
+
 ## Targets and capabilities
 
 | Capability | `headless` (VM) | `session-like` (VM) | `session` (real) |
@@ -161,6 +171,12 @@ Implementation:
       missing every test trigger today); triggers named per the three-kind rule, old
       names kept as aliases for one commit.
 - [ ] `scripts/server-test.sh`: preflight + suite under the printed server env.
+- [ ] **Debug notification catalogue** (§21 of the model): one checkbox per decision,
+      phrased as the decision, deduplicated and rate-limited; notifications are a debug
+      facility, so they live behind the debug settings, not in the default UI.
+- [ ] **Journal format**: append-only, one file per day, 30-day retention, numbered
+      parts rotated by size, in-memory tail for `DumpEvents`, monotonic sequence shared
+      with the decision log.
 - [ ] Spec/CHANGELOG notes for the trigger rename.
 
 Target runs: `headless` (A80–A83, A22–A24) · `session-like` (A22–A24 + injection
@@ -219,6 +235,13 @@ Implementation:
 - [ ] Rewrite/retire the scenario set (table in the CHANGELOG) and spec/README
       sections §7, §9, §16, §35, §21 in the same commits.
 - [ ] `core/placement.test.ts` + `core/workspaces.test.ts` (~28 cases).
+- [ ] **The escape rule**: a managed window that does not fit its slot (oversized,
+      `min == max`, or refusing) gets its own workspace to the right, clamped to
+      [1/6, full screen]; never floated. Floats are reserved for the never-managed
+      categories (always-on-top, dialogs, manual marks, popups, drop-down terminals).
+- [ ] **Classification ported from the code inventory**: always-on-top floats
+      (reversing A61), dialogs and transients float/centre/raise, an app opening
+      maximized is unmaximized and tiled, fullscreen is the "does not fit" case.
 
 Target runs: `headless` (new + rewritten) · `session-like` (S02/S04/S05/S14
 rewritten) · `session` — *(PENDING Q5)*.
@@ -263,6 +286,13 @@ Implementation (pure modules parallelisable):
       placements per instance id (+ ordinal roll-up).
 - [ ] Prefs page for the registry (replaces the problem-windows page); settings
       migration + `EXTENSION_VERSION` bump; `tile:` rule modes dropped.
+- [ ] **New settings**: `follow-moved-window` (default on), `float-pins-workspace`
+      (default on), per-side gaps plus the between-window gap, `disable-animations`
+      extended to switch off GNOME's animations too, and the `debug` notification
+      checkboxes; `undo-stack-size`, `workspace-auto-name`,
+      `workspace-move-grace-seconds` and `respect-user-workspace-move` are removed.
+- [ ] **Enable-time normalisation** (§20): per workspace, the most-visible window is
+      maximized and the rest minimized, on every enable including mid-session.
 - [ ] Pure tests: identity per packaging format (incl. AppImage ancestors, Chromium's
       zeroed environment), re-keying, precedence, migration, ordinals (~20).
 
