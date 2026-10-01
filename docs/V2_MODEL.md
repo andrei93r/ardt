@@ -708,6 +708,10 @@ happens. All default off, deduplicated and rate-limited per event.
     scenario S24, confirmed): the workspace is kept by the float, the view stays on
     it and the float does not move. Works because `float-pins-workspace` is on.
 
+54. **A keyboard move onto a full workspace floats the window there** (test scenario
+    S25, confirmed): the destination keeps its pair, the moved window floats on top of
+    it, its former workspace keeps its survivor maximized, and the view follows.
+
 ## Deliberate non-goals
 
 
