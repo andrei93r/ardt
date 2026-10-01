@@ -971,6 +971,13 @@ export default class AdrtExtension extends Extension {
       ['min-size-policy', () => this.session.invalidateAll()],
       ['primary-apps', () => this.session.invalidateAll()],
       ['primary-app-ratio', () => this.session.invalidateAll()],
+      // Live-toggled behaviour keys: without these a change only lands on the
+      // next unrelated reconcile or the safety-net sweep (up to a minute).
+      ['cursor-follows-focus', () => this.session.invalidateAll()],
+      ['clamp-windows-to-screen', () => this.session.invalidateAll()],
+      ['float-persistence', () => this.session.invalidateAll()],
+      ['float-pins-workspace', () => this.session.invalidateAll()],
+      ['follow-moved-window', () => this.session.invalidateAll()],
       ['gaps-base', () => this.session.invalidateAll()],
       ['gaps-portrait', () => this.session.invalidateAll()],
       ['gaps-landscape', () => this.session.invalidateAll()],

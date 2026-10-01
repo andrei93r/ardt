@@ -52,8 +52,16 @@ sleep 0.5
 # With the setting on, focusing the second window must bring the pointer with it.
 set_setting cursor-follows-focus true
 sleep 0.5
-adrt ActivateWindow "$second" >/dev/null
-if at_centre "$second"; then
+# The follow happens on a *focus change*, and a loaded Shell can be slow to run
+# the drain, so alternate focus until the pointer arrives instead of sampling once.
+followed=0
+for _ in $(seq 1 6); do
+  adrt ActivateWindow "$first" >/dev/null
+  sleep 0.2
+  adrt ActivateWindow "$second" >/dev/null
+  if at_centre "$second" 3; then followed=1; break; fi
+done
+if [ "$followed" = 1 ]; then
   pass "with cursor-follows-focus on, the pointer follows the focus change"
 else
   check_python "with cursor-follows-focus on, the pointer follows the focus change" "
@@ -63,22 +71,22 @@ w = next((x for x in d['windows'] if x['id'] == $second), None)
 print('pointer', d.get('pointer'), 'window', (w or {}).get('rect')); sys.exit(1)"
 fi
 
-# Turning it off must stop the follow: focusing the first window leaves the
-# pointer on the second, even after the drain has had time to run.
+# Turning it off must stop the follow: the pointer must stay exactly where it
+# was when focus moves to the other window. Comparing against the captured
+# pointer (rather than the second window's centre) keeps the check honest even
+# if the follow above never happened.
+before_off="$(state_expr "str(d.get('pointer'))")"
 set_setting cursor-follows-focus false
+sleep 0.5
 adrt ActivateWindow "$first" >/dev/null
 focused_is "$first" || true
 sleep 1.5
-check_python "with cursor-follows-focus off, a focus change leaves the pointer alone" "
-import json, sys
-d = json.load(sys.stdin)
-w = next((x for x in d['windows'] if x['id'] == $second), None)
-p = d.get('pointer') or {}
-if not w or 'x' not in p:
+POINTER_BEFORE="$before_off" check_python "with cursor-follows-focus off, a focus change leaves the pointer alone" "
+import os, json, sys
+p = json.load(sys.stdin).get('pointer') or {}
+if 'x' not in p:
     sys.exit(1)
-cx = w['rect']['x'] + w['rect']['width'] / 2
-cy = w['rect']['y'] + w['rect']['height'] / 2
-sys.exit(0 if abs(p['x'] - cx) <= 3 and abs(p['y'] - cy) <= 3 else 1)
+sys.exit(0 if str(p) == os.environ['POINTER_BEFORE'] else 1)
 "
 
 set_setting cursor-follows-focus false

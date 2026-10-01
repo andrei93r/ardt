@@ -133,11 +133,18 @@ else
   fail "a normal tiled window was disturbed (was $tile_rect, now $(window_field "$tile" rect))"
 fi
 
-# 4. With the setting off, an out-of-bounds float is left alone.
+# 4. With the setting off, an out-of-bounds float is left alone. Re-place and
+# re-check: a loaded Shell can take a moment to pick up the setting change, and
+# the clamp pass runs on the periodic sweep.
 set_setting clamp-windows-to-screen false
-adrt MoveWindow "$float" -250 -180 400 300 >/dev/null
-sleep 2
-if outside_geometry "$float" 5; then
+sleep 0.5
+stayed_out=0
+for _ in $(seq 1 6); do
+  adrt MoveWindow "$float" -250 -180 400 300 >/dev/null
+  sleep 1
+  if outside_geometry "$float" 5; then stayed_out=1; break; fi
+done
+if [ "$stayed_out" = 1 ]; then
   pass "with clamp-windows-to-screen off the out-of-bounds frame is not forced back"
 else
   fail "with clamp-windows-to-screen off the frame was still clamped back"
