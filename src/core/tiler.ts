@@ -5,7 +5,7 @@
 import type { Rule, RuleContext, TileMode } from './rules.js';
 import { firstMatch } from './rules.js';
 import type { Rect, Screen, Size, TilePlan } from './types.js';
-import { Layer, SurfaceKind, clamp, snapRect } from './types.js';
+import { Layer, SurfaceKind, clamp, snap, snapRect, snapRectInward } from './types.js';
 
 export type MinSizePolicy = 'respect' | 'ignore' | 'stack';
 
@@ -175,24 +175,52 @@ interface SplitResult {
 }
 
 /**
- * Split the available rect along `axis` at `ratio` (fraction for the first
- * window), leaving one `gap` between the two windows.
+ * §10/§25: reconcile the boundary between two tiles at a fractional scale.
+ *
+ * `snapRect` rounds each tile's `x` and `width` independently, so at 125%/150%
+ * the two sides of the split can round in opposite directions — a sub-pixel
+ * seam where the pair should meet, or a 1 px overlap. Here the shared boundary
+ * is rounded *once* and both tiles are measured from it, so they meet exactly;
+ * `avail` has already been snapped inward (`snapRectInward`), so the pair can
+ * never overhang the work area. The caller keeps the plain split at an integer
+ * scale, so scale 1/2 geometry is byte-identical.
  */
-function splitAt(avail: Rect, gap: number, axis: SplitAxis, ratio: number): SplitResult {
+function reconcileSplit(rect0: Rect, rect1: Rect, avail: Rect, gap: number, axis: SplitAxis, scale: number): SplitResult {
+  const start = axis === 'horizontal' ? 'x' : 'y';
+  const size = axis === 'horizontal' ? 'width' : 'height';
+  const end = avail[start] + avail[size];
+  const boundary = clamp(snap(rect0[start] + rect0[size], scale), avail[start], end);
+  const between = Math.max(0, snap(gap, scale));
+  const secondStart = Math.min(boundary + between, end);
+  const out0: Rect = { ...rect0 };
+  const out1: Rect = { ...rect1 };
+  out0[start] = avail[start];
+  out0[size] = Math.max(0, boundary - avail[start]);
+  out1[start] = secondStart;
+  out1[size] = Math.max(0, end - secondStart);
+  return { rect0: out0, rect1: out1 };
+}
+
+/**
+ * Split the available rect along `axis` at `ratio` (fraction for the first
+ * window), leaving one `gap` between the two windows. At a fractional scale the
+ * two tiles are reconciled so they meet exactly (see `reconcileSplit`).
+ */
+function splitAt(avail: Rect, gap: number, axis: SplitAxis, ratio: number, scale: number): SplitResult {
   const extent = axisExtent(avail, axis);
   const split = Math.max(0, extent - gap);
   const first = split * ratio;
   const second = split - first;
-  if (axis === 'horizontal') {
-    return {
-      rect0: { x: avail.x, y: avail.y, width: first, height: avail.height },
-      rect1: { x: avail.x + first + gap, y: avail.y, width: second, height: avail.height },
-    };
-  }
-  return {
-    rect0: { x: avail.x, y: avail.y, width: avail.width, height: first },
-    rect1: { x: avail.x, y: avail.y + first + gap, width: avail.width, height: second },
-  };
+  const rect0: Rect =
+    axis === 'horizontal'
+      ? { x: avail.x, y: avail.y, width: first, height: avail.height }
+      : { x: avail.x, y: avail.y, width: avail.width, height: first };
+  const rect1: Rect =
+    axis === 'horizontal'
+      ? { x: avail.x + first + gap, y: avail.y, width: second, height: avail.height }
+      : { x: avail.x, y: avail.y + first + gap, width: avail.width, height: second };
+  if (scale <= 1 || Number.isInteger(scale)) return { rect0, rect1 };
+  return reconcileSplit(rect0, rect1, avail, gap, axis, scale);
 }
 
 function fitsAt(avail: Rect, gap: number, axis: SplitAxis, min0: Size, min1: Size): boolean {
@@ -236,7 +264,7 @@ function resolveRatio(w0: TilerWindow, w1: TilerWindow, axis: SplitAxis, config:
  * Minimum-size stack fallback (§6): both windows at their minimum size,
  * side by side when that fits, otherwise pinned to the two edges.
  */
-function stackLayout(avail: Rect, gap: number, w0: TilerWindow, w1: TilerWindow, prefer: SplitAxis): SplitResult {
+function stackLayout(avail: Rect, gap: number, w0: TilerWindow, w1: TilerWindow, prefer: SplitAxis, scale: number): SplitResult {
   const tries: SplitAxis[] = prefer === 'horizontal' ? ['horizontal', 'vertical'] : ['vertical', 'horizontal'];
   for (const axis of tries) {
     if (!fitsAt(avail, gap, axis, w0.min, w1.min)) continue;
@@ -263,7 +291,7 @@ function stackLayout(avail: Rect, gap: number, w0: TilerWindow, w1: TilerWindow,
   }
   // Neither minimum fits: split the available extent evenly so the plan stays
   // non-overlapping and inside the monitor.
-  return splitAt(avail, gap, prefer, 0.5);
+  return splitAt(avail, gap, prefer, 0.5, scale);
 }
 
 function place(id: number, rect: Rect, screen: Screen, order: number, max?: Size) {
@@ -295,7 +323,7 @@ function applyRuleOverride(override: RuleOverride, w0: TilerWindow, w1: TilerWin
   const other = win.id === w0.id ? w1 : w0;
   const left = override.mode === 'left-half' ? win : other;
   const right = override.mode === 'left-half' ? other : win;
-  const split = splitAt(avail, gap, 'horizontal', 0.5);
+  const split = splitAt(avail, gap, 'horizontal', 0.5, screen.scale);
   return {
     placements: [place(left.id, split.rect0, screen, 0, left.max), place(right.id, split.rect1, screen, 1, right.max)],
   };
@@ -324,7 +352,10 @@ export function computePlans(windows: readonly TilerWindow[], screen: Screen, co
 
   const gaps = resolveGaps(config, screen);
   const gap = gaps.between;
-  const avail = inset(screenArea(screen), gaps);
+  // §10/§25: fit the work area to the monitor's scale grid from the inside, so
+  // a fractional strut edge can never push a tile past the work area. This is a
+  // no-op at scale 1 and at integer scales.
+  const avail = snapRectInward(inset(screenArea(screen), gaps), screen.scale);
 
   if (byId.length === 1) {
     const only = byId[0];
@@ -365,18 +396,18 @@ export function computePlans(windows: readonly TilerWindow[], screen: Screen, co
 
   let split: SplitResult;
   if (config.minSizePolicy === 'stack') {
-    split = stackLayout(avail, gap, w0, w1, defaultAxis);
+    split = stackLayout(avail, gap, w0, w1, defaultAxis, screen.scale);
   } else if (config.minSizePolicy === 'ignore') {
-    split = splitAt(avail, gap, defaultAxis, clamp(ratio, 0.05, 0.95));
+    split = splitAt(avail, gap, defaultAxis, clamp(ratio, 0.05, 0.95), screen.scale);
   } else {
     const order: SplitAxis[] = defaultAxis === 'horizontal' ? ['horizontal', 'vertical'] : ['vertical', 'horizontal'];
     const chosen = order.find((axis) => fitsAt(avail, gap, axis, w0.min, w1.min));
     if (chosen === undefined) {
-      split = stackLayout(avail, gap, w0, w1, defaultAxis);
+      split = stackLayout(avail, gap, w0, w1, defaultAxis, screen.scale);
     } else {
       const base = resolveRatio(w0, w1, chosen, config);
       const clamped = clampRatioForMin(clamp(base, 0.05, 0.95), avail, gap, chosen, w0.min, w1.min);
-      split = splitAt(avail, gap, chosen, clamped);
+      split = splitAt(avail, gap, chosen, clamped, screen.scale);
     }
   }
 
