@@ -4,8 +4,10 @@ Companion to `docs/V2_MODEL.md` (**authority for behaviour**). This file is the
 **authority for order of work**, and it is the thing to follow: tick the boxes.
 Mirrored for the UI at `~/.opencode/plan/v2-plan.md`.
 
-Status: **awaiting answers to Q1–Q7 at the bottom.** Items marked `PENDING (Qn)`
-depend on those answers.
+Status: **every behaviour question is settled.** The model (§23, decisions 1–89) is
+closed and `docs/V2_LAYOUT_QA.md` has no open list. `docs/V2_MODEL.md` is the authority
+for behaviour; `docs/V2_TEST_MATRIX.md` (generated) is the source the core tests are
+written from; both are derived, not authoritative.
 
 ## Progress
 
@@ -27,7 +29,7 @@ depend on those answers.
       ticked, including its target runs.
 - [ ] **TDD for behaviour** (stages 2–6): write the failing scenarios **first**, run
       them, confirm they fail *for the intended reason*, then implement. The test
-      commit precedes the implementation commit. *(PENDING Q3 for strictness.)*
+      commit precedes the implementation commit.
 - [ ] **Bug fixes always get a regression scenario** that fails before and passes
       after, on both targets.
 - [ ] **Refactors** (0, 1, 6–8) prove no difference by leaving the existing suite
@@ -35,7 +37,7 @@ depend on those answers.
 - [ ] **Every scenario runs on both targets** through one API: `headless` (VM, fast,
       isolated, matrix, fault injection) and `session` (a real GNOME instance — the
       VM's session-like target and/or the laptop). Capability gaps are explicit skips
-      with a recorded reason, never silent. *(PENDING Q1, Q2, Q5.)*
+      with a recorded reason, never silent.
 - [ ] `DumpState` is **add-only per commit**: a key is removed or repurposed only by
       the commit that updates every scenario reading it.
 - [ ] Triggers are honest: `Inject*` = real input through Mutter; a plain command =
@@ -54,44 +56,78 @@ depend on those answers.
 Every feature and every fix lands with a **family** of tests, not a single case: one
 and two screens; workspace-capable, single-workspace-capable and fixed-workspace;
 landscape and portrait; `layout_rows === -1`; real apps; the refusal path; and the
-misbehaving-client path. The families the last revision added:
+misbehaving-client path.
+
+**The generated matrix is the source.** `scripts/core_seeds.py` holds one logical case
+per model rule and `scripts/gen-core-cases.py` expands it across screens, geometry
+profiles, the pair axis, positions, order and extras — 137 seeds to about 9 000 cases,
+catalogued in `docs/V2_TEST_MATRIX.md`. A stage's tests are written from the matching
+family there, seeds first, so the variations exist before the implementation does.
 
 - **routing**: right slot; split into a maximized single; create-to-the-right;
-  per-screen (never yanked); fixed-workspace routing; no creation on single/fixed screens.
+  per-screen (never yanked); fixed-workspace routing; no creation on single/fixed
+  screens; the escape rule; a window opening beside a fullscreen one.
 - **packing and reaping**: pair → close one → survivor maximized; close the last → reap
   and the view moves; a drop that empties a workspace → reap; a reconnect that empties
-  one → reap; the spare is never removed; a reorder of loaded workspaces survives.
-- **minimize law**: the slot is released while the window is hidden, a new window
-  takes it and splits with the visible partner, and restoring with no free slot
-  floats; then the three branches of the alone-minimized rule — moved into a
-  neighbour that holds windows, else into the right one, else left in place with the
-  workspace allowed to persist.
-- **maximize / unmaximize / fullscreen**: own workspace to the right; in place plus
-  minimizes the other windows on a single-workspace screen; unmaximize joins a
-  neighbour only when that neighbour holds **exactly one** window (left first, then
-  right), and otherwise moves it minimized into a neighbour that holds windows (left,
-  else right, else it stays); fullscreen recorded and restored; and a **user move**
-  onto a full workspace floats the window there rather than parking it.
+  one → reap; the spare is GNOME's and is never removed; a reorder of loaded workspaces
+  survives; the last workspace may stay empty.
+- **minimize law**: the slot is released while the window is hidden, a new window takes
+  it and splits with the visible partner, and restoring with no free slot floats; then
+  the three branches of the alone-minimized rule — moved into a neighbour that holds
+  windows, else into the right one, else left in place with the workspace allowed to
+  persist; a workspace that only looks empty is free for a newcomer.
+- **maximize / unmaximize / fullscreen**: own workspace to the right; in place with the
+  others minimized on a single-workspace screen (fullscreen too); unmaximize joins a
+  neighbour only when it holds **exactly one** window (left first, then right), and
+  otherwise moves it minimized into a neighbour that holds windows (left, else right,
+  else it stays); already maximized → nothing happens and a toast; fullscreen recorded
+  and restored.
+- **the trigger wins**: a split that cannot exist leaves the app the action was about on
+  the screen (alone, so maximized) and the reactor gives way — its own clamped
+  workspace, or minimized on a screen that has none; the two trade when one is restored.
 - **resize / refusal ladder**: the sibling follows an inner-edge drag; a refusing client
-  keeps its size and the sibling adapts; the sibling cannot adapt → own workspace,
-  size clamped to [1/6, full screen]; on a single-workspace screen the clamped size stays.
-- **cross-screen drags**: free slot; perimeter swap across screens; no room → float; a
-  maximized window un-maximized at the drop.
-- **gaps**: per-side and between-window, both orientations.
+  keeps its size and the sibling adapts; if the sibling cannot adapt either, the trigger
+  keeps the screen and the other gives way.
+- **drags and drops**: inner edge = ratio; a slight overlap swaps a pair; a **free slot
+  wins over a crossing**; a crossing swaps only with no free slot; no room → float where
+  it was dropped; a maximized window un-maximized at the drop; the slot on the side it
+  came from, across screens and across workspaces.
+- **floats**: the float key leaves the window exactly in place; a user move onto a full
+  workspace floats there; a restore onto a full workspace floats; overflow floats; a
+  float adrt places is offset and kept clickable; a user-placed float is untouched; a
+  float pins its workspace; floats are selectable by the cycle but never counted in a
+  drop; dialogs float, centred on their parent, raised; `neverTile` always floats.
+- **gaps**: per-side and between-window, both orientations; a gap change re-fits by ratio.
 - **work area**: top bar; a fixed dock; an autohiding dock (reserves nothing); a
   transient `-1×-1` reading; a stale index (the Mutter assertion class); an out-of-range
-  index; the settle after `workareas-changed`; a primary that changes.
-- **undo**: instance + configuration + ratios; recreating a deleted workspace; the toast
-  when an instance is gone or a slot was taken.
-- **directions**: same-plane focus and move; across a screen edge with a positional
-  match; onto a portrait screen and back; never a workspace switch.
-- **float placement**: a script-placed float is offset from the window beneath it; a
-  user-placed float is untouched.
+  index; the settle after `workareas-changed`; a primary that changes; every surface
+  change re-fits the windows by ratio.
+- **undo**: instance + configuration + ratios, a **swap** (two instances) and an
+  **un-float**; recreating a deleted workspace; the toast when an instance is gone or a
+  slot was taken; a routed new window is not an undoable change.
+- **directions and focus**: same-plane focus and move; across a screen edge with a
+  positional match; onto a portrait screen and back; never a workspace switch; a
+  direction with nothing stays silent; the cycle walks the current screen and workspace
+  — managed windows in slot order, then floats left to right, minimized skipped.
+- **view policy**: the view follows the app the action is about, and only on the viewed
+  workspace; a reactor never moves it; a fixed screen's routing switches to the window;
+  a screen without workspaces ignores the switch.
+- **toasts**: a request that changes nothing toasts with its reason (already maximized,
+  un-float with no room, move on a one-workspace screen, nothing to undo, nothing to
+  nudge); a direction with nothing is silent; the catalogue is deduplicated and
+  rate-limited.
+- **classification**: always-on-top floats; sticky and skip-taskbar windows are never
+  managed; an app that maps itself maximized is unmaximized and tiled; dialogs centre
+  and raise; an oversized or fixed-size client takes its own workspace.
 - **highlight diagnostics**: every transition (focus, each suppression, occlusion,
   workspace switch, overview, close ghost) is journalled with its reason and rect; no
   suppression is left stuck after any event class; the rect follows an animation.
-- **screen-edge shifts**: axis change, work-area change (primary-only panel strut),
-  gap change and occupancy rules when a window or focus crosses between two screens.
+- **enable and disable**: disabling leaves every window exactly as it is; enabling
+  normalises on every enable — a window covering 70% or more maximized with the rest
+  minimized, else the top two by visible surface paired — with floats and fullscreen
+  windows untouched.
+- **screen-edge shifts**: axis change, work-area change (primary-only panel strut), gap
+  change and occupancy rules when a window or focus crosses between two screens.
 
 ## Business logic vs implementation tests
 
@@ -140,13 +176,13 @@ on a headful session; the harness proves the same scenarios hold on both.
 `session-like` launcher (VM): isolated XDG tree + `dbus-run-session -- gnome-session`
 with `gnome-settings-daemon`, `xdg-desktop-portal{,-gnome}`, `polkitd`,
 `gnome-remote-desktop`; input via one long-lived `RemoteDesktop` client (peer-checked;
-`gdbus` cannot inject). *(PENDING Q1/Q2.)*
+`gdbus` cannot inject).
 
 ## Parallel work policy (conflict minimisation)
 
 - [ ] **Serial backbone.** `src/adapters/gnome/extension.ts` is touched by every stage,
       `host.ts` by seven; stages 1–3 all mutate the tiling/session/record path. Those
-      run **serially**, single writer, one worktree. *(PENDING Q6.)*
+      run **serially**, single writer, one worktree.
 - [ ] **Parallel-safe by construction**: research/verification (read-only agents);
       **new** `core/` modules with their tests (`queue`, `record`, `placement`,
       `workspaces`, `identity`, `appregistry`, `displays`, `replay`) — additive files,
@@ -204,7 +240,7 @@ Implementation:
 - [ ] Spec/CHANGELOG notes for the trigger rename.
 
 Target runs: `headless` (A80–A83, A22–A24) · `session-like` (A22–A24 + injection
-smoke) · `session` (A22–A24 unchanged via real input) — *(PENDING Q1/Q2)*.
+smoke) · `session` (A22–A24 unchanged via real input).
 
 ## Stage 1 — Queue mechanism and records (behaviour identical)
 
@@ -269,7 +305,7 @@ Implementation:
       maximized is unmaximized and tiled, fullscreen is the "does not fit" case.
 
 Target runs: `headless` (new + rewritten) · `session-like` (S02/S04/S05/S14
-rewritten) · `session` — *(PENDING Q5)*.
+rewritten) · `session`.
 
 ## Stage 3 — User-driven interactions
 
@@ -285,7 +321,7 @@ Implementation:
       slot-aware; the slot decision uses the window's rect centre and a re-read frame.
 - [ ] Cross-monitor drops: monitor chosen by Mutter (centre rule); free slot → take
       it; occupied slot → swap; the model's rules for a maximized drop and for a
-      single-workspace target. *(PENDING Q4.)*
+      single-workspace target.
 - [ ] Trailing spare cannot be reordered: revert + `Main.notify` toast.
 - [ ] Overview drop onto a single maximized window splits; onto a full pair floats.
 
@@ -403,8 +439,10 @@ Target runs: matrix on `headless` · `session-like` · `session` (real monitors)
 - **TDD**: super strict — failing tests (with variations) first for every feature and
   fix; a stage's tests must pass on `headless` **and** `session-like`; the hardware run
   is a tracked pending line.
-- **Cross-screen drop onto an occupied slot**: **swap** (the perimeter rule), never
-  float; float only when the target screen has no room at all.
+- **A drop, in order**: a **free slot wins** (on the side the window came from); only
+  with no free slot anywhere does a perimeter crossing **swap**; otherwise the window
+  floats where it was dropped. That is the free-slot-first ladder from the Q&A, and it
+  is what S3 (a full screen) and S13 (a pair) already did.
 - **Parallel work**: research, new `core/` modules and new scenario files only, each in
   its own worktree; hot files single-writer; one committer; the suite runs between
   merges.
