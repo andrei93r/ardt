@@ -47,6 +47,23 @@ fi
 # The sweep is timed, so a maximum must have been recorded.
 assert_num "the sweep is timed" '>' "$(state_expr 'd["counters"]["sweepMsMax"]')" 0
 
+# The classifier config is resolved once and reused: it is read for every window
+# on every pass, so a rebuild per call was the hottest allocation in the loop.
+builds_before="$(counter configBuilds)"
+classify_before="$(counter classifyCalls)"
+wait_settled 10
+builds_during="$(counter configBuilds)"
+classify_during="$(counter classifyCalls)"
+builds_delta=$((builds_during - builds_before))
+classify_delta=$((classify_during - classify_before))
+# It is read for every window on every pass, so the proof is the ratio, not a
+# fixed count: a write anywhere (including ours) legitimately busts the memo.
+if [ "$builds_delta" -le 10 ] && [ "$classify_delta" -gt "$((builds_delta * 5))" ]; then
+  pass "the classifier config is memoised ($classify_delta classifications cost $builds_delta build(s))"
+else
+  fail "the classifier config was rebuilt $builds_delta times for $classify_delta classifications"
+fi
+
 # A user-visible action is counted too: a split resize moves windows and logs.
 # Two opposite ratios guarantee the plan changes whichever ratio the pair is on,
 # and the counter is polled because a retile can land late under load.

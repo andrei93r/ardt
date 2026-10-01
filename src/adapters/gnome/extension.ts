@@ -715,6 +715,10 @@ export default class AdrtExtension extends Extension {
   // ------------------------------------------------------------- settings
 
   private watchSettings(): void {
+    // Any setting change drops the memoised classifier config: it is read per
+    // window per pass, and a stale config would be a correctness bug, not a perf
+    // win, so the invalidation is blanket.
+    this.settingWatchers.push(this.settings.onAnyChange(() => undefined));
     const reactive: [string, () => void][] = [
       ['exception-apps', () => this.session.invalidateAll()],
       ['rules-json', () => this.session.invalidateAll()],

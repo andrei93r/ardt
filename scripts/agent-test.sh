@@ -16,7 +16,10 @@ NESTED="$ROOT/scripts/nested-shell.sh"
 AGENT_DIR="$ROOT/tests/agent"
 BASE_STATE="${ADRT_BASE_STATE:-${XDG_RUNTIME_DIR:-/tmp}/adrt}"
 FILTER="${ADRT_SCENARIOS:-}"
-DEFAULT_WORKERS=$(( ($(nproc 2>/dev/null || echo 4) * 80) / 100 ))
+# Half the cores by default: the scenarios assert geometry within a settle, and a
+# machine that is also running a live GNOME session starves them at full load.
+# ADRT_WORKERS overrides this (the monitor matrix uses more).
+DEFAULT_WORKERS=$(( ($(nproc 2>/dev/null || echo 4) * 50) / 100 ))
 [ "$DEFAULT_WORKERS" -lt 1 ] && DEFAULT_WORKERS=1
 [ "$DEFAULT_WORKERS" -gt 16 ] && DEFAULT_WORKERS=16
 WORKERS="${ADRT_WORKERS:-$DEFAULT_WORKERS}"

@@ -39,6 +39,8 @@ export class GnomeSettings implements SettingsStore {
    * first caching pass.
    */
   private configBuildCount = 0;
+  /** The memoised classifier config; null means it must be rebuilt. */
+  private configCache: ClassifyConfig | null = null;
   private rulesParseCount = 0;
 
   constructor(private readonly settings: any) {}
@@ -60,7 +62,21 @@ export class GnomeSettings implements SettingsStore {
   }
 
   write(key: string, value: unknown): boolean {
-    return writeVariant(this.settings, key, value);
+    const ok = writeVariant(this.settings, key, value);
+    this.invalidateConfig();
+    return ok;
+  }
+
+  /**
+   * Subscribe to any change at all. Used for the cheap, blanket invalidations
+   * (the memoised config) next to the per-key reactive list.
+   */
+  onAnyChange(cb: () => void): () => void {
+    const id = this.settings.connect('changed', () => {
+      this.invalidateConfig();
+      cb();
+    });
+    return () => this.settings.disconnect(id);
   }
 
   onChanged(key: string, cb: (value: SettingValue) => void): () => void {
@@ -96,13 +112,25 @@ export class GnomeSettings implements SettingsStore {
     return parseRulesJson(this.string('rules-json', '[]'));
   }
 
+  /**
+   * The resolved classifier config, memoised until a setting changes. It is read
+   * for every window on every pass, so rebuilding it per call was the single
+   * hottest allocation in the loop (PERFORMANCE_PLAN stage 1, carried forward).
+   */
   classifierConfig(): ClassifyConfig {
+    if (this.configCache !== null) return this.configCache;
     this.configBuildCount += 1;
-    return {
+    this.configCache = {
       exceptionApps: this.strv('exception-apps'),
       heuristicModalDetect: this.boolean('heuristic-modal-detect', true),
       rules: this.boolean('rules-enabled', true) ? this.rules().rules : [],
     };
+    return this.configCache;
+  }
+
+  /** Drop the memoised config: any setting read may have changed. */
+  invalidateConfig(): void {
+    this.configCache = null;
   }
 
   tilerConfig(ratios: Readonly<Record<string, number>>, swapPairs: ReadonlySet<string>): TilerConfig {

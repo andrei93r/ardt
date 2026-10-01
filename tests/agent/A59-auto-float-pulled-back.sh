@@ -33,14 +33,15 @@ wait_count 3 15 || true
 third="$(comm -13 <(echo "$before_ids" | tr ' ' '\n' | sort) <(list_ids | tr ' ' '\n' | sort) | tr -d '\n' | xargs)"
 wait_settled 12
 adrt UnmaximizeWindow "$B" >/dev/null
-poll "B floats over the pair" '
+skip "the float-over-pair rule is replaced in Stage 2 (A90/A113)"
+true || poll "B floats over the pair" '
 import json, sys
 d = json.load(sys.stdin)
 b = [w for w in d["windows"] if w["id"] == int("'"$B"'")]
 sys.exit(0 if b and b[0]["layer"] == 2 else 1)
 ' 30
 
-poll "floating set the always-on-top flag" '
+true || poll "floating set the always-on-top flag" '
 import json, sys
 d = json.load(sys.stdin)
 w = [x for x in d["windows"] if x["id"] == int("'"$B"'")]

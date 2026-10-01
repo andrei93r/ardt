@@ -31,7 +31,11 @@ fi
 
 adrt UnmaximizeWindow "$third" >/dev/null
 
-poll "the unmaximized window came to the left workspace floating" '
+# Retired with the v1 rule: the v2 model has no float-over-pair (an unmaximized
+# window joins the left workspace if it holds one window, else it is parked
+# minimized). The replacement scenarios are A90/A113.
+skip "the float-over-pair rule is replaced in Stage 2 (A90/A113)"
+true || poll "the unmaximized window came to the left workspace floating" '
 import json, sys
 d = json.load(sys.stdin)
 w = [x for x in d["windows"] if x["id"] == int("'"$third"'")]

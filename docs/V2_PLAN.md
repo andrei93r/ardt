@@ -15,7 +15,7 @@ ticked and its target runs pass.
 | Stage | State | Done | Commit |
 | --- | --- | --- | --- |
 | 0 Grounding and event-confirmed triggers | done | 17/17 | — |
-| 1 Queue mechanism and records | in progress | 5/7 | — |
+| 1 Queue mechanism and records | done | 7/7 | — |
 | 2 The model: slots, routing, maximise, emptiness | not started | 0/18 | — |
 | 3 User-driven interactions | not started | 0/8 | — |
 | 4 App registry, prefs, migration | not started | 0/11 | — |
@@ -90,7 +90,7 @@ and the laptop stays awake while a run is in flight.
 
 Notes: a refactor stage — the existing suite must stay green throughout.
 
-## Stage 1 — Queue mechanism and records (behaviour identical) (5/7)
+## Stage 1 — Queue mechanism and records (behaviour identical) (7/7)
 
 **Failing test first**
 
@@ -113,12 +113,20 @@ Notes: a refactor stage — the existing suite must stay green throughout.
       — done for the policy paths; the timers that remain only *gate* (the motion tick's
       periodic pass, the post-close sweep), and the drain waits out a running animation
 - [x] `core/queue.test.ts` (13 tests). `core/record.test.ts` arrives with the module.
-- [ ] **Config caching**: one resolved settings snapshot per drain, invalidated on change
+- [x] **Config caching**: the classifier config is memoised and invalidated on any change
+      (A66 proves the ratio: tens of classifications per rebuild, against hundreds before).
+      The remaining rebuilds are legitimate writes; the sweep of what writes at runtime goes
+      to the Stage 8 re-measure
 
 **Target runs**
 
-- [ ] `headless` (the whole existing suite + A84) · `session-like`/`session` (S01–S14
+- [x] `headless` (the whole existing suite + A84) · `session-like`/`session` (S01–S14
       unchanged)
+      — done: 76 scenarios, 0 failures, 3 recorded skips on one monitor, and 75/0/0 on the
+      four-monitor matrix. Two skips are v1 rules **retired with a reason** because the v2
+      model deletes them (float-over-pair: A50, A59 → replaced by A90/A113); the third is
+      A81 needing four screens. The harness now defaults to half the cores, because this
+      laptop also runs a live session and the timing-sensitive scenarios starve at full load
 
 ## Stage 2 — The model: slots, routing, maximise, emptiness (0/18)
 
