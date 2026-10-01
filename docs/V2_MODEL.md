@@ -630,6 +630,12 @@ happens. All default off, deduplicated and rate-limited per event.
     take the left first. Restoring A onto a lone B gives `B | A`; maximizing `A | B`
     and then unmaximizing A also comes back as `B | A`.
 
+42. **An overview drag between workspaces** (test scenario S14): the dropped window
+    joins the target by the pair rule (`C | B` onto a maximized single), its former
+    workspace keeps its survivor maximized and is reaped only if it is now empty, and
+    the view stays on the workspace the drag started from; a drop onto a full pair
+    floats.
+
 ## Deliberate non-goals
 
 
