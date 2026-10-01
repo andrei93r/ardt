@@ -15,7 +15,7 @@ ticked and its target runs pass.
 | Stage | State | Done | Commit |
 | --- | --- | --- | --- |
 | 0 Grounding and event-confirmed triggers | done | 17/17 | — |
-| 1 Queue mechanism and records | in progress | 1/8 | — |
+| 1 Queue mechanism and records | in progress | 5/7 | — |
 | 2 The model: slots, routing, maximise, emptiness | not started | 0/18 | — |
 | 3 User-driven interactions | not started | 0/8 | — |
 | 4 App registry, prefs, migration | not started | 0/11 | — |
@@ -90,7 +90,7 @@ and the laptop stays awake while a run is in flight.
 
 Notes: a refactor stage — the existing suite must stay green throughout.
 
-## Stage 1 — Queue mechanism and records (behaviour identical) (1/8)
+## Stage 1 — Queue mechanism and records (behaviour identical) (5/7)
 
 **Failing test first**
 
@@ -99,17 +99,20 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 
 **Implementation**
 
-- [ ] `core/queue.ts`: `Map<lane, Map<key, event>>` — lanes 1 feedback / 2 layout /
+- [x] `core/queue.ts`: `Map<lane, Map<key, event>>` — lanes 1 feedback / 2 layout /
       3 maintenance; per-key coalescing; `push/drain/pending/depth`; injected clock
-- [ ] `core/record.ts`: `WindowRecord` plain object + predicates (`isTileable`,
-      `isFloating`, `isMinimized`, `isMaximized`, `isSticky`, `isUserMoving`);
-      `TrackedWindow` deleted (strangler)
-- [ ] Adapter: one deferred drain, **armed on demand and removed when empty** — lane 1 on
+- [~] `core/record.ts` — **moved to Stage 2, with a reason**: the policy that would own
+      the plain records is `session.ts`, which Stage 2 rewrites; adding the module now would
+      ship an abstraction with no consumer, and the predicates already live in
+      `core/classify.ts`. `core/record.test.ts` arrives with it.
+- [x] Adapter: one deferred drain, **armed on demand and removed when empty** — lane 1 on
       `BEFORE_REDRAW`, lane 2 on `META_LATER_RESIZE`, lane 3 on `IDLE`; ids tracked and
       removed on `disable()`; `mutatingWorkspaces` guard
-- [ ] Convert `scheduleReconcile`, `scheduleRetile`, the `addTimeout` users, the motion
+- [x] Convert `scheduleReconcile`, `scheduleRetile`, the `addTimeout` users, the motion
       watch, the coherence sweep and the drag watchdog to pushes and drains
-- [ ] `core/queue.test.ts` (12+) and `core/record.test.ts` (10+)
+      — done for the policy paths; the timers that remain only *gate* (the motion tick's
+      periodic pass, the post-close sweep), and the drain waits out a running animation
+- [x] `core/queue.test.ts` (13 tests). `core/record.test.ts` arrives with the module.
 - [ ] **Config caching**: one resolved settings snapshot per drain, invalidated on change
 
 **Target runs**
