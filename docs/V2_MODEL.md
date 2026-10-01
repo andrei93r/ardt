@@ -642,6 +642,12 @@ happens. All default off, deduplicated and rate-limited per event.
     arrival rule puts the newcomer in slot 1 (the bottom, with vertical workspaces);
     directions act on the pair's own axis first; gaps follow the axis.
 
+44. **A window opening on a workspace that is not being viewed is routed there**
+    (test scenario S16): tiled into a free slot, or maximized on a workspace created
+    immediately right of that one when it is full. The view never moves and the
+    window is never pulled onto the viewed workspace; a workspace whose only window
+    is minimized counts as free.
+
 ## Deliberate non-goals
 
 
