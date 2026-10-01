@@ -74,7 +74,9 @@ changes never move a window.
 - **The view follows the app the action is about** — the new window, the maximized or
   fullscreened one, the window whose own minimum changed — and only while that app is
   on the workspace being viewed. A window that merely *reacts*, forced onto its own
-  workspace by an arriving sibling, never moves the view.
+  workspace by an arriving sibling, never moves the view. A **float** is a window like
+  any other: the move keys move it (to another screen or another workspace) and it
+  stays a float.
 - Routing is decided **per arrival**: a second window always finds the first (a
   maximized single to split with), never a simultaneous evaluation of both.
 - **Slot order when a pair forms**: the window the change is *about* — routed, moved,
@@ -882,6 +884,17 @@ never debug-gated (the deduplication and rate limits still apply).
     window's outer edge, or of a lone maximized window, snaps back. The float key, a
     registry `neverTile` and §6's no-room cases are the only ways a window floats; a
     tiled window always fills its region.
+
+77. **The float key leaves the window exactly in place** (review gap 3): only floats
+    that adrt creates itself (the no-room cases) are placed off-centre.
+
+78. **The move keys move a float too** (review gap 4): a directional or
+    move-to-workspace request moves a focused float to the target screen or workspace,
+    keeping it floating, at the size it had.
+
+79. **A request that changes nothing toasts, even "already maximized"** (review gap
+    5): pressing maximize or fullscreen on an already-maximized window leaves it as it
+    is and says so.
 
 ## Deliberate non-goals
 
