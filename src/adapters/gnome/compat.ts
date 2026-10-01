@@ -4,12 +4,14 @@
 
 /**
  * Version-specific API normalization (§41.4). Everything that differs between
- * Shell 48/49/50 — and every capability probe — lives here; no other adapter
+ * Shell 48/49/50/51 — and every capability probe — lives here; no other adapter
  * file uses `typeof x === 'function'` (§4.2).
  */
 
 import Clutter from 'gi://Clutter';
+import Gio from 'gi://Gio';
 import Meta from 'gi://Meta';
+import St from 'gi://St';
 import { PACKAGE_VERSION } from 'resource:///org/gnome/shell/misc/config.js';
 
 import { SurfaceKind } from '../../core/types.js';
@@ -114,6 +116,225 @@ export function hasDevkit(): boolean {
 }
 
 /**
+ * The Clutter backend. GNOME 51 removed `Clutter.get_default_backend()`, so the
+ * supported replacement — `global.stage.context.get_backend()`, or an actor's
+ * `get_context().get_backend()` — is tried first. The old getter remains the
+ * fallback for 48–50. Probed, never assumed.
+ */
+export function defaultBackend(): any | null {
+  try {
+    const stage: any = (global as any)?.stage;
+    if (stage !== null && stage !== undefined) {
+      const context = typeof stage.get_context === 'function' ? stage.get_context() : stage.context;
+      const backend = typeof context?.get_backend === 'function' ? context.get_backend() : null;
+      if (backend !== null && backend !== undefined) return backend;
+    }
+  } catch {
+    /* no stage/context yet (headless before the stage exists) */
+  }
+  try {
+    if (typeof (Clutter as any).get_default_backend === 'function') return (Clutter as any).get_default_backend();
+  } catch {
+    /* removed in 51 */
+  }
+  return null;
+}
+
+/** The default Clutter seat, through whichever backend accessor this Shell has. */
+export function defaultSeat(): any | null {
+  const backend = defaultBackend();
+  if (backend === null) return null;
+  try {
+    return typeof backend.get_default_seat === 'function' ? backend.get_default_seat() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * GNOME 51 renamed `St.ButtonMask.ONE/TWO/THREE` to `PRIMARY/MIDDLE/SECONDARY`
+ * (the old names remain as deprecated aliases). Map the semantic button onto
+ * whichever spelling this Shell exposes; 0 when the mask is unavailable.
+ */
+export function stButtonMask(button: 'primary' | 'middle' | 'secondary'): number {
+  const mask: any = (St as any)?.ButtonMask ?? {};
+  const candidates =
+    button === 'primary' ? ['PRIMARY', 'ONE'] : button === 'middle' ? ['MIDDLE', 'TWO'] : ['SECONDARY', 'THREE'];
+  for (const name of candidates) {
+    if (typeof mask[name] === 'number') return mask[name];
+  }
+  return 0;
+}
+
+/**
+ * GNOME 51 moved reduced motion onto `St.Settings` as the `St.ReducedMotion`
+ * enum (`NO_PREFERENCE=0`, `REDUCE=1`); 48–50 expose no such preference here.
+ * Returns true/false, or null when this Shell has no reading.
+ */
+export function stReducedMotion(): boolean | null {
+  let settings: any;
+  try {
+    settings = (St as any)?.Settings?.get?.();
+  } catch {
+    return null;
+  }
+  if (settings === null || settings === undefined) return null;
+  let value: unknown;
+  try {
+    value = settings.reduced_motion ?? settings['reduced-motion'];
+  } catch {
+    return null;
+  }
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    const reduce = (St as any)?.ReducedMotion?.REDUCE;
+    return value === (typeof reduce === 'number' ? reduce : 1);
+  }
+  return null;
+}
+
+/**
+ * Close a Shell popup menu. GNOME 51 replaced the single `PopupAnimation`
+ * argument with a `{animate, fadeOnly}` parameters object; the object form is
+ * tried first and the enum argument is the fallback, so both generations work.
+ */
+export function closePopupMenu(menu: any, animate = false): void {
+  if (menu === null || menu === undefined || typeof menu.close !== 'function') return;
+  try {
+    menu.close({ animate });
+    return;
+  } catch {
+    /* pre-51 signature: an object is not a PopupAnimation */
+  }
+  try {
+    menu.close(animate ? 1 : 0);
+  } catch {
+    /* nothing to close */
+  }
+}
+
+/**
+ * A `Gio.DBusProxy` wrapper factory. GJS exposes it on `Gio.DBusProxy` (older
+ * builds also on `Gio.DBus`); GNOME 51 returns a `Gio.DBusProxy` subclass where
+ * earlier Shells returned a plain constructor — both are invoked with `new`, so
+ * callers get the constructor either way. Null when this GJS has no wrapper.
+ */
+export function makeProxyWrapper(interfaceXml: string): any {
+  const factory =
+    typeof (Gio as any)?.DBus?.makeProxyWrapper === 'function'
+      ? (Gio as any).DBus.makeProxyWrapper
+      : typeof (Gio as any)?.DBusProxy?.makeProxyWrapper === 'function'
+        ? (Gio as any).DBusProxy.makeProxyWrapper
+        : null;
+  if (factory === null) return null;
+  try {
+    return factory(interfaceXml);
+  } catch {
+    return null;
+  }
+}
+
+export type NormalizedGesturePhase = 'begin' | 'update' | 'end' | 'cancel';
+
+export interface TouchpadGestureReading {
+  type: 'swipe' | 'pinch';
+  phase: NormalizedGesturePhase;
+  fingers: number;
+  /** Unaccelerated motion delta for a swipe; 0 for a pinch. */
+  deltaX: number;
+  deltaY: number;
+  /** Current pinch scale (1.0 at begin); 1 for a swipe. */
+  scale: number;
+}
+
+/**
+ * The modern Clutter gesture recognizer (`Clutter.PanGesture`, a
+ * `Clutter.Gesture`) is what GNOME Shell itself drives; the pre-45
+ * `Clutter.GestureAction` no longer exists. Both `Clutter.get_default_backend`
+ * and this are probed, never assumed.
+ */
+export function hasPanGesture(): boolean {
+  return typeof (Clutter as any)?.PanGesture === 'function';
+}
+
+/** Whether the Shell delivers raw touchpad swipe/pinch gesture events. */
+export function hasTouchpadGestureEvents(): boolean {
+  try {
+    const types: any = (Clutter as any)?.EventType;
+    return typeof types?.TOUCHPAD_SWIPE === 'number' && typeof types?.TOUCHPAD_PINCH === 'number';
+  } catch {
+    return false;
+  }
+}
+
+/** The legacy pre-45 gesture action, kept as the last-resort fallback. */
+export function hasLegacyGestureAction(): boolean {
+  return typeof (Clutter as any)?.GestureAction === 'function';
+}
+
+function touchpadPhase(event: any): NormalizedGesturePhase | null {
+  let phase: unknown;
+  try {
+    phase = event.get_gesture_phase?.();
+  } catch {
+    return null;
+  }
+  const phases: any = (Clutter as any)?.TouchpadGesturePhase ?? {};
+  if (phase === phases.BEGIN) return 'begin';
+  if (phase === phases.UPDATE) return 'update';
+  if (phase === phases.END) return 'end';
+  if (phase === phases.CANCEL) return 'cancel';
+  return null;
+}
+
+/**
+ * Normalise one `Clutter.Event` into the adapter's gesture vocabulary: its type,
+ * phase, finger count and swipe delta / pinch scale. Returns null for anything
+ * that is not a touchpad swipe or pinch.
+ */
+export function readTouchpadGesture(event: any): TouchpadGestureReading | null {
+  if (event === null || event === undefined) return null;
+  let type: unknown;
+  try {
+    type = event.type();
+  } catch {
+    return null;
+  }
+  const types: any = (Clutter as any)?.EventType ?? {};
+  const pinch = type === types.TOUCHPAD_PINCH;
+  if (!pinch && type !== types.TOUCHPAD_SWIPE) return null;
+  const phase = touchpadPhase(event);
+  if (phase === null) return null;
+  let fingers = 0;
+  try {
+    fingers = Number(event.get_touchpad_gesture_finger_count?.() ?? 0);
+  } catch {
+    fingers = 0;
+  }
+  let deltaX = 0;
+  let deltaY = 0;
+  let scale = 1;
+  if (pinch) {
+    try {
+      const reading = Number(event.get_gesture_pinch_scale?.() ?? 1);
+      if (Number.isFinite(reading) && reading > 0) scale = reading;
+    } catch {
+      scale = 1;
+    }
+  } else {
+    try {
+      const [dx, dy] = event.get_gesture_motion_delta_unaccelerated();
+      deltaX = Number(dx) || 0;
+      deltaY = Number(dy) || 0;
+    } catch {
+      deltaX = 0;
+      deltaY = 0;
+    }
+  }
+  return { type: pinch ? 'pinch' : 'swipe', phase, fingers, deltaX, deltaY, scale };
+}
+
+/**
  * Fully convert a GVariant to JS. `unpack()` leaves nested arrays as Variant
  * objects (so an `as` key would stringify to "[object variant of type s]").
  */
@@ -177,7 +398,7 @@ export function cursorCapabilities(): {
   }
   let seatWarp = false;
   try {
-    const seat = Clutter.get_default_backend()?.get_default_seat?.();
+    const seat = defaultSeat();
     seatWarp = typeof seat?.warp_pointer === 'function';
   } catch {
     seatWarp = false;

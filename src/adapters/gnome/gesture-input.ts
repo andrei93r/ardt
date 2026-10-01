@@ -6,12 +6,30 @@
  * Touchpad gesture wiring (§41). All decisions live in `core/gestures.ts`;
  * this file only produces `GestureEvent`s and dispatches `GestureAction`s.
  * `simulate()` is the D-Bus `SimulateGesture` path (§41.1).
+ *
+ * §41.4 real wiring: modern Shells recognise gestures with the Clutter gesture
+ * stack. Two feature-detected sources feed the pure machine:
+ *
+ *  1. raw `event::touchpad` swipe/pinch events on the stage, which carry the
+ *     finger count, the unaccelerated motion delta and the pinch scale. This is
+ *     the only source that sees 4-finger swipes and pinch gestures.
+ *  2. a `Clutter.PanGesture` recognizer on the stage, which covers touchscreen
+ *     pans (three to four points) and is the recogniser GNOME Shell itself uses.
+ *
+ * The pre-45 `Clutter.GestureAction` is kept only as a last-resort fallback for
+ * a Shell where neither modern source exists; it cannot distinguish finger
+ * counts, so 4-finger and pinch are unavailable there.
+ *
+ * `gesture-enabled` gates every path (the adapter is not installed at all when
+ * off, so GNOME's own gestures are untouched) and `gesture-sensitivity` is the
+ * travel threshold, applied by `feedGesture` (§41.2).
  */
 
 import Clutter from 'gi://Clutter';
 
-import type { GestureAction, GestureConfig, GestureKind, GestureState } from '../../core/gestures.js';
+import type { GestureAction, GestureConfig, GestureKind, GesturePhase, GestureState } from '../../core/gestures.js';
 import { feedGesture, initialGestureState } from '../../core/gestures.js';
+import * as compat from './compat.js';
 import type { History } from './history.js';
 import type { GnomeSettings } from './settings.js';
 
@@ -24,12 +42,55 @@ export interface GestureDispatcher {
 }
 
 const SIMULATED_STEPS = 4;
+/** Travel a raw touchpad/pan swipe must accumulate before it commits to an axis. */
+const SWIPE_COMMIT_PX = 16;
+/** Pixels one unit of pinch scale counts as, so pinch uses the same threshold. */
+const PINCH_TRAVEL_PX = 600;
+/** Scale change that commits a pinch to in/out, ignoring jitter. */
+const PINCH_COMMIT = 0.02;
+const MIN_SWIPE_FINGERS = 3;
+const MAX_SWIPE_FINGERS = 4;
+
+interface SwipeTracker {
+  kind: GestureKind | null;
+  fingers: number;
+  dx: number;
+  dy: number;
+  /** True once the axis has been decided and a `begin` has been fed. */
+  started: boolean;
+}
+
+interface PinchTracker {
+  kind: GestureKind | null;
+  fingers: number;
+  /** Last scale fed, so per-update deltas can be derived. */
+  scale: number;
+  started: boolean;
+}
+
+function emptySwipe(): SwipeTracker {
+  return { kind: null, fingers: MIN_SWIPE_FINGERS, dx: 0, dy: 0, started: false };
+}
+
+function emptyPinch(): PinchTracker {
+  return { kind: null, fingers: 2, scale: 1, started: false };
+}
 
 export class GestureInput {
   private state: GestureState = initialGestureState();
+  /** Legacy `Clutter.GestureAction` (last-resort fallback only). */
   private action: any = null;
   private signalIds: number[] = [];
   private lastPointer: [number, number] | null = null;
+  /** Modern `Clutter.PanGesture` recognizer on the stage. */
+  private panGesture: any = null;
+  private panSignalIds: number[] = [];
+  private pan: SwipeTracker = emptySwipe();
+  /** Raw touchpad swipe/pinch events on the stage. */
+  private stage: any = null;
+  private touchpadSignalId = 0;
+  private touchpad: SwipeTracker = emptySwipe();
+  private pinch: PinchTracker = emptyPinch();
 
   constructor(
     private readonly settings: GnomeSettings,
@@ -41,7 +102,11 @@ export class GestureInput {
     this.disable();
     // §41.5: when every configured action matches GNOME's own, defer to GNOME.
     if (!this.config().enabled || !this.overridesBuiltin()) return;
-    this.connectClutterAction();
+    // §41.4: prefer the modern recognizers; only a Shell without both falls
+    // back to the legacy private action.
+    const touchpad = this.attachTouchpadGestures();
+    const pan = this.attachPanGesture();
+    if (!touchpad && !pan) this.connectClutterAction();
   }
 
   enable(): void {
@@ -49,15 +114,44 @@ export class GestureInput {
   }
 
   disable(): void {
-    if (this.action === null) return;
-    for (const id of this.signalIds) this.action.disconnect(id);
-    this.signalIds = [];
-    global.stage.remove_action(this.action);
-    this.action = null;
+    if (this.touchpadSignalId !== 0) {
+      try {
+        this.stage?.disconnect(this.touchpadSignalId);
+      } catch {
+        /* stage gone */
+      }
+      this.touchpadSignalId = 0;
+    }
+    this.stage = null;
+    if (this.panGesture !== null) {
+      for (const id of this.panSignalIds) {
+        try {
+          this.panGesture.disconnect(id);
+        } catch {
+          /* action gone */
+        }
+      }
+      this.panSignalIds = [];
+      try {
+        global.stage.remove_action(this.panGesture);
+      } catch {
+        /* action gone */
+      }
+      this.panGesture = null;
+    }
+    if (this.action !== null) {
+      for (const id of this.signalIds) this.action.disconnect(id);
+      this.signalIds = [];
+      global.stage.remove_action(this.action);
+      this.action = null;
+    }
+    this.touchpad = emptySwipe();
+    this.pinch = emptyPinch();
+    this.pan = emptySwipe();
   }
 
   get hasRealWiring(): boolean {
-    return this.action !== null;
+    return this.action !== null || this.panGesture !== null || this.touchpadSignalId !== 0;
   }
 
   /**
@@ -144,10 +238,207 @@ export class GestureInput {
     );
   }
 
-  private connectClutterAction(): void {
-    if (typeof Clutter.GestureAction !== 'function') return;
+  /** Feed one normalised event into the pure machine with the live config. */
+  private feed(kind: GestureKind, phase: GesturePhase, deltaX: number, deltaY: number, touchPoints: number): GestureAction | null {
+    return feedGesture(
+      this.state,
+      {
+        kind,
+        phase,
+        progress: phase === 'end' ? 1 : 0,
+        deltaX,
+        deltaY,
+        direction: null,
+        touchPoints,
+        timestampUs: 0,
+      },
+      this.config(),
+    );
+  }
+
+  private swipeKind(fingers: number, horizontal: boolean): GestureKind {
+    const four = fingers >= MAX_SWIPE_FINGERS;
+    if (horizontal) return four ? 'swipe-4-horizontal' : 'swipe-3-horizontal';
+    return four ? 'swipe-4-vertical' : 'swipe-3-vertical';
+  }
+
+  /**
+   * Decide the axis of a pending swipe once it has travelled far enough, then
+   * feed the state machine's `begin`. Returns true once committed.
+   */
+  private commitSwipe(tracker: SwipeTracker, fingers: number): boolean {
+    if (tracker.started) return true;
+    if (Math.hypot(tracker.dx, tracker.dy) < SWIPE_COMMIT_PX) return false;
+    const horizontal = Math.abs(tracker.dx) >= Math.abs(tracker.dy);
+    tracker.kind = this.swipeKind(fingers, horizontal);
+    tracker.started = true;
+    this.state = initialGestureState();
+    this.feed(tracker.kind, 'begin', 0, 0, fingers);
+    return true;
+  }
+
+  private finishSwipe(tracker: SwipeTracker, phase: 'end' | 'cancel'): void {
+    if (!tracker.started || tracker.kind === null) return;
+    const action = this.feed(tracker.kind, phase, 0, 0, tracker.fingers);
+    if (action !== null && action.type !== 'none') this.apply(action);
+  }
+
+  // ---------------------------------------------------------- raw touchpad
+
+  private attachTouchpadGestures(): boolean {
+    if (!compat.hasTouchpadGestureEvents()) return false;
+    const stage: any = global.stage;
+    if (stage === null || stage === undefined || typeof stage.connect !== 'function') return false;
     try {
-      this.action = new Clutter.GestureAction();
+      this.touchpadSignalId = stage.connect('event::touchpad', (_stage: any, event: any) => this.onTouchpadEvent(event));
+      this.stage = stage;
+      return true;
+    } catch (e) {
+      console.error(`[adrt] failed to install touchpad gesture listener: ${(e as Error).message}`);
+      this.touchpadSignalId = 0;
+      this.stage = null;
+      return false;
+    }
+  }
+
+  /** Return `EVENT_STOP` once we own a gesture, so GNOME's own handler defers. */
+  private onTouchpadEvent(event: any): boolean {
+    if (!this.config().enabled) return Clutter.EVENT_PROPAGATE;
+    const reading = compat.readTouchpadGesture(event);
+    if (reading === null) return Clutter.EVENT_PROPAGATE;
+    return reading.type === 'pinch' ? this.onTouchpadPinch(reading) : this.onTouchpadSwipe(reading);
+  }
+
+  private onTouchpadSwipe(reading: compat.TouchpadGestureReading): boolean {
+    const fingers = reading.fingers;
+    if (fingers < MIN_SWIPE_FINGERS || fingers > MAX_SWIPE_FINGERS) return Clutter.EVENT_PROPAGATE;
+
+    if (reading.phase === 'begin') {
+      this.touchpad = emptySwipe();
+      this.touchpad.fingers = fingers;
+      // Own the gesture from its first event so GNOME's built-in tracker never
+      // starts it in parallel; the action is only dispatched once it commits.
+      return Clutter.EVENT_STOP;
+    }
+    if (reading.phase === 'update') {
+      this.touchpad.dx += reading.deltaX;
+      this.touchpad.dy += reading.deltaY;
+      if (this.commitSwipe(this.touchpad, fingers)) {
+        this.feed(this.touchpad.kind as GestureKind, 'update', reading.deltaX, reading.deltaY, fingers);
+      }
+      return Clutter.EVENT_STOP;
+    }
+
+    this.finishSwipe(this.touchpad, reading.phase === 'cancel' ? 'cancel' : 'end');
+    this.touchpad = emptySwipe();
+    return Clutter.EVENT_STOP;
+  }
+
+  private commitPinch(scale: number, fingers: number): boolean {
+    if (this.pinch.started) return true;
+    if (Math.abs(scale - 1) < PINCH_COMMIT) return false;
+    this.pinch.kind = scale < 1 ? 'pinch-in' : 'pinch-out';
+    this.pinch.started = true;
+    this.pinch.scale = scale;
+    this.state = initialGestureState();
+    this.feed(this.pinch.kind, 'begin', 0, 0, fingers);
+    return true;
+  }
+
+  private onTouchpadPinch(reading: compat.TouchpadGestureReading): boolean {
+    const fingers = reading.fingers > 0 ? reading.fingers : 2;
+
+    if (reading.phase === 'begin') {
+      this.pinch = emptyPinch();
+      this.pinch.fingers = fingers;
+      this.pinch.scale = reading.scale;
+      return Clutter.EVENT_STOP;
+    }
+    if (reading.phase === 'update') {
+      if (this.commitPinch(reading.scale, fingers)) {
+        const delta = (reading.scale - this.pinch.scale) * PINCH_TRAVEL_PX;
+        this.pinch.scale = reading.scale;
+        this.feed(this.pinch.kind as GestureKind, 'update', delta, 0, fingers);
+      }
+      return Clutter.EVENT_STOP;
+    }
+
+    if (this.pinch.started && this.pinch.kind !== null) {
+      const delta = (reading.scale - this.pinch.scale) * PINCH_TRAVEL_PX;
+      if (delta !== 0) this.feed(this.pinch.kind, 'update', delta, 0, fingers);
+      const action = this.feed(this.pinch.kind, reading.phase === 'cancel' ? 'cancel' : 'end', 0, 0, fingers);
+      if (action !== null && action.type !== 'none') this.apply(action);
+    }
+    this.pinch = emptyPinch();
+    return Clutter.EVENT_STOP;
+  }
+
+  // ------------------------------------------------------- pan recognizer
+
+  private attachPanGesture(): boolean {
+    if (!compat.hasPanGesture()) return false;
+    try {
+      const PanGesture = (Clutter as any).PanGesture;
+      this.panGesture = new PanGesture({
+        min_n_points: MIN_SWIPE_FINGERS,
+        max_n_points: MAX_SWIPE_FINGERS,
+        pan_axis: (Clutter as any)?.PanAxis?.BOTH ?? 0,
+      });
+      this.panSignalIds.push(this.panGesture.connect('recognize', () => this.onPanRecognize()));
+      this.panSignalIds.push(this.panGesture.connect('pan-update', () => this.onPanUpdate()));
+      this.panSignalIds.push(this.panGesture.connect('end', () => this.onPanEnd(false)));
+      this.panSignalIds.push(this.panGesture.connect('cancel', () => this.onPanEnd(true)));
+      global.stage.add_action(this.panGesture);
+      return true;
+    } catch (e) {
+      console.error(`[adrt] failed to install pan gesture recognizer: ${(e as Error).message}`);
+      this.panSignalIds = [];
+      this.panGesture = null;
+      return false;
+    }
+  }
+
+  private onPanRecognize(): void {
+    let fingers = MIN_SWIPE_FINGERS;
+    try {
+      const points = Number(this.panGesture?.get_n_points?.() ?? MIN_SWIPE_FINGERS);
+      if (points >= MIN_SWIPE_FINGERS && points <= MAX_SWIPE_FINGERS) fingers = points;
+    } catch {
+      fingers = MIN_SWIPE_FINGERS;
+    }
+    this.pan = emptySwipe();
+    this.pan.fingers = fingers;
+  }
+
+  private onPanUpdate(): void {
+    if (!this.config().enabled) return;
+    let dx = 0;
+    let dy = 0;
+    try {
+      const delta = this.panGesture?.get_delta_abs?.();
+      dx = Number(delta?.get_x?.() ?? delta?.x ?? 0) || 0;
+      dy = Number(delta?.get_y?.() ?? delta?.y ?? 0) || 0;
+    } catch {
+      dx = 0;
+      dy = 0;
+    }
+    this.pan.dx += dx;
+    this.pan.dy += dy;
+    if (!this.commitSwipe(this.pan, this.pan.fingers)) return;
+    this.feed(this.pan.kind as GestureKind, 'update', dx, dy, this.pan.fingers);
+  }
+
+  private onPanEnd(cancelled: boolean): void {
+    this.finishSwipe(this.pan, cancelled ? 'cancel' : 'end');
+    this.pan = emptySwipe();
+  }
+
+  // ------------------------------------------------------ legacy fallback
+
+  private connectClutterAction(): void {
+    if (!compat.hasLegacyGestureAction()) return;
+    try {
+      this.action = new (Clutter as any).GestureAction();
       global.stage.add_action(this.action);
       this.signalIds.push(this.action.connect('gesture-begin', () => this.onClutterPhase('begin')));
       this.signalIds.push(this.action.connect('gesture-end', () => this.onClutterPhase('end')));
@@ -160,8 +451,9 @@ export class GestureInput {
   }
 
   /**
-   * GNOME 48/49 expose begin/end only; direction comes from the pointer delta.
-   * The pure machine still owns the threshold decision and the action.
+   * Legacy path only: the pre-45 action exposes begin/end without a finger
+   * count, so direction comes from the pointer delta and every swipe is treated
+   * as three-finger. Modern Shells never reach this.
    */
   private onClutterPhase(phase: 'begin' | 'end' | 'cancel'): void {
     const [x, y] = global.get_pointer();
