@@ -369,6 +369,8 @@ appId → {
   produced them.
 - **Exactly one change** is held, in memory only; a restart clears it.
 - Undoing an unmaximize **recreates** the workspace that unmaximize deleted.
+- That includes the less obvious changes: a **drag-swap** (both instances and their
+  slots) and an **un-float** (the float flag) are undoable like anything else.
 - **A routed new window is not the change**: it was never on another workspace, so
   undo leaves it exactly where it is and acts on the previous change — or reports
   that there is nothing to undo.
@@ -434,8 +436,10 @@ Two clarifications that follow from this:
   single-workspace screen with no free slot.
 - **An impossible request is announced, never silent**: moving a window to the next
   workspace while its screen has only one raises a plain-language notification, as
-  does an undo with nothing to revert. Notifications follow the catalogue's
-  deduplication and rate limits (§21).
+  does an undo with nothing to revert. The one silent exception is a **focus or move
+  direction with nothing that way** — pressing right with nothing to the right does
+  nothing and says nothing. Notifications follow the catalogue's deduplication and
+  rate limits (§21).
 - View switching (Super+1..9, Super+arrows) stays GNOME's.
 
 ## 18. Animation policy
@@ -464,15 +468,13 @@ Two clarifications that follow from this:
   from the **visible surface** of its managed windows (a rect minus whatever is
   stacked above it). Three branches, in order:
   - one managed window: it is **maximized** (the lone law);
-  - one window **dominates** — it covers at least **three quarters of the work
-    area** — it is **maximized** and **every other managed window on that workspace
-    is minimized**;
+  - one window **dominates** — it covers at least **70% of the work area** — it is
+    **maximized** and **every other managed window on that workspace is minimized**;
   - otherwise the **two** windows with the most visible surface become the **pair**
     (the leftmost one takes the left slot) and the rest are **minimized**.
   Floats and dialogs are not normalised, and a **fullscreen** window is left
   untouched at enable: it is the "does not fit" case and moves only on its own
-  transition (§16). The three-quarter threshold is a named constant so the tests can
-  vary it.
+  transition (§16). The 70% threshold is a named constant so the tests can vary it.
 - Otherwise, existing windows are **adopted without being moved** until the first
   drain, and the first lane-2 drain waits for `startup-complete`.
 - A window that opens on a workspace the user is **not** viewing is routed **in that
@@ -591,8 +593,8 @@ never debug-gated (the deduplication and rate limits still apply).
 26. **`disable-animations` disables everything**, GNOME's animations included.
 27. **The queue finishes what is in it** when the session pauses; nothing is dropped.
 28. **Enable-time normalisation** runs on every enable with §20's two-branch rule: a
-    dominating window (at least three quarters of the work area) maximized, else the
-    top two by visible surface paired; the rest minimized.
+    dominating window (at least 70% of the work area) maximized, else the top two by
+    visible surface paired; the rest minimized.
 29. **Debug notifications** are per-decision checkboxes phrased as the decision (§21),
     and the journal is append-only per day with 30-day retention (§22).
 30. **A minimized window left alone** is relocated left, else right, else left where it
@@ -607,7 +609,7 @@ never debug-gated (the deduplication and rate limits still apply).
     emptied by the last close is reaped with the view moving to the nearest
     workspace that holds windows.
 32. **Enable-time normalisation is two-branch** (§20): a dominating window (at least
-    three quarters of the work area) is maximized with every other managed window on
+    70% of the work area) is maximized with every other managed window on
     its workspace minimized; otherwise the **two** largest by visible surface become
     the pair and the rest are minimized. A single window is maximized, and fullscreen
     windows and floats are left untouched at enable.
@@ -727,6 +729,16 @@ never debug-gated (the deduplication and rate limits still apply).
     its reason, and never behind a debug checkbox: un-floating with both slots taken,
     a move to a workspace on a screen that has only one, an undo with nothing to
     revert, a nudge with nothing to nudge. Deduplicated and rate-limited.
+
+57. **"Dominates" means 70% or more of the work area** (the user's number), used by
+    enable-time normalisation to choose between maximizing one window and pairing two.
+
+58. **A direction with nothing that way stays silent** (the user's answer): it is the
+    single exception to "a request that changes nothing toasts".
+
+59. **Undo covers every change, including drag-swaps and un-floats** (the user's
+    confirmation): both instances and their slots in a swap, the float flag in an
+    un-float, plus ratios, exactly as §13 says.
 
 ## Deliberate non-goals
 
