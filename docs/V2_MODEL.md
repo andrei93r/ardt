@@ -685,6 +685,10 @@ happens. All default off, deduplicated and rate-limited per event.
     stays where it is. The workspace it left is empty and is removed, and the view
     (which was on it) moves to the workspace the window went to.
 
+49. **Focus crossing screens is positional** (test scenario S21): focus right from the
+    bottom half of a stacked pair lands on the window at the same height on the next
+    screen, never on the first window there.
+
 ## Deliberate non-goals
 
 
