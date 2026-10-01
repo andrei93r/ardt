@@ -636,6 +636,12 @@ happens. All default off, deduplicated and rate-limited per event.
     the view stays on the workspace the drag started from; a drop onto a full pair
     floats.
 
+43. **The pair axis follows the workspace layout** (test scenario S15): horizontal
+    workspaces stack side by side (slot 0 left, slot 1 right); vertical workspaces
+    stack top/bottom (slot 0 top, slot 1 bottom) and so do portrait screens. The
+    arrival rule puts the newcomer in slot 1 (the bottom, with vertical workspaces);
+    directions act on the pair's own axis first; gaps follow the axis.
+
 ## Deliberate non-goals
 
 
