@@ -316,7 +316,9 @@ workspace when the screen can make one, minimized when it cannot.
 **Gaps** are adjustable per side (left, right, top, bottom) and between windows, per
 orientation: new settings beside the existing `gaps-base`/`gaps-portrait`/
 `gaps-landscape`, defaulting to zero for the outer edges and to the base gap for the
-split between two windows.
+split between two windows (`gaps-base` is 8 px today, and `-1` in the orientation keys
+means "use the base"). A gap is part of the surface the windows are fitted to, so
+changing one **re-fits the pair by ratio** like any other work-area change.
 
 **The work area** is the available surface, and it is never assumed:
 - read `Main.layoutManager.getWorkAreaForMonitor(index)` — workspace-independent
@@ -334,6 +336,10 @@ split between two windows.
   `logical_monitor != NULL` assertions in the journal;
 - defer the replan (a lane-3 event, coalesced, a few hundred milliseconds): the first
   `workareas-changed` can arrive before the shell has set the new struts.
+- every replan **re-fits the windows to the new surface by ratio**: the pair keeps its
+  split ratio and both halves are computed from the new work area, and a maximized
+  window takes the new surface. No window keeps its old pixel size, and none floats or
+  changes workspace because of it. A float is untouched.
 
 ## 11. Scheduling, observability, exceptions
 
@@ -852,6 +858,13 @@ never debug-gated (the deduplication and rate limits still apply).
     pair underneath. Floats that **adrt places itself** (overflow and no-room cases)
     are nudged off-centre so they never sit exactly on the window below; floats the
     app or the user positioned are left exactly where they are.
+
+74. **Every surface change re-fits the windows by ratio** (round scenario 15): a dock
+    appearing or hiding, the bar moving, a screen change or a gap change recomputes the
+    slots from the new work area, keeping the pair's split ratio. No window keeps its
+    old pixel size, and none floats or changes workspace because of it; a float is
+    untouched. Gaps default to zero on the outer edges and to `gaps-base` (8 px)
+    between the two windows, per side and per orientation.
 
 ## Deliberate non-goals
 
