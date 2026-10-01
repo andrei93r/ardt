@@ -298,7 +298,11 @@ dragging the inner edge, and the tiler resizes the sibling to match, so the pair
 flush. The ratios that produced a layout are captured by undo.
 
 **The resize/refusal ladder**, in order:
-1. the user resizes a window → the sibling follows so the pair stays flush;
+1. the user resizes a window **by the inner edge** → the sibling follows so the pair
+   stays flush. A drag on a window's **outer** edge — or on any edge of a lone
+   maximized window — **snaps back**: a tile always fills its region, and a float is
+   only ever made **explicitly**, with the float key, a registry `neverTile`, or one of
+   §6's no-room cases. adrt never turns a hand resize into a float;
 2. if a client refuses the requested split, the **sibling adapts** — the refusing
    window keeps the size it insists on and the sibling takes the remainder, clamped to
    the sibling's own limits;
@@ -873,6 +877,11 @@ never debug-gated (the deduplication and rate limits still apply).
 75. **The focus cycle covers the current screen and workspace, floats included** (the
     user's answer): the managed windows in slot order and then the floats, wrapping;
     minimized windows are skipped and it never crosses a screen or a workspace.
+
+76. **A float is only ever made explicitly** (review gap 2): a hand resize by a
+    window's outer edge, or of a lone maximized window, snaps back. The float key, a
+    registry `neverTile` and §6's no-room cases are the only ways a window floats; a
+    tiled window always fills its region.
 
 ## Deliberate non-goals
 
