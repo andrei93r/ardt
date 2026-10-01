@@ -63,6 +63,10 @@ changes never move a window.
 - **Fixed-workspace screen**: route to the nearest existing workspace (right first,
   then left) that has a free slot; if every fixed workspace is full, **float**.
   Nothing is created.
+- **The view follows the app the action is about** — the new window, the maximized or
+  fullscreened one, the window whose own minimum changed — and only while that app is
+  on the workspace being viewed. A window that merely *reacts*, forced onto its own
+  workspace by an arriving sibling, never moves the view.
 - Routing is decided **per arrival**: a second window always finds the first (a
   maximized single to split with), never a simultaneous evaluation of both.
 - **Slot order when a pair forms**: the window the change is *about* — routed, moved,
@@ -276,8 +280,8 @@ flush. The ratios that produced a layout are captured by undo.
    window keeps the size it insists on and the sibling takes the remainder, clamped to
    the sibling's own limits;
 3. if the sibling cannot adapt either, the refusing window takes **its own workspace
-   to the right**, sized to itself, clamped between **one sixth of the screen and the
-   full screen**;
+   to the right**, sized to itself and clamped between **one sixth of the screen and
+   the full screen**, in the slot-0 position (flush left, full work-area height);
 4. on a single-workspace-capable screen there is no workspace to give it: it keeps its
    clamped size over the sibling, which remains reachable because focusing it raises
    it.
@@ -746,6 +750,14 @@ never debug-gated (the deduplication and rate limits still apply).
     (test scenario 1 of the layout round, confirmed): it fills the screen where it is,
     the other managed windows are minimized while it is fullscreen, and they return on
     exit. On a workspace-capable screen fullscreen is S17's own-workspace case instead.
+
+61. **A window that cannot fit a share takes its own workspace** (round scenarios 2
+    and 3, confirmed): the refusing window is given a workspace to the right, its own
+    width clamped to [1/6, full screen], flush left at full work-area height; the
+    window left behind is alone, so it maximizes. The same thing happens when a
+    client's own minimum grows while it is tiled. **The view does not follow it** -
+    the view follows the app the action was about, and that is the arriving window,
+    which stayed; the reactor never moves the view.
 
 ## Deliberate non-goals
 
