@@ -157,6 +157,11 @@ cmd_start() {
       # triggers stay inert unless a test calls them, and a live session never
       # sets this.
       export ADRT_INJECT="${ADRT_INJECT:-1}"
+      # Test-only D-Bus settings writers (see nested_env): when the host has no
+      # spare inotify instance the keyfile GSettings monitor cannot be created,
+      # so the harness writes settings through the Shell process instead. Never
+      # set on a production desktop.
+      export ADRT_TEST_TRIGGERS=1
       exec gnome-shell '"$devkit_flag"' --wayland --headless --no-x11 \
         --wayland-display="$WAYLAND_DISPLAY_NAME"'"$mon_args"' > "$LOG_FILE" 2>&1
     ' >/dev/null 2>&1 &
