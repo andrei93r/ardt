@@ -31,5 +31,6 @@ A110-reconnect-replays-state
 A143-reconnect-restores-float
 A111-primary-change-keeps-slots-and-the-extra-window-floats
 A122-rescue-side-and-order
+A145-float-restore-exact
 A124-screen-side-rule
 A81-four-monitors

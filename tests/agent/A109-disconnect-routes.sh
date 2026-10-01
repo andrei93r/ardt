@@ -66,8 +66,9 @@ if any(m.get("screen") != 0 for m in moves):
 spaces = {m.get("workspace") for m in moves}
 if spaces != {int("'"$viewed"'") + 1}:
     print("workspace", spaces, "expected", int("'"$viewed"'") + 1); sys.exit(1)
-if sorted(m.get("slot") for m in moves) != [0, 1]:
-    print("slots", sorted(m.get("slot") for m in moves)); sys.exit(1)
+slots = [m.get("slot") for m in moves]
+if any(s is None for s in slots) or sorted(slots) != [0, 1]:
+    print("slots", slots, "expected [0, 1]"); sys.exit(1)
 print("rescued", [(m.get("id"), m.get("workspace"), m.get("slot")) for m in moves])
 ' 25
 

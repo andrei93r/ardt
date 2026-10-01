@@ -48,6 +48,8 @@ export interface DisplayWindow {
   fullscreen?: boolean;
   /** Last known rect; used by the memory and by float replay. */
   rect?: Rect;
+  /** Compositor stacking position; a float is restored to it exactly. */
+  z?: number;
 }
 
 /** One workspace of a screen: visible slots plus hidden windows. */
@@ -80,6 +82,8 @@ export interface RememberedWindow {
   maximized: boolean;
   fullscreen: boolean;
   rect: Rect;
+  /** Compositor stacking position; a float replays back onto it exactly. */
+  z?: number;
 }
 
 /** The remembered arrangement of one connector. */
@@ -115,6 +119,8 @@ export interface DisplayMove {
   workspace?: number;
   /** A workspace to create for this window. */
   create?: NewWorkspace;
+  /** The screen the window is routed back onto (a reconnect replay). */
+  screen?: number;
   slot?: 0 | 1;
   /** Arrive minimized (a rescued or replayed minimized window). */
   minimize?: boolean;
@@ -124,6 +130,13 @@ export interface DisplayMove {
   fullscreen?: boolean;
   /** Arrive alone on its workspace, so it is maximized. */
   maximize?: boolean;
+  /**
+   * The exact frame a float is restored to. Only floats carry one: a tiled
+   * window's rect is recomputed by the tiler, a float's is the user's.
+   */
+  rect?: Rect;
+  /** The exact stacking position a float is restored to. */
+  z?: number;
 }
 
 /** Read-from-GNOME context the policy needs but the arrangement does not hold. */
@@ -259,6 +272,7 @@ function snapshot(connector: string, state: DisplayState, screen: number, at: nu
         maximized: win.maximized === true,
         fullscreen: win.fullscreen === true,
         rect: win.rect ?? { x: 0, y: 0, width: 0, height: 0 },
+        ...(win.z !== undefined ? { z: win.z } : {}),
       });
     }
   });
@@ -268,10 +282,15 @@ function snapshot(connector: string, state: DisplayState, screen: number, at: nu
 /** The move a replayed remembered window gets, or null when it cannot land. */
 function replayMove(rw: RememberedWindow, target: DisplayWorkspace): DisplayMove | null {
   if (rw.floating) {
+    // A float's frame and stacking are the user's; replay them exactly, never
+    // re-centre or re-stack. `screen` routes it back onto the reconnected screen.
     return {
       id: rw.id,
       workspace: target.id,
+      screen: target.screen,
       float: true,
+      rect: rw.rect,
+      ...(rw.z !== undefined ? { z: rw.z } : {}),
       ...(rw.fullscreen ? { fullscreen: true } : {}),
     };
   }
@@ -279,6 +298,7 @@ function replayMove(rw: RememberedWindow, target: DisplayWorkspace): DisplayMove
     return {
       id: rw.id,
       workspace: target.id,
+      screen: target.screen,
       minimize: true,
       ...(rw.fullscreen ? { fullscreen: true } : {}),
     };
@@ -289,6 +309,7 @@ function replayMove(rw: RememberedWindow, target: DisplayWorkspace): DisplayMove
   return {
     id: rw.id,
     workspace: target.id,
+    screen: target.screen,
     slot,
     ...(rw.fullscreen ? { fullscreen: true } : {}),
   };
@@ -369,6 +390,10 @@ export function displayPlan(
           id: win.id,
           create,
           float: true,
+          // A float's frame and stacking are the user's: carry them so the
+          // rescue restores the window exactly instead of re-centring it.
+          ...(win.rect !== undefined ? { rect: win.rect } : {}),
+          ...(win.z !== undefined ? { z: win.z } : {}),
           ...(win.fullscreen ? { fullscreen: true } : {}),
         });
       }

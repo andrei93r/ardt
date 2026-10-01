@@ -59,11 +59,13 @@ print(other[0] if other else "")
 
 fixture="$(screens_fixture 1)"
 adrt SimulateScreens "$fixture" >/dev/null
+# Wait for the rescue to actually land on the primary before reconnecting: two
+# screen changes inside one drain coalesce, and the disconnect would be lost.
 wait_python 20 '
 import json, sys
 d = json.load(sys.stdin)
 ws = [w for w in d["windows"] if w["tileable"]]
-sys.exit(0 if len(ws) >= 2 else 1)' || true
+sys.exit(0 if len(ws) >= 2 and all(w["monitor"] == 0 for w in ws) else 1)' || true
 
 # Reconnect: restore the real screen list and let memory replay.
 adrt SimulateScreens null >/dev/null

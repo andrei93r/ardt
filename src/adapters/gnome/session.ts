@@ -600,9 +600,14 @@ export class WindowSession {
 
   /** The split axis of a screen: portrait or vertical workspaces stack (§1). */
   private axisFor(screenId: number): Axis {
+    // A vertical workspace stack (`layout_rows === -1`) forces the split axis.
+    // Otherwise the axis follows the monitor's own orientation, exactly as the
+    // tiler does (a portrait screen stacks; a landscape one splits side by side).
+    // `layout_rows` is `1` for the default horizontal workspace layout on every
+    // monitor, so returning `horizontal` for any positive row count would force
+    // a portrait monitor to split side by side here while the tiler stacked it.
     const rows = global.workspace_manager.layout_rows;
     if (rows === -1) return 'vertical';
-    if (rows > 0) return 'horizontal';
     const screen = this.screenFor(screenId);
     return screen === null || screen.geometry.width >= screen.geometry.height ? 'horizontal' : 'vertical';
   }
@@ -1019,7 +1024,19 @@ export class WindowSession {
         forget: plan.forget,
       });
     }
-    for (const move of plan.moves) this.applyDisplayMove(move, screens);
+    // §9: a float's stacking is restored exactly. `floatWindow` raises on apply,
+    // so applying the remembered floats bottom-to-top (ascending z) reproduces
+    // their relative order; a float with no remembered z keeps its plan order.
+    const floats = plan.moves
+      .filter((move) => move.float === true && move.z !== undefined)
+      .sort((a, b) => (a.z ?? 0) - (b.z ?? 0));
+    const restored = new Set(floats);
+    // Every move that shares a `create.key` must land on the SAME created
+    // workspace: the group is the pair (or single) the source workspace held, and
+    // creating one per move split the pair across two workspaces (A110).
+    const createdByKey = new Map<number, number>();
+    for (const move of plan.moves) if (!restored.has(move)) this.applyDisplayMove(move, screens, createdByKey);
+    for (const move of floats) this.applyDisplayMove(move, screens, createdByKey);
     for (const entry of plan.remember) {
       const at = this.displayMemory.findIndex((candidate) => candidate.connector === entry.connector);
       if (at >= 0) this.displayMemory[at] = entry;
@@ -1036,16 +1053,37 @@ export class WindowSession {
     }
   }
 
-  private applyDisplayMove(move: DisplayMove, screens: readonly Screen[]): void {
+  private applyDisplayMove(
+    move: DisplayMove,
+    screens: readonly Screen[],
+    createdByKey: Map<number, number>,
+  ): void {
     const tracked = this.windows.get(move.id);
     if (tracked === undefined) return;
     let workspaceIndex = move.workspace ?? tracked.surface.workspaceId;
     let targetConnector: string | undefined;
     if (move.create !== undefined) {
-      const created = this.createWorkspaceForDisplay(move.create);
-      if (created === null) return;
+      // One workspace per key: every window of a rescued pair or single shares it.
+      let created = createdByKey.get(move.create.key);
+      if (created === undefined) {
+        const workspace = this.createWorkspaceForDisplay(move.create);
+        if (workspace === null) return;
+        created = workspace;
+        createdByKey.set(move.create.key, created);
+      }
       workspaceIndex = created;
-      const target = screens.find((screen) => screen.index === move.create?.screen);
+    }
+    // Move the workspace first, then route the screen. With
+    // `workspaces-only-on-primary`, a workspace change can drag a window back to
+    // the primary; doing it before the monitor move lets the monitor move win
+    // (a replay to the reconnected connector must end there, not on the primary).
+    if (workspaceIndex !== tracked.surface.workspaceId) this.moveWindowToWorkspace(tracked, workspaceIndex);
+    // §9: a routed window lands on the screen the plan names — the primary on a
+    // rescue, the reconnected connector on a replay. Without this a replay only
+    // reassigned the workspace and the pair never left the primary.
+    const targetScreen = move.create?.screen ?? move.screen;
+    if (targetScreen !== undefined) {
+      const target = screens.find((screen) => screen.index === targetScreen);
       if (target !== undefined) {
         targetConnector = target.connector;
         tracked.surface.screenId = target.index;
@@ -1061,15 +1099,14 @@ export class WindowSession {
       id: move.id,
       workspace: workspaceIndex,
       create: move.create?.key ?? null,
-      screen: move.create?.screen ?? null,
+      screen: targetScreen ?? null,
       float: move.float === true,
       minimize: move.minimize === true,
       maximize: move.maximize === true,
       slot: move.slot ?? null,
     });
-    if (workspaceIndex !== tracked.surface.workspaceId) this.moveWindowToWorkspace(tracked, workspaceIndex);
     if (move.float === true) {
-      this.floatWindow(tracked);
+      this.floatWindow(tracked, move.rect);
       this.recordPlacement(tracked, targetConnector, move.slot);
       return;
     }
@@ -1141,7 +1178,9 @@ export class WindowSession {
         continue;
       }
       if (floating) {
-        (workspace.floats ??= []).push(win);
+        // §9: a float's stacking is restored exactly, so capture it with the rect.
+        tracked.surface.captureZ();
+        (workspace.floats ??= []).push({ ...win, z: tracked.surface.zPosition });
         continue;
       }
       const slot = this.slotFor(tracked);
@@ -1636,9 +1675,11 @@ export class WindowSession {
   /**
    * §6: float a window adrt places itself — the explicit no-room cases and the
    * escape's single-workspace fallback. The placement is offset and kept inside
-   * the work area so it is never exactly on top of what is beneath it.
+   * the work area so it is never exactly on top of what is beneath it. A display
+   * rescue/replay passes the remembered `rect`, which is restored verbatim: a
+   * float's frame is the user's, never re-centred by a screen change (§9).
    */
-  private floatWindow(tracked: TrackedWindow): void {
+  private floatWindow(tracked: TrackedWindow, rect?: Rect): void {
     tracked.autoFloated = true;
     tracked.pendingSlot = null;
     tracked.surface.setFloating(true);
@@ -1656,6 +1697,12 @@ export class WindowSession {
     // margin so the tiled windows stay visible.
     const screen = this.screenFor(tracked.surface.screenId);
     if (screen === null) return;
+    if (rect !== undefined) {
+      // A restored float keeps the exact frame it was left at; it stays on top
+      // (the layer above the pair) and is never re-centred or re-sized to fit.
+      this.deps.tiling.applyFrame(tracked, rect, screen, false, 'float-restore', 0);
+      return;
+    }
     const area = screenArea(screen);
     const margin = Math.max(24, Math.round(Math.min(area.width, area.height) * 0.12));
     const width = Math.max(1, area.width - 2 * margin);

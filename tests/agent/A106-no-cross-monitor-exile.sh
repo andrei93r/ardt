@@ -16,11 +16,10 @@ if [ "${monitors:-1}" -lt 2 ]; then
 fi
 
 move_to_second() {
-  local id="$1"
-  adrt ActivateWindow "$id" >/dev/null
-  sleep 0.5
-  adrt MoveDirection right >/dev/null
-  wait_python 15 "import json,sys; d=json.load(sys.stdin); sys.exit(0 if [w for w in d['windows'] if w['id']==$id and w['monitor']==1] else 1)" || true
+  # The shared helper waits for focus and for the arrival, and retries, so a
+  # load spike cannot leave the window on the primary (which this scenario is
+  # not testing).
+  move_to_monitor "$1" 1 right
 }
 
 spawn_window >/dev/null
