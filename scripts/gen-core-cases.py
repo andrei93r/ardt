@@ -94,6 +94,11 @@ def target_role(screens, needs):
     return "any"
 
 
+def vary_order(text):
+    """Swap the two window names A and B (for the ab/ba order axis)."""
+    return text.replace("A", "\x00").replace("B", "A").replace("\x00", "B")
+
+
 def apply_geom(scr, scale, bar):
     """Scale a screen set, relaying it out: a row, with screens that were above kept above."""
     sized = []
@@ -147,13 +152,16 @@ def expand(seed):
                                 parts.append(od)
                             if pos:
                                 parts.append(pos[0])
+                            setup, act, exp = seed["setup"], seed["act"], seed["exp"]
+                            if od == "ba":
+                                setup, act, exp = vary_order(setup), vary_order(act), vary_order(exp)
                             out.append(dict(
                                 id="-".join(parts), seed=seed["id"], family=seed["fam"], rule=seed["rule"],
                                 screens=[dict(role=("ws" if s["cls"] == "D" else "nows"), **s)
                                          for s in apply_geom(ss["scr"], gp[1], gp[2])],
                                 target=target_role(ss["scr"], seed.get("needs", "any")),
                                 axis=ax, extras=ex, order=od, ws_position=pos,
-                                setup=seed["setup"], action=seed["act"], expect=seed["exp"],
+                                setup=setup, action=act, expect=exp,
                                 invariants=INVARIANTS,
                             ))
     return out

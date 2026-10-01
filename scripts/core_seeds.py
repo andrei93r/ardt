@@ -20,8 +20,8 @@ needs: ws (some screen has workspaces) · nows (some screen has none) · 2s/3s (
 SEEDS = [
     # ---------------------------------------------------------------- routing (R)
     dict(id="R01", fam="routing", rule="\u00a73", needs="ws", vary="sa", setup="a workspace-capable screen; the viewed workspace is the empty trailing one", act="open A", exp="A is alone on the viewed workspace, so it maximizes; GNOME adds a new spare after it; no other workspace changes"),
-    dict(id="R02", fam="routing", rule="\u00a73", needs="ws", vary="sae", setup="the viewed workspace holds A, maximized alone", act="open B", exp="A takes slot 0 un-maximized, B slot 1: a pair on the viewed workspace; no new workspace; the view stays"),
-    dict(id="R03", fam="routing", rule="\u00a73", needs="ws", vary="sa", setup="the viewed workspace holds a full pair A|B", act="open C", exp="a workspace is created immediately right of the viewed one, C is maximized there, the view follows; A|B untouched"),
+    dict(id="R02", fam="routing", rule="\u00a73", needs="ws", vary="saeo", setup="the viewed workspace holds A, maximized alone", act="open B", exp="A takes slot 0 un-maximized, B slot 1: a pair on the viewed workspace; no new workspace; the view stays"),
+    dict(id="R03", fam="routing", rule="\u00a73", needs="ws", vary="sao", setup="the viewed workspace holds a full pair A|B", act="open C", exp="a workspace is created immediately right of the viewed one, C is maximized there, the view follows; A|B untouched"),
     dict(id="R04", fam="routing", rule="\u00a73", needs="ws 2s", vary="sa", setup="the viewed workspace is full; another screen or workspace has a free slot", act="open C", exp="still a new workspace immediately right of the viewed one: routing never scans neighbours or screens"),
     dict(id="R05", fam="routing", rule="\u00a73", needs="ws", vary="s", setup="the viewed workspace holds A visible and B minimized", act="open C", exp="B holds no slot, so C splits with A (B stays hidden); C lands in slot 1"),
     dict(id="R06", fam="routing", rule="\u00a73", needs="ws", vary="s", setup="the viewed workspace holds A maximized and a float F", act="open C", exp="the float holds no slot: A takes slot 0, C slot 1; F is untouched"),
@@ -43,8 +43,8 @@ SEEDS = [
     dict(id="R22", fam="routing", rule="\u00a716", needs="ws", vary="s", setup="the viewed workspace holds a pair", act="open a skip-taskbar window (a drop-down terminal)", exp="it is never managed: no slot, the pair untouched"),
 
     # ------------------------------------------------- maximize / unmaximize (M)
-    dict(id="M01", fam="maximize", rule="\u00a74", needs="ws", vary="sa", setup="the viewed workspace holds a pair A|B", act="maximize B", exp="B moves to a workspace created immediately right, maximized; A is alone and fills the screen; the view follows"),
-    dict(id="M02", fam="maximize", rule="\u00a74", needs="ws", vary="sa", setup="B was just maximized onto its own workspace; A is alone on the previous one", act="unmaximize B", exp="B joins the left workspace into slot 1: A|B; the workspace B left is reaped; the view returns"),
+    dict(id="M01", fam="maximize", rule="\u00a74", needs="ws", vary="saeo", setup="the viewed workspace holds a pair A|B", act="maximize B", exp="B moves to a workspace created immediately right, maximized; A is alone and fills the screen; the view follows"),
+    dict(id="M02", fam="maximize", rule="\u00a74", needs="ws", vary="sao", setup="B was just maximized onto its own workspace; A is alone on the previous one", act="unmaximize B", exp="B joins the left workspace into slot 1: A|B; the workspace B left is reaped; the view returns"),
     dict(id="M03", fam="maximize", rule="\u00a74", needs="ws", vary="s", setup="the viewed workspace holds a pair; a workspace to the right is full", act="maximize the slot-0 window", exp="the same: its own workspace created to the right, the leftover fills the screen"),
     dict(id="M04", fam="maximize", rule="\u00a74", needs="nows", vary="sa", setup="a screen with no workspaces holding a pair", act="maximize A", exp="A maximizes in place; B is minimized on that screen only; nothing is created"),
     dict(id="M05", fam="maximize", rule="\u00a74", needs="nows", vary="s", setup="A was maximized in place on a screen with no workspaces and B was minimized by it", act="unmaximize A", exp="B returns and keeps slot 0; A arrives into slot 1: B|A"),
@@ -65,12 +65,12 @@ SEEDS = [
     dict(id="M20", fam="maximize", rule="\u00a74", needs="ws", vary="s", setup="B is fullscreen on its own workspace; the left workspace is a full pair", act="leave fullscreen", exp="B is minimized and moved into the left workspace"),
 
     # ---------------------------------------------------- minimize / restore (N)
-    dict(id="N01", fam="minimize", rule="\u00a74", needs="ws", vary="sa", setup="the viewed workspace holds a pair A|B", act="minimize B", exp="B releases its slot; A fills the screen; the view does not move"),
-    dict(id="N02", fam="minimize", rule="\u00a74", needs="ws", vary="sa", setup="A is alone and maximized on the viewed workspace; B is minimized on it", act="restore B", exp="B arrives into the free slot; the pair is formed with B in slot 1"),
+    dict(id="N01", fam="minimize", rule="\u00a74", needs="ws", vary="saeo", setup="the viewed workspace holds a pair A|B", act="minimize B", exp="B releases its slot; A fills the screen; the view does not move"),
+    dict(id="N02", fam="minimize", rule="\u00a74", needs="ws", vary="sao", setup="A is alone and maximized on the viewed workspace; B is minimized on it", act="restore B", exp="B arrives into the free slot; the pair is formed with B in slot 1"),
     dict(id="N03", fam="minimize", rule="\u00a74", needs="ws 2s", vary="s", setup="the viewed workspace holds A alone; a neighbour holds windows", act="minimize A", exp="A is minimized into the neighbour that holds windows (left first); the workspace is reaped; the view moves there"),
     dict(id="N04", fam="minimize", rule="\u00a74", needs="ws", vary="s", setup="the viewed workspace holds A alone; no neighbour holds any window", act="minimize A", exp="A stays where it is, minimized; the workspace persists looking empty"),
     dict(id="N05", fam="minimize", rule="\u00a76", needs="ws", vary="s", setup="a workspace holds a full pair A|C", act="restore a window B that was minimized earlier", exp="no slot is free, so B floats, offset from the pair; nobody is displaced"),
-    dict(id="N06", fam="minimize", rule="\u00a75", needs="ws", vary="sa", setup="the viewed workspace holds a pair A|B", act="close B", exp="A is alone, so it maximizes; no new workspace"),
+    dict(id="N06", fam="minimize", rule="\u00a75", needs="ws", vary="saeo", setup="the viewed workspace holds a pair A|B", act="close B", exp="A is alone, so it maximizes; no new workspace"),
     dict(id="N07", fam="minimize", rule="\u00a75", needs="ws 2s", vary="s", setup="the viewed workspace holds A alone; a neighbour holds windows", act="close A", exp="the workspace is empty, so it is reaped and the view moves to the nearest workspace that holds windows"),
     dict(id="N08", fam="minimize", rule="\u00a74", needs="ws 2s", vary="s", setup="the viewed workspace holds A visible and B minimized; a neighbour holds windows", act="close A", exp="B is now the only window there and it is minimized: it is moved into the neighbour, the viewed workspace is reaped and the view follows"),
     dict(id="N09", fam="minimize", rule="\u00a74", needs="nows", vary="s", setup="a screen with no workspaces, A maximized in place, B minimized by it", act="minimize A", exp="B returns and maximizes; A stays minimized on that screen"),
@@ -82,7 +82,7 @@ SEEDS = [
 
     # ------------------------------------------------- slots, arrival, order (S)
     dict(id="S01", fam="slots", rule="\u00a73", needs="ws", vary="s", setup="the newcomer arrives on an empty workspace", act="open A", exp="it is alone, so it maximizes (slot 0 by definition)"),
-    dict(id="S02", fam="slots", rule="\u00a73", needs="ws", vary="sa", setup="the workspace holds one window, alone and maximized", act="open B", exp="the existing one keeps slot 0, B takes slot 1"),
+    dict(id="S02", fam="slots", rule="\u00a73", needs="ws", vary="saeo", setup="the workspace holds one window, alone and maximized", act="open B", exp="the existing one keeps slot 0, B takes slot 1"),
     dict(id="S03", fam="slots", rule="\u00a73", needs="ws", vary="s", setup="the workspace holds one window that is already in slot 1 (slot 0 was closed)", act="open B", exp="the free slot 0 is taken by B; the resident keeps its side"),
     dict(id="S04", fam="slots", rule="\u00a73", needs="ws", vary="s", setup="a window is moved in from the workspace on its left", act="drop it on the target workspace", exp="it takes slot 0"),
     dict(id="S05", fam="slots", rule="\u00a73", needs="ws", vary="s", setup="a window is moved in from the workspace on its right", act="drop it on the target workspace", exp="it takes slot 1"),
@@ -123,7 +123,7 @@ SEEDS = [
     dict(id="L10", fam="floats", rule="\u00a76", needs="ws", vary="s", setup="a workspace holds a pair A|B and a float F", act="close A and B", exp="the workspace is not empty: the float pins it, and the view stays"),
 
     # ------------------------------------------------------- drags and drops (G)
-    dict(id="G01", fam="drags", rule="\u00a76", needs="ws", vary="sa", setup="the viewed workspace holds a pair A|B", act="drag A a little over B and drop", exp="they swap: B takes slot 0 and A slot 1; same sizes, same workspace"),
+    dict(id="G01", fam="drags", rule="\u00a76", needs="ws", vary="saeo", setup="the viewed workspace holds a pair A|B", act="drag A a little over B and drop", exp="they swap: B takes slot 0 and A slot 1; same sizes, same workspace"),
     dict(id="G02", fam="drags", rule="\u00a76", needs="2s", vary="s", setup="a screen with a free slot on its viewed workspace", act="drag a window onto it from the left screen", exp="it takes the free slot on the side it came from; its old workspace is reaped if emptied"),
     dict(id="G03", fam="drags", rule="\u00a76", needs="2s", vary="s", setup="the target screen's viewed workspace holds one window P (so a slot is free)", act="drag a window from the other screen and drop it ON P", exp="the free slot wins: the window takes it and P stays (moving to the other side if needed); no swap"),
     dict(id="G04", fam="drags", rule="\u00a76", needs="2s", vary="s", setup="the target screen's viewed workspace holds a full pair P|Q", act="drag a window from the other screen and drop it on Q", exp="no slot is free, so they swap: the dropped window takes Q's place and Q goes to where the dragged one came from"),

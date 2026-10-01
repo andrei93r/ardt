@@ -6,7 +6,7 @@ hand: change the seeds and re-run.
 The business logic lives in `core/` and is tested there — pure, fast and deterministic,
 no Shell and no compositor. The harness scenarios only prove that the adapter feeds the
 core the right inputs and applies its decisions. This matrix is the source those core
-tests are written from: **137 logical seeds expand to 5259 concrete cases**
+tests are written from: **137 logical seeds expand to 8994 concrete cases**
 (`tests/generated/core-cases.json`, regenerated on demand and not committed).
 
 ## What varies
@@ -47,13 +47,13 @@ window, and the re-fit by ratio when the surface changes.
 ## The catalogue
 
 
-### routing — 22 seeds, 1290 cases
+### routing — 22 seeds, 1830 cases
 
 | id | rule | setup | action | expected | varies | cases |
 | --- | --- | --- | --- | --- | --- | --- |
 | `R01` | §3 | a workspace-capable screen; the viewed workspace is the empty trailing one | open A | A is alone on the viewed workspace, so it maximizes; GNOME adds a new spare after it; no other workspace changes | screens axis | 45 |
-| `R02` | §3 | the viewed workspace holds A, maximized alone | open B | A takes slot 0 un-maximized, B slot 1: a pair on the viewed workspace; no new workspace; the view stays | screens axis extras | 405 |
-| `R03` | §3 | the viewed workspace holds a full pair A|B | open C | a workspace is created immediately right of the viewed one, C is maximized there, the view follows; A|B untouched | screens axis | 135 |
+| `R02` | §3 | the viewed workspace holds A, maximized alone | open B | A takes slot 0 un-maximized, B slot 1: a pair on the viewed workspace; no new workspace; the view stays | screens axis extras order | 810 |
+| `R03` | §3 | the viewed workspace holds a full pair A|B | open C | a workspace is created immediately right of the viewed one, C is maximized there, the view follows; A|B untouched | screens axis order | 270 |
 | `R04` | §3 | the viewed workspace is full; another screen or workspace has a free slot | open C | still a new workspace immediately right of the viewed one: routing never scans neighbours or screens | screens axis | 36 |
 | `R05` | §3 | the viewed workspace holds A visible and B minimized | open C | B holds no slot, so C splits with A (B stays hidden); C lands in slot 1 | screens | 81 |
 | `R06` | §3 | the viewed workspace holds A maximized and a float F | open C | the float holds no slot: A takes slot 0, C slot 1; F is untouched | screens | 81 |
@@ -74,12 +74,12 @@ window, and the re-fit by ratio when the surface changes.
 | `R21` | §16 | the viewed workspace holds a pair | open a sticky window (pinned to every workspace) | it is never managed: no slot, nothing moved, the workspace list untouched | screens | 27 |
 | `R22` | §16 | the viewed workspace holds a pair | open a skip-taskbar window (a drop-down terminal) | it is never managed: no slot, the pair untouched | screens | 27 |
 
-### maximize — 20 seeds, 750 cases
+### maximize — 20 seeds, 1560 cases
 
 | id | rule | setup | action | expected | varies | cases |
 | --- | --- | --- | --- | --- | --- | --- |
-| `M01` | §4 | the viewed workspace holds a pair A|B | maximize B | B moves to a workspace created immediately right, maximized; A is alone and fills the screen; the view follows | screens axis | 135 |
-| `M02` | §4 | B was just maximized onto its own workspace; A is alone on the previous one | unmaximize B | B joins the left workspace into slot 1: A|B; the workspace B left is reaped; the view returns | screens axis | 135 |
+| `M01` | §4 | the viewed workspace holds a pair A|B | maximize B | B moves to a workspace created immediately right, maximized; A is alone and fills the screen; the view follows | screens axis extras order | 810 |
+| `M02` | §4 | B was just maximized onto its own workspace; A is alone on the previous one | unmaximize B | B joins the left workspace into slot 1: A|B; the workspace B left is reaped; the view returns | screens axis order | 270 |
 | `M03` | §4 | the viewed workspace holds a pair; a workspace to the right is full | maximize the slot-0 window | the same: its own workspace created to the right, the leftover fills the screen | screens | 27 |
 | `M04` | §4 | a screen with no workspaces holding a pair | maximize A | A maximizes in place; B is minimized on that screen only; nothing is created | screens axis | 42 |
 | `M05` | §4 | A was maximized in place on a screen with no workspaces and B was minimized by it | unmaximize A | B returns and keeps slot 0; A arrives into slot 1: B|A | screens | 24 |
@@ -99,16 +99,16 @@ window, and the re-fit by ratio when the surface changes.
 | `M19` | §4 | A is fullscreen on a screen with no workspaces and B was minimized by it | minimize A | B returns, is alone among visible windows and maximizes | screens | 24 |
 | `M20` | §4 | B is fullscreen on its own workspace; the left workspace is a full pair | leave fullscreen | B is minimized and moved into the left workspace | screens | 27 |
 
-### minimize — 14 seeds, 714 cases
+### minimize — 14 seeds, 2199 cases
 
 | id | rule | setup | action | expected | varies | cases |
 | --- | --- | --- | --- | --- | --- | --- |
-| `N01` | §4 | the viewed workspace holds a pair A|B | minimize B | B releases its slot; A fills the screen; the view does not move | screens axis | 135 |
-| `N02` | §4 | A is alone and maximized on the viewed workspace; B is minimized on it | restore B | B arrives into the free slot; the pair is formed with B in slot 1 | screens axis | 135 |
+| `N01` | §4 | the viewed workspace holds a pair A|B | minimize B | B releases its slot; A fills the screen; the view does not move | screens axis extras order | 810 |
+| `N02` | §4 | A is alone and maximized on the viewed workspace; B is minimized on it | restore B | B arrives into the free slot; the pair is formed with B in slot 1 | screens axis order | 270 |
 | `N03` | §4 | the viewed workspace holds A alone; a neighbour holds windows | minimize A | A is minimized into the neighbour that holds windows (left first); the workspace is reaped; the view moves there | screens | 63 |
 | `N04` | §4 | the viewed workspace holds A alone; no neighbour holds any window | minimize A | A stays where it is, minimized; the workspace persists looking empty | screens | 27 |
 | `N05` | §6 | a workspace holds a full pair A|C | restore a window B that was minimized earlier | no slot is free, so B floats, offset from the pair; nobody is displaced | screens | 27 |
-| `N06` | §5 | the viewed workspace holds a pair A|B | close B | A is alone, so it maximizes; no new workspace | screens axis | 135 |
+| `N06` | §5 | the viewed workspace holds a pair A|B | close B | A is alone, so it maximizes; no new workspace | screens axis extras order | 810 |
 | `N07` | §5 | the viewed workspace holds A alone; a neighbour holds windows | close A | the workspace is empty, so it is reaped and the view moves to the nearest workspace that holds windows | screens | 21 |
 | `N08` | §4 | the viewed workspace holds A visible and B minimized; a neighbour holds windows | close A | B is now the only window there and it is minimized: it is moved into the neighbour, the viewed workspace is reaped and the view follows | screens | 21 |
 | `N09` | §4 | a screen with no workspaces, A maximized in place, B minimized by it | minimize A | B returns and maximizes; A stays minimized on that screen | screens | 24 |
@@ -118,12 +118,12 @@ window, and the re-fit by ratio when the surface changes.
 | `N13` | §4 | a workspace holds A and B as a pair | minimize A then B | after the last one the workspace holds only minimized windows: the occupant is moved into a neighbour that holds windows (left first) or stays; the workspace is reaped when emptied | screens | 27 |
 | `N14` | §4 | the view is on screen 1; screen 2 shows a full pair | close one of the pair on screen 2 | nothing on screen 1 changes; the survivor on screen 2 maximizes; the view stays | screens | 21 |
 
-### slots — 11 seeds, 621 cases
+### slots — 11 seeds, 1296 cases
 
 | id | rule | setup | action | expected | varies | cases |
 | --- | --- | --- | --- | --- | --- | --- |
 | `S01` | §3 | the newcomer arrives on an empty workspace | open A | it is alone, so it maximizes (slot 0 by definition) | screens | 81 |
-| `S02` | §3 | the workspace holds one window, alone and maximized | open B | the existing one keeps slot 0, B takes slot 1 | screens axis | 135 |
+| `S02` | §3 | the workspace holds one window, alone and maximized | open B | the existing one keeps slot 0, B takes slot 1 | screens axis extras order | 810 |
 | `S03` | §3 | the workspace holds one window that is already in slot 1 (slot 0 was closed) | open B | the free slot 0 is taken by B; the resident keeps its side | screens | 27 |
 | `S04` | §3 | a window is moved in from the workspace on its left | drop it on the target workspace | it takes slot 0 | screens | 27 |
 | `S05` | §3 | a window is moved in from the workspace on its right | drop it on the target workspace | it takes slot 1 | screens | 27 |
@@ -172,11 +172,11 @@ window, and the re-fit by ratio when the surface changes.
 | `L09` | §17 | the viewed workspace holds a pair and two floats F1, F2 | press the focus cycle key repeatedly | it walks the managed windows in slot order, then the floats left to right, wrapping; minimized windows are skipped | screens | 27 |
 | `L10` | §6 | a workspace holds a pair A|B and a float F | close A and B | the workspace is not empty: the float pins it, and the view stays | screens | 27 |
 
-### drags — 12 seeds, 270 cases
+### drags — 12 seeds, 495 cases
 
 | id | rule | setup | action | expected | varies | cases |
 | --- | --- | --- | --- | --- | --- | --- |
-| `G01` | §6 | the viewed workspace holds a pair A|B | drag A a little over B and drop | they swap: B takes slot 0 and A slot 1; same sizes, same workspace | screens axis | 45 |
+| `G01` | §6 | the viewed workspace holds a pair A|B | drag A a little over B and drop | they swap: B takes slot 0 and A slot 1; same sizes, same workspace | screens axis extras order | 270 |
 | `G02` | §6 | a screen with a free slot on its viewed workspace | drag a window onto it from the left screen | it takes the free slot on the side it came from; its old workspace is reaped if emptied | screens | 21 |
 | `G03` | §6 | the target screen's viewed workspace holds one window P (so a slot is free) | drag a window from the other screen and drop it ON P | the free slot wins: the window takes it and P stays (moving to the other side if needed); no swap | screens | 21 |
 | `G04` | §6 | the target screen's viewed workspace holds a full pair P|Q | drag a window from the other screen and drop it on Q | no slot is free, so they swap: the dropped window takes Q's place and Q goes to where the dragged one came from | screens | 21 |
