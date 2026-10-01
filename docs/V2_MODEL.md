@@ -133,7 +133,10 @@ anywhere except §7's single-workspace-capable pair rule.
   a reconnect. A workspace holding any window, including one on another screen, is not
   empty.
 - When a reaped workspace was the one the view was on, the view moves to the nearest
-  non-empty workspace with windows (left first). Otherwise the view does not move.
+  non-empty workspace with windows (left first). Otherwise the view does not move. If
+  **nothing** holds windows — the emptied workspace is the only one besides GNOME's
+  trailing workspace, which is always free — it is simply **left empty**; there is no
+  removal to do and no view move to make.
 - The **spare is GNOME's**: opening a window while viewing it simply occupies it (the
   window is alone there, so it maximizes) and GNOME appends a fresh spare after it.
   adrt neither creates nor removes it.
@@ -695,6 +698,11 @@ happens. All default off, deduplicated and rate-limited per event.
 51. **A resizing client keeps its minimum** (test scenario S23): dragging the inner
     edge past a client's minimum stops at that minimum and the sibling takes the rest;
     nothing is created, nothing floats, and the refusing window is not moved.
+
+52. **The last workspace may be empty** (GNOME clarification): the trailing workspace
+    is always free, so an emptied workspace that is the only one besides it is left
+    empty rather than chased around; reaping removes empty workspaces that have a
+    loaded neighbour to inherit from.
 
 ## Deliberate non-goals
 
