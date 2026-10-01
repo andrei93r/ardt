@@ -192,11 +192,14 @@ anywhere except §7's single-workspace-capable pair rule.
   sibling so the pair stays flush (§10).
 - Dragging a managed window so its perimeter **crosses another managed window** and
   dropping **swaps** the two. A slight overlap is enough — the rectangles do not have
-  to cover each other; the pair simply trade sides.
-- **Cross-screen drags** follow the target screen's rules: a free slot takes the
-  window (its pair splits as usual), **on the side it came from** — from the left or
-  above, slot 0; from the right or below, slot 1; a window whose perimeter was crossed
-  is swapped with; no room at all → the dropped window floats. A maximized window dragged across
+  to cover each other; the pair simply trade sides. **A free slot wins over a
+  crossing**: the swap happens only when the target has nowhere else to put the
+  window (a full pair, a full screen).
+- **Cross-screen drags** follow the target screen's rules, in this order: a **free
+  slot** takes the window (its pair splits as usual), **on the side it came from** —
+  from the left or above, slot 0; from the right or below, slot 1; **otherwise** a
+  window whose perimeter was crossed is swapped with; **otherwise** (no free slot and
+  nothing crossed) the dropped window floats. A maximized window dragged across
   screens is un-maximized at the drop (Mutter freezes a maximized window's horizontal
   drag and shakes it loose vertically) and then treated by the same rules.
 - **Overview drops**: onto a maximized single → the pair splits; onto a full pair →
@@ -927,6 +930,12 @@ never debug-gated (the deduplication and rate limits still apply).
 
 88. **A rescued fullscreen window keeps its fullscreen** (Q9 of the layout Q&A), and
     display memory remembers it.
+
+89. **A free slot always wins over a perimeter crossing** (Q4 of the layout Q&A): a
+    drop onto another window takes the free slot when the target has one, and the
+    crossed window stays where it is (moving to the other side only if the origin side
+    is the one taken). The swap happens only when there is no free slot — a full pair
+    or a full screen — which is exactly what S3 (a full screen) and S13 (a pair) did.
 
 ## Deliberate non-goals
 

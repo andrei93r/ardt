@@ -206,8 +206,10 @@ actually settle — my call is given, and they are collected at the end for a de
     → A swap.
 84. Dragging a maximized window across screens.
     → Un-maximized at the drop, then the usual rules.
-85. A cross-screen drop over a window while the target also has a free slot. ⚠
-    → The crossing wins: a swap.
+85. A cross-screen drop over a window while the target also has a free slot.
+    → The **free slot wins**: the dropped window takes it and the other stays (moving to
+    the other side only if the origin side is the one taken). The swap happens only when
+    there is no free slot.
 86. A drop over a float. ⚠
     → The float does not count as a crossing; the managed window beneath it does.
 87. The source workspace becomes empty after a drop.
@@ -255,31 +257,16 @@ actually settle — my call is given, and they are collected at the end for a de
      → The window rejoins its pair in slot 1, the created workspace disappears, and the
      view returns.
 
-# Not sure — needs a decision
+# Now settled
 
-These are the only answers above that the model does not actually settle. My call is
-written in; each needs a yes or a correction, and then it goes into the model.
+All nine were answered; the answers are folded into the model (decisions 81–89).
 
-1. **A new window opens beside a fullscreen window.** The workspace's only window is
-   fullscreen. The newcomer cannot split with it (a fullscreen window's geometry is
-   never touched). My call: the newcomer gets **its own workspace to the right**,
-   maximized, and the view follows.
-2. **Fullscreen on a float** (Q26). My call: the same as maximize — it fills where it
-   is and stays floating.
-3. **Unmaximize when the left neighbour holds only a minimized window** (Q30). My call:
-   that is "exactly one window", so the unmaximized window joins there and maximizes
-   (it is alone among visible windows).
-4. **A cross-screen drop over a window while the target also has a free slot** (Q85).
-   My call: the crossing wins — a swap, because dropping *on* a window is a stronger
-   statement than filling a free slot.
-5. **A drop over a float** (Q86). My call: the float is not a tiled window, so it does
-   not count as a crossing; the managed window beneath it does, and if there is none,
-   the drop fills a free slot as usual.
-6. **A no-room float's position after a cross-screen drop.** My call: exactly where it
-   was dropped (a user placement), at the size it had.
-7. **The offset cascade when it would leave the work area.** My call: the float is
-   clamped back inside the work area.
-8. **The order of floats in the focus cycle.** My call: their stacking order,
-   top-most first.
-9. **Unplugging a screen whose window was fullscreen** (Q97). My call: the rescue keeps
-   it fullscreen on the primary, and display memory remembers it.
+1. A new window beside a fullscreen window → its own workspace to the right, maximized.
+2. Fullscreen on a float → fills where it is, stays floating.
+3. Unmaximize into a workspace holding only a minimized window → joins and maximizes.
+4. A cross-screen drop over a window with a free slot → the **free slot wins**; the swap only when there is no free slot.
+5. A drop over a float → the float is never part of the calculation.
+6. A no-room float after a cross-screen drop → exactly where it was dropped, same size.
+7. The offset cascade → the incoming window is offset so it stays clickable and visible, never outside the work area.
+8. The float order in the focus cycle → left to right, perfect overlaps by stacking order.
+9. Unplugging a screen whose window was fullscreen → the rescue keeps it fullscreen, memory keeps it.
