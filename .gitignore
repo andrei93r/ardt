@@ -1,7 +1,7 @@
 # Adrt — ignore rules
 
 ## Dependencies
-node_modules/
+node_modules
 
 ## TypeScript build output (dist/ is the packaged extension layout)
 dist/
