@@ -31,12 +31,13 @@ describe('layerFor', () => {
     expect(layerFor(surface({ flags: { floating: true } }))).toBe(Layer.FLOATING);
   });
 
-  it('tiles a normal window that carries the above flag', () => {
-    // "Always on top" is often left set by an app; a normal window is still
-    // tiled (the adapter clears the flag when it tiles it).
+  it('never tiles a window that carries the above flag (§16, reversing A61)', () => {
+    // A picture-in-picture video or a widget asks to float above the tiling; the
+    // model treats that as the user's decision, so the window is not tiled and
+    // the flag is left as the application set it.
     const verdict = classify(surface({ flags: { above: true } }), config());
-    expect(verdict.tileable).toBe(true);
-    expect(verdict.reason).toBeNull();
+    expect(verdict.tileable).toBe(false);
+    expect(verdict.reason).toBe('above');
   });
 
   it('treats skip-taskbar chrome as BACKGROUND', () => {

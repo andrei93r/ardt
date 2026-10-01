@@ -6,6 +6,12 @@
 # both: no floating leftover once the pair loses a member.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
+# Retired with the v1 rule it tests: the auto-float pull-back is gone in the v2
+# model. A float is only ever explicit (the float key, `neverTile`, or a place
+# with no room) and it pins its workspace. The replacements are A113/A115.
+skip "the auto-float pull-back is replaced in Stage 2 (A113/A115)"
+exit 0
+
 ensure_clean
 open_pair
 ids=($(list_ids))

@@ -24,7 +24,7 @@ ticked and its target runs pass.
 | --- | --- | --- | --- |
 | 0 Grounding and event-confirmed triggers | done | 17/17 | — |
 | 1 Queue mechanism and records | done | 7/7 | — |
-| 2 The model: slots, routing, maximise, emptiness | not started | 0/18 | — |
+| 2 The model: slots, routing, maximise, emptiness | in progress | 3/18 | — |
 | 3 User-driven interactions | not started | 0/8 | — |
 | 4 App registry, prefs, migration | not started | 0/11 | — |
 | 5 Displays and hotplug | not started | 0/7 | — |
@@ -135,7 +135,23 @@ Notes: a refactor stage — the existing suite must stay green throughout.
       A81 needing four screens. The harness now defaults to half the cores, because this
       laptop also runs a live session and the timing-sensitive scenarios starve at full load
 
-## Stage 2 — The model: slots, routing, maximise, emptiness (0/18)
+## Stage 2 — The model: slots, routing, maximise, emptiness (3/18)
+
+> **Handover note (2026-10-01 night).** The pure model is landed and green (43 new unit
+> tests): routing with the arrival side rule and the escape, the maximise/unmaximise
+> ladders, the trigger-wins rule, the refusal ladder, and reaping as a property with the
+> alone-minimized relocation. The classification port is done in the direction that
+> changes behaviour: **always-on-top floats** (reversing A61) and the **auto-float
+> pull-back is deleted**, with `A61-above-floats` as the new scenario and `A50`, `A53`
+> and `A59` retired with the v2 replacements named. The adapter still routes through the
+> old `moveToNewWorkspace`/`floatOverPair` pair of helpers and does not yet call
+> `routeNewWindow`/`reapPlan` in its own paths, the unmaximise ladder is still the v1
+> one, and the remaining deletion list (the `>2` branch, `unmaximizeStaleLone`,
+> `returnFromMaximize`, `previousWorkspaceIdx`, the minimise-slide, the old prune rules,
+> `EXILE_COOLDOWN_MS`, the budget, `workspaceOpDepth`, the three settings) is still in
+> place. **Stages 3–8 are not started.** The known load flake is `A66`'s
+> "a resize is counted as a plan applied" (it passes at one worker; the v1 resize path
+> it watches is replaced by the v2 sizing work). (0/18)
 
 **Failing scenarios first**
 
@@ -153,7 +169,7 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 
 **Implementation**
 
-- [ ] `core/placement.ts`: `routeNewWindow(state, rec, env) → { workspace, slot }`;
+- [x] `core/placement.ts`: `routeNewWindow(state, rec, env) → { workspace, slot }`;
       `canHostWorkspaces(env)` read from GNOME (dynamic / one / static — never from
       internal vs external)
 - [ ] The **arrival rules** (§3): slot 1 by default; the slot on the side it came from
@@ -164,7 +180,7 @@ Notes: a refactor stage — the existing suite must stay green throughout.
       a direction with nothing stays silent
 - [ ] **Adoption** (§20): existing windows adopted without being moved until the first
       drain, which waits for `startup-complete`
-- [ ] `core/workspaces.ts`: `workspaceOps(state, env) → { create, reap }` with the single
+- [x] `core/workspaces.ts`: `workspaceOps(state, env) → { create, reap }` with the single
       trailing spare (global, GNOME's own) and emptying as a property
 - [ ] Adapter: routing and reaping only from the lane-2 drain; windows on a screen
       without workspaces are **not** given a workspace index
@@ -182,7 +198,7 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 - [ ] **Classification ported**: always-on-top floats (reversing A61), dialogs and
       transients float/centre/raise, an app mapping itself maximized is unmaximized and
       tiled, fullscreen is the "does not fit" case
-- [ ] `core/placement.test.ts` + `core/workspaces.test.ts` (~28 cases)
+- [x] `core/placement.test.ts` + `core/workspaces.test.ts` (43 cases)
 - [ ] The scenario set rewritten or retired (table in the CHANGELOG) with spec/README
       §7/§9/§16/§35/§21 in the same commits
 

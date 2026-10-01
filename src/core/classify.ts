@@ -111,9 +111,11 @@ export function classify(
   // workspace of its own. `sticky` carries that distinction (§5).
   if (f.sticky) return fail('on-all-workspaces');
   if (f.fullscreen) return fail('fullscreen');
-  // Note: `above` ("always on top") deliberately does NOT disqualify a window.
-  // Apps leave that flag set by accident, and the user's model is that a normal
-  // window is always tiled; the adapter clears the flag when it tiles it.
+  // §16 (reversing the old A61): a window that asks to be "always on top" wants
+  // to float above the tiling — a picture-in-picture video, a widget — so it is
+  // never tiled and the flag is never cleared. The model is explicit that this
+  // is the user's decision, not an accident to correct.
+  if (f.above) return fail('above');
   for (const exception of config.exceptionApps) {
     if (globMatch(exception, surface.appId)) return fail('exception-app');
   }

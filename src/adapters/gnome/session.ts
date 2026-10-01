@@ -640,23 +640,9 @@ export class WindowSession {
         this.scheduleRetile(workspaceId, 'lone-unmaximize');
         continue;
       }
-      // A monitor reduced to a single tile plus an automatic float tiles both
-      // again — no floating leftover once the pair loses a member. This runs
-      // before the lone-maximize policy, which would otherwise keep the one
-      // remaining tile maximized and leave the float alone.
-      if (tileables.length === 1) {
-        const floats = this.autoFloated(workspaceId).filter(onScreen);
-        if (floats.length === 1) {
-          const floater = floats[0];
-          floater.surface.setFloating(false);
-          floater.autoFloated = false;
-          this.deps.host.applyLayer(floater.id, Layer.TILED, 0);
-          this.signatures.clearAll();
-          this.deps.history.log('tile', { reason: 'unfloat-lone', id: floater.id, workspaceId });
-          this.scheduleRetile(workspaceId, 'unfloat-lone');
-          continue;
-        }
-      }
+      // §6 (v2): the auto-float pull-back is gone. A float is only ever made
+      // explicitly (the float key, `neverTile`, or a placement with no room) and
+      // it pins its workspace; a lone visible window is simply maximized.
       // A monitor that somehow holds more than a pair must never leave an extra
       // stacked. How it got here decides what happens to it: a window the user
       // dragged in (the overview) floats over the pair, while one that simply
@@ -676,11 +662,6 @@ export class WindowSession {
         const only = tileables[0];
         if (!compat.isMaximized(only.win)) this.deps.host.maximize(only.id);
         continue;
-      }
-      // A window we are about to tile must not stay "always on top", or it
-      // would cover its sibling.
-      for (const tracked of tileables) {
-        if (tracked.surface.flags.above) this.deps.host.clearAbove(tracked.id);
       }
       // A maximized tileable is mid-policy: it either lives on its own
       // workspace or is about to move there. Tiling it now would unmaximize it
@@ -803,7 +784,12 @@ export class WindowSession {
   }
 
   private shouldLoneMaximize(tileables: readonly TrackedWindow[], nonTransient: readonly TrackedWindow[]): boolean {
-    return nonTransient.length === 1 && tileables.length === 1;
+    if (tileables.length !== 1) return false;
+    // §4: a lone *visible managed* window is maximized. Floats (an always-on-top
+    // window, a dialog) do not count, or the window left behind when one floats
+    // would stay at half size (A61).
+    const managed = nonTransient.filter((t) => this.classify(t).tileable && !t.surface.flags.minimized);
+    return managed.length === 1;
   }
 
   /**

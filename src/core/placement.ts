@@ -57,7 +57,8 @@ export interface Env {
 export interface Placement {
   /** Index of the target workspace in `state.workspaces`. */
   workspace: number;
-  slot: 0 | 1;
+  /** The slot the window takes, when it lands in one. */
+  slot?: 0 | 1;
   /** A workspace must be created immediately to the right of this one. */
   createRight?: boolean;
   /** These windows must be minimized. */
@@ -114,7 +115,7 @@ export function sideSlot(from: Direction | null | undefined): 0 | 1 {
 export function routeNewWindow(
   state: State,
   env: Env,
-  rec: Win,
+  _rec: Win,
   from: Direction | null = null,
   ownWorkspace: number | null = null,
   doesNotFit = false,
