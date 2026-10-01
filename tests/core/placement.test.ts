@@ -213,11 +213,18 @@ describe('refusalLadder (the sibling adapts first, §10 step 2)', () => {
 describe('dropPlacement (the user drop ladder, §6)', () => {
   const env = { screen: 'dynamic' as const, axis: 'horizontal' as const };
 
-  it('a free slot wins', () => {
+  it('a cross-screen arrival takes the side it came from', () => {
+    // The target single sits in slot 0; an arrival from its left lands in slot
+    // 0 and the resident is pushed to slot 1 (A117's screen case).
     const s = state([ws(0, [win(1), null]), ws(1)]);
-    expect(dropPlacement(s, env, 2, 0, 'left', null)).toEqual({ kind: 'slot', workspace: 0, slot: 1 });
-    const s2 = state([ws(0, [null, win(1)]), ws(1)]);
-    expect(dropPlacement(s2, env, 2, 0, 'right', null)).toEqual({ kind: 'slot', workspace: 0, slot: 0 });
+    expect(dropPlacement(s, env, 2, 0, 'left', null)).toEqual({ kind: 'slot', workspace: 0, slot: 0 });
+    // From the right it takes slot 1 and the resident keeps slot 0.
+    expect(dropPlacement(s, env, 2, 0, 'right', null)).toEqual({ kind: 'slot', workspace: 0, slot: 1 });
+  });
+
+  it('without a side, a free slot wins on the slot-1 default', () => {
+    const s = state([ws(0, [null, win(1)]), ws(1)]);
+    expect(dropPlacement(s, env, 2, 0, null, null)).toEqual({ kind: 'slot', workspace: 0, slot: 0 });
   });
 
   it('a free slot beats a crossing', () => {

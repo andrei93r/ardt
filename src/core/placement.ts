@@ -81,16 +81,15 @@ export function freeSlot(ws: Ws): 0 | 1 | null {
 }
 
 /**
- * The slot an arrival takes: the right one (slot 1) when it is free, else the
- * left — and when the arrival has a side, that side first (§3).
+ * The slot an arrival takes: the right one (slot 1) when no side is known,
+ * else the side it came from (§3). A cross-screen or cross-workspace arrival
+ * lands against the edge it just crossed, and the window already in that slot
+ * is pushed to the other one — the adapter pins both sides. `null` only when
+ * there is no free slot at all.
  */
 export function arrivalSlot(ws: Ws, from: Direction | null = null): 0 | 1 | null {
   if (freeSlot(ws) === null) return null;
-  if (from !== null) {
-    const wanted = sideSlot(from);
-    if (ws.slots[wanted] === null) return wanted;
-    return wanted === 0 ? 1 : 0;
-  }
+  if (from !== null) return sideSlot(from);
   return ws.slots[1] === null ? 1 : 0;
 }
 
