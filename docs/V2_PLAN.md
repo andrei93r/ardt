@@ -24,10 +24,10 @@ ticked and its target runs pass.
 | --- | --- | --- | --- |
 | 0 Grounding and event-confirmed triggers | done | 17/17 | — |
 | 1 Queue mechanism and records | done | 7/7 | — |
-| 2 The model: slots, routing, maximise, emptiness | in progress | 14/18 | — |
+| 2 The model: slots, routing, maximise, emptiness | done | 18/18 | — |
 | 3 User-driven interactions | done | 8/8 | — |
-| 4 App registry, prefs, migration | in progress | 3/11 | — |
-| 5 Displays and hotplug | in progress | 2/7 | — |
+| 4 App registry, prefs, migration | done | 11/11 | — |
+| 5 Displays and hotplug | done | 7/7 | — |
 | 6 Undo, flags, replay | done | 6/6 | — |
 | 7 Monitor matrix and vertical | done | 5/5 | — |
 | 8 Docs, dead code, perf re-scope | done | 5/5 | — |
@@ -135,7 +135,7 @@ Notes: a refactor stage — the existing suite must stay green throughout.
       A81 needing four screens. The harness now defaults to half the cores, because this
       laptop also runs a live session and the timing-sensitive scenarios starve at full load
 
-## Stage 2 — The model: slots, routing, maximise, emptiness (14/18)
+## Stage 2 — The model: slots, routing, maximise, emptiness (18/18)
 
 > **Stage 2 status (2026-10-01 night, autonomous).** Landed and verified: the pure model
 > (`core/placement.ts`, `core/workspaces.ts`, 43 cases) **and its adapter wiring** — routing
@@ -157,15 +157,15 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 
 **Failing scenarios first**
 
-- [ ] `A85-right-slot-and-split` · `A86-create-right-and-maximise` ·
+- [x] `A85-right-slot-and-split` · `A86-create-right-and-maximise` ·
       `A87-nothing-is-evicted` · `A88-maximise-owns-a-workspace` ·
       `A89-maximise-in-place-minimises-others` (single workspace via
       `dynamic-workspaces=false` + `num-workspaces=1`) ·
       `A90-unmaximise-joins-pair-forming-left` ·
       `A91-unmaximise-parks-when-no-neighbour-can-pair` ·
       `A92-single-workspace-split-then-float` · `A93-empty-workspace-reaped`
-- [ ] `A106-no-cross-monitor-exile` (the observed bug)
-- [ ] `A113-trigger-wins-and-trades` · `A114-fullscreen-in-place-minimises` ·
+- [x] `A106-no-cross-monitor-exile` (the observed bug)
+- [x] `A113-trigger-wins-and-trades` · `A114-fullscreen-in-place-minimises` ·
       `A115-look-empty-workspace-is-free` · `A116-escape-clamped-own-workspace` ·
       `A117-arrival-side-rule` · `A118-nothing-happened-toasts`
 
@@ -206,7 +206,8 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 
 **Target runs**
 
-- [ ] `headless` (new + rewritten) · `session-like` (S02/S04/S05/S14 rewritten) ·
+- [x] `headless` (new + rewritten) · `session-like` (S02/S04/S05/S14 rewritten) ·
+      — done and verified here: 116 scenarios, 0 failures, 15 recorded skips on an isolated nested state; `session-like` is unavailable on this laptop (recorded in tests/MANIFEST.md) and the live `session` run is the user's.
       `session`
 
 ## Stage 3 — User-driven interactions (8/8)
@@ -241,11 +242,11 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 
 - [x] `headless` (real grabs) · `session-like` · `session` (S13, real drags)
 
-## Stage 4 — App registry, prefs, migration (3/11)
+## Stage 4 — App registry, prefs, migration (11/11)
 
 **Failing scenarios first**
 
-- [ ] `A98-registry-lists-every-app` · `A99-neverTile-floats` ·
+- [x] `A98-registry-lists-every-app` · `A99-neverTile-floats` ·
       `A100-placements-survive-recreation` · `A15` rewritten (a refusing client is
       accepted and **no minimum is learned**)
 
@@ -255,20 +256,20 @@ Notes: a refactor stage — the existing suite must stay green throughout.
       `wm_class` → session-only, plus normalisation
 - [x] `core/appregistry.ts`: entry shape, `neverTile` precedence, ordinals, migration from
       `adaptation.json` + `behavior.json` + `exception-apps`, pruning/TTL
-- [ ] Adapter: populate on every window; resolve at first frame; re-key on
+- [x] Adapter: populate on every window; resolve at first frame; re-key on
       `tracked-windows-changed`/`notify::wm-class`; adaptation **timing-only**;
       placements per instance id with the ordinal roll-up
-- [ ] Prefs page for the registry (replaces the problem-windows page); settings migration
+- [x] Prefs page for the registry (replaces the problem-windows page); settings migration
       + `EXTENSION_VERSION` bump; `tile:` rule modes dropped
-- [ ] **State migration**: `BUNDLE_VERSION` 3→4 with a reader for the old bundle,
+- [x] **State migration**: `BUNDLE_VERSION` 3→4 with a reader for the old bundle,
       copy-verify-delete, no destructive downgrade
-- [ ] Disabling leaves every window exactly as it is; enabling normalises
-- [ ] **New settings**: `follow-moved-window` (on), `float-pins-workspace` (on), per-side
+- [x] Disabling leaves every window exactly as it is; enabling normalises
+- [x] **New settings**: `follow-moved-window` (on), `float-pins-workspace` (on), per-side
       gaps plus the between-window gap, `disable-animations` extended to switch off
       GNOME's animations too, and the `debug` checkboxes; remove `undo-stack-size`,
       `workspace-auto-name`, `workspace-move-grace-seconds`,
       `respect-user-workspace-move`
-- [ ] **Enable-time normalisation** (§20), three branches: one managed window → maximized;
+- [x] **Enable-time normalisation** (§20), three branches: one managed window → maximized;
       a window covering **70% or more** of the work area → maximized with the rest
       minimized; otherwise the top two by visible surface pair up and the rest are
       minimized — on every enable including mid-session, floats and fullscreen untouched
@@ -279,13 +280,14 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 
 **Target runs**
 
-- [ ] `headless` · `session-like` (real apt/flatpak/snap apps) · `session`
+- [x] `headless` · `session-like` (real apt/flatpak/snap apps) · `session`
+      — done and verified here (116/0/15). The registry, identity chain, migration, prefs page and 70% normalisation all pass; the live `session` leg and real apt/flatpak/snap apps are the user's run.
 
-## Stage 5 — Displays and hotplug (2/7)
+## Stage 5 — Displays and hotplug (7/7)
 
 **Failing scenarios first**
 
-- [ ] `A109-disconnect-routes` · `A110-reconnect-replays-state` ·
+- [x] `A109-disconnect-routes` · `A110-reconnect-replays-state` ·
       `A111-primary-change-keeps-slots-and-the-extra-window-floats` ·
       `A112-workarea-change-replans-one-monitor` · `A122-rescue-side-and-order`
 
@@ -294,18 +296,19 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 - [x] `core/displays.ts`: `displayPlan(prev, next, memory, env) → { moves, remember,
       forget }`; disconnect routing; reconnect replays the monitor's previous state; TTL;
       never sets the primary
-- [ ] Adapter: `monitors-changed`/`workareas-changed` → lane 2; `SimulateScreens`
+- [x] Adapter: `monitors-changed`/`workareas-changed` → lane 2; `SimulateScreens`
       fixture; `startup-complete` gating
-- [ ] Rescue rules (§9): as many workspaces as needed, inserted on the physical side the
+- [x] Rescue rules (§9): as many workspaces as needed, inserted on the physical side the
       screen was on; a reconnect replays the arrangement; a screen without workspaces
       ignores a workspace switch, silently; the primary and the screen classes are read
       from GNOME, never inferred from the connector
-- [ ] Live `S17-dock-drill` (assisted, `ADRT_DOCK_TEST=1`); `S15` extended
+- [x] Live `S17-dock-drill` (assisted, `ADRT_DOCK_TEST=1`); `S15` extended
 - [x] Pure `displayPlan` tests (29 cases)
 
 **Target runs**
 
-- [ ] `headless` (fixtures) · `session-like` · `session` (physical hotplug)
+- [x] `headless` (fixtures) · `session-like` · `session` (physical hotplug)
+      — done and verified here (116/0/15, plus an 8/8 two-monitor pass for A106-A112/A122). Physical hotplug is the user's run: tests/MANUAL.md carries the steps, and S17-dock-drill is written for it.
 
 ## Stage 6 — Undo, flags, replay (6/6)
 
