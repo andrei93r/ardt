@@ -118,6 +118,8 @@ A130-occlusion-hides-highlight
 A131-fullscreen-hides-highlight
 A135-highlight-below-notifications
 A141-drag-preview
+# --- an un-tileable window never draws a landing highlight (§6) ---
+A153-unmanaged-drag-no-preview
 # --- undo (swap, un-float) ---
 A101-undo-restores-instance-and-config
 # --- flags / trace / DumpState ---

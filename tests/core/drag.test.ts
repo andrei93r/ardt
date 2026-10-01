@@ -41,6 +41,8 @@ const input = (overrides: Partial<DragInput> & Pick<DragInput, 'dragged' | 'othe
   id: overrides.dragged.id,
   screen: SCREEN,
   config: CONFIG,
+  // Most cases drag a managed window; the unmanaged cases below opt out.
+  managed: true,
   ...overrides,
 });
 
@@ -67,7 +69,7 @@ describe('dragOutcome (the one drag decision, §6/§11)', () => {
       crossed: null,
       samePlane: false,
       state: state([ws(0, [win(1), null]), ws(1)]),
-    }));
+    }))!;
     expect(out).toMatchObject({ kind: 'slot', workspace: 0, slot: 1 });
     expect(out.rect).toEqual(rect(600, 0, 600, 800));
   });
@@ -84,7 +86,7 @@ describe('dragOutcome (the one drag decision, §6/§11)', () => {
       crossed: null,
       samePlane: false,
       state: state([ws(0, [null, win(1)]), ws(1)]),
-    }));
+    }))!;
     expect(out).toMatchObject({ kind: 'slot', slot: 0 });
     expect(out.rect).toEqual(rect(0, 0, 600, 800));
   });
@@ -102,7 +104,7 @@ describe('dragOutcome (the one drag decision, §6/§11)', () => {
       from: null,
       crossed: 2,
       samePlane: true,
-    }));
+    }))!;
     expect(out).toMatchObject({ kind: 'swap', with: 2 });
     expect(out.rect).toEqual(rect(600, 0, 600, 800));
   });
@@ -118,7 +120,7 @@ describe('dragOutcome (the one drag decision, §6/§11)', () => {
       from: null,
       crossed: 2,
       samePlane: true,
-    }));
+    }))!;
     expect(out.rect).toEqual(rect(600, 0, 600, 800));
   });
 
@@ -133,7 +135,7 @@ describe('dragOutcome (the one drag decision, §6/§11)', () => {
       crossed: null,
       samePlane: false,
       state: state([ws(0, [win(1), win(3)]), ws(1)]),
-    }));
+    }))!;
     expect(out).toMatchObject({ kind: 'maximize', workspace: 1 });
     expect(out.rect).toEqual(AREA);
   });
@@ -150,7 +152,7 @@ describe('dragOutcome (the one drag decision, §6/§11)', () => {
       crossed: null,
       samePlane: false,
       state: state([ws(0, [win(1), win(2)]), ws(1)]),
-    }));
+    }))!;
     expect(out).toMatchObject({ kind: 'float', workspace: 0 });
     expect(out.rect).toEqual(dropped);
   });
@@ -166,8 +168,53 @@ describe('dragOutcome (the one drag decision, §6/§11)', () => {
       from: null,
       crossed: null,
       samePlane: true,
-    }));
+    }))!;
     expect(out).toMatchObject({ kind: 'none', workspace: 0 });
     expect(out.rect).toEqual(rect(600, 0, 600, 800));
+  });
+});
+
+describe('dragOutcome: only a managed window has a landing (§6)', () => {
+  // The same-plane crossing an unmanaged window must never be offered.
+  const crossing = (managed: boolean): DragInput => {
+    const dragged = twin(1, 'a', rect(700, 0, 600, 800), 1);
+    const sibling = twin(2, 'b', rect(600, 0, 600, 800), 1);
+    return input({
+      dragged,
+      managed,
+      othersByWorkspace: new Map([[0, [sibling]]]),
+      dropped: rect(596, 0, 600, 800),
+      workspace: 0,
+      from: null,
+      crossed: 2,
+      samePlane: true,
+    });
+  };
+
+  it('an unmanaged window crossing a tile has no landing decision (no highlight, no swap)', () => {
+    // A dialog, a popup or a skip-taskbar utility: `null` hides the drop-assist
+    // overlay and the drop applies nothing. Before the fix this returned a swap.
+    expect(dragOutcome(crossing(false))).toBeNull();
+  });
+
+  it('a managed window crossing a tile still swaps (the gate is not over-broad)', () => {
+    expect(dragOutcome(crossing(true))).toMatchObject({ kind: 'swap', with: 2 });
+  });
+
+  it('an unmanaged cross-plane drag has no landing decision either', () => {
+    const dragged = twin(2, 'b', rect(700, 0, 600, 800));
+    const resident = twin(1, 'a', rect(0, 0, 600, 800), 0);
+    const out = dragOutcome(input({
+      dragged,
+      managed: false,
+      othersByWorkspace: new Map([[0, [resident]]]),
+      dropped: rect(700, 0, 600, 800),
+      workspace: 0,
+      from: 'right',
+      crossed: null,
+      samePlane: false,
+      state: state([ws(0, [win(1), null]), ws(1)]),
+    }));
+    expect(out).toBeNull();
   });
 });

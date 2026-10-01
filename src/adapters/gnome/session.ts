@@ -3263,6 +3263,12 @@ export class WindowSession {
       workspace: tracked.surface.workspaceId,
       from: this.dropFrom(tracked),
       crossed,
+      // §6: only a managed (tileable) window has a landing decision. A dragged
+      // dialog, popup, skip-taskbar utility, always-on-top widget, fixed-size
+      // client or never-tiled app gets no drop-assist highlight and no
+      // swap/slot/maximize — the drag is a plain move. This is the one place the
+      // preview and the drop both read, so they can never disagree.
+      managed: this.classify(tracked).tileable,
       samePlane,
       screen,
       config: this.tilerConfig(),
