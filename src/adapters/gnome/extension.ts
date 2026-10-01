@@ -1041,10 +1041,16 @@ export default class AdrtExtension extends Extension {
    * §6/§11: the drop-assist overlay. The target is the model's own drag
    * decision (`WindowSession.previewTarget`), recomputed here while the drag is
    * live — the same decision the drop applies, so the outline is exact.
+   *
+   * A `kind: 'none'` decision is a no-op drop, but it is still a landing: the
+   * window returns to its own tile, and `rect` is exactly that tile. Hiding it
+   * left the origin slot without a hint when a window was dragged back over the
+   * spot it came from. Only a `null` target (an inner-edge resize, which has no
+   * landing rect) or a suppressed session hides the overlay.
    */
   private syncPreview(): void {
     const target = this.session.isDragging ? this.session.previewTarget() : null;
-    if (target === null || target.kind === 'none' || this.isPaused() || overview.visible) {
+    if (target === null || this.isPaused() || overview.visible) {
       this.indicator.hidePreview();
       return;
     }

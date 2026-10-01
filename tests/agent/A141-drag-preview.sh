@@ -64,6 +64,26 @@ if i["color"].lower() != "#ed5b00":
 print(i["color"])
 '
 
+# Drag a back over its own origin slot. The drop there is a no-op — the window
+# stays on its own tile — but the origin is still a valid landing and must be
+# previewed at its own rect, not hidden.
+adrt MoveWindow "$a" "$AX" "$AY" "$AW" "$AH" >/dev/null
+
+if wait_python 10 '
+import json, sys
+d = json.load(sys.stdin)
+p = d["indicator"]["preview"]
+if not p["visible"]:
+    sys.exit(1)
+r = p["rect"]
+want = (int("'"$AX"'"), int("'"$AY"'"), int("'"$AW"'"), int("'"$AH"'"))
+got = (r["x"], r["y"], r["width"], r["height"])
+sys.exit(0 if all(abs(g - w) <= 4 for g, w in zip(got, want)) else 1)'; then
+  pass "the origin slot is previewed when the drag returns to it"
+else
+  fail "the origin slot was not previewed when the drag returned to it"
+fi
+
 adrt EndDrag "$a" >/dev/null
 if wait_python 10 '
 import json, sys
