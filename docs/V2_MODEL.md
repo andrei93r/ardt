@@ -211,6 +211,10 @@ anywhere except §7's single-workspace-capable pair rule.
   lands on the window whose position matches the one you came from — "the correct
   orientation": moving left out of a landscape screen onto a portrait one picks the
   window nearest your current vertical position, and the reverse likewise.
+- **Focus cycle** walks the windows of the **current screen and workspace**: the
+  managed windows in slot order, then the **floats** in stacking order, wrapping round.
+  **Minimized windows are skipped**, and it never crosses a screen or a workspace;
+  focusing a float raises it.
 - **Focus never switches workspace.** A keyboard **move** reaches another workspace
   only through the dedicated move shortcuts (§17); crossing a screen edge only
   re-slots the window on the target screen, it never changes its workspace.
@@ -865,6 +869,10 @@ never debug-gated (the deduplication and rate limits still apply).
     old pixel size, and none floats or changes workspace because of it; a float is
     untouched. Gaps default to zero on the outer edges and to `gaps-base` (8 px)
     between the two windows, per side and per orientation.
+
+75. **The focus cycle covers the current screen and workspace, floats included** (the
+    user's answer): the managed windows in slot order and then the floats, wrapping;
+    minimized windows are skipped and it never crosses a screen or a workspace.
 
 ## Deliberate non-goals
 
