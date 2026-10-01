@@ -26,6 +26,23 @@ if ! gdbus call --session --dest org.adrt.Adrt --object-path /org/adrt/Adrt \
   exit 2
 fi
 
+# One live run at a time: two would drive the same desktop at once. Fail fast
+# rather than block — a user-driven run should not sit silently behind another.
+REGISTRY="${ADRT_RUN_REGISTRY:-${XDG_RUNTIME_DIR:-/tmp}/adrt-nested-runs}"
+mkdir -p "$REGISTRY"
+if command -v flock >/dev/null 2>&1; then
+  exec 8>"$REGISTRY/.live.lock"
+  if ! flock -n 8; then
+    echo "session-test: another live run is already active." >&2
+    exit 3
+  fi
+fi
+# Advertise the run in the shared budget so concurrent nested suites leave the
+# machine room (and prune this entry if the run is killed).
+LIVE_RUN_ID="$$-live"
+printf '%s %s %s\n' "$$" "${ADRT_LIVE_WORKERS:-2}" "$REGISTRY/.live" > "$REGISTRY/$LIVE_RUN_ID"
+trap 'rm -f "$REGISTRY/$LIVE_RUN_ID"' EXIT
+
 # Is the running module the freshly installed one? Compare the installed file's
 # time with the Shell's start time. This never touches the desktop (an earlier
 # version probed a D-Bus method, which opened the overview on the user's screen).
