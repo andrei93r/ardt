@@ -1399,8 +1399,8 @@ export default class AdrtExtension extends Extension {
   private probePlatform(): string {
     let virtualInput = false;
     try {
-      const backend = Clutter.get_default_backend();
-      const seat = backend.get_default_seat();
+      // GNOME 51 removes Clutter.get_default_backend(); go through compat.
+      const seat = compat.defaultSeat();
       virtualInput = typeof seat?.create_virtual_device === 'function';
     } catch {
       virtualInput = false;
@@ -1473,7 +1473,7 @@ export default class AdrtExtension extends Extension {
   private ensureInjection(): boolean {
     if (!this.injectionEnabled) return false;
     try {
-      if (this.injectSeat === null) this.injectSeat = Clutter.get_default_backend().get_default_seat();
+      if (this.injectSeat === null) this.injectSeat = compat.defaultSeat();
       if (this.injectPointer === null) {
         this.injectPointer = this.injectSeat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
       }
