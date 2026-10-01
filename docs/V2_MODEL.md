@@ -488,6 +488,11 @@ Each entry is a checkbox in the debug settings; when ticked, that decision raise
 live notification phrased as the decision itself, so the logic can be followed as it
 happens. All default off, deduplicated and rate-limited per event.
 
+**The exception: a request that changes nothing always toasts**, with its reason —
+nothing to undo, a move to a workspace on a screen that has only one, un-floating
+when both slots are taken, a nudge with nothing to nudge. These are user-facing and
+never debug-gated (the deduplication and rate limits still apply).
+
 | Notification | When |
 | --- | --- |
 | *"Workspace full → created one to the right"* | routing overflow |
@@ -506,6 +511,8 @@ happens. All default off, deduplicated and rate-limited per event.
 | *"No room next to it → parking it minimized on the neighbouring workspace"* | §4 |
 | *"Cannot move: this screen has only one workspace"* | §17, the impossible request |
 | *"Nothing to undo"* | §13 |
+| *"Cannot un-float: both slots are taken"* | §6, nothing happened |
+| *"Nothing to nudge"* | §17, a lone maximized window |
 
 ## 22. Journal and instrumentation
 
@@ -715,6 +722,11 @@ happens. All default off, deduplicated and rate-limited per event.
 55. **Undo after a maximize** (test scenario S26, confirmed): the maximized window
     rejoins its former pair (slot 1), the workspace it had been moved to disappears,
     and the view follows back. This is the mirror of undoing an unmaximize.
+
+56. **A request that changes nothing always toasts** (the user's rule after S27), with
+    its reason, and never behind a debug checkbox: un-floating with both slots taken,
+    a move to a workspace on a screen that has only one, an undo with nothing to
+    revert, a nudge with nothing to nudge. Deduplicated and rate-limited.
 
 ## Deliberate non-goals
 
