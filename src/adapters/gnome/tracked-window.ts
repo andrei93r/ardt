@@ -90,6 +90,13 @@ export class TrackedWindow {
   escaped = false;
   /** §3/§4: the slot the window's own change chose, honoured by the tiler. */
   pendingSlot: 0 | 1 | null = null;
+  /**
+   * §3/§11: a mapped, tileable newcomer whose placement has not been decided
+   * yet. `onReady` only records this; the lane-2 drain computes
+   * `routeNewWindow` from live state and applies it, so a raced spawn signal
+   * cannot leave a layout half-decided. While set the window is not tiled.
+   */
+  routePending = false;
 
   /** Cached min/max dimensions; never re-queried on the tile hot path. */
   minSize: Size;

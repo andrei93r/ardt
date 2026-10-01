@@ -5,7 +5,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  dropPlacement, escapeSize, freeSlot, impossibleSplit, minimizeRelocation, routeNewWindow, sideSlot, unmaximizeWindow,
+  dropPlacement, escapeSize, freeSlot, impossibleSplit, minimizeRelocation, refusalLadder, routeNewWindow,
+  sideSlot, unmaximizeWindow,
 } from '../../src/core/placement.js';
 import type { State, Win, Ws } from '../../src/core/placement.js';
 
@@ -193,14 +194,37 @@ describe('impossibleSplit (the trigger wins, §10 step 3-4)', () => {
   });
 });
 
+describe('refusalLadder (the sibling adapts first, §10 step 2)', () => {
+  it('lets the sibling adapt to the remainder', () => {
+    expect(refusalLadder(700, 200, 1280)).toEqual({ sibling: 580, escaped: false });
+  });
+  it('gives the sibling at least its minimum when the remainder is smaller', () => {
+    // The remainder would be 380, below the sibling's 500 minimum: it refuses.
+    expect(refusalLadder(900, 500, 1280)).toMatchObject({ escaped: true });
+  });
+  it('hands the whole remainder to a sibling that can use it', () => {
+    expect(refusalLadder(100, 200, 1280)).toEqual({ sibling: 1180, escaped: false });
+  });
+  it('escapes when the refusing window alone exceeds the split', () => {
+    expect(refusalLadder(2000, 100, 1280)).toMatchObject({ escaped: true });
+  });
+});
+
 describe('dropPlacement (the user drop ladder, §6)', () => {
   const env = { screen: 'dynamic' as const, axis: 'horizontal' as const };
 
-  it('a free slot wins', () => {
+  it('a cross-screen arrival takes the side it came from', () => {
+    // The target single sits in slot 0; an arrival from its left lands in slot
+    // 0 and the resident is pushed to slot 1 (A117's screen case).
     const s = state([ws(0, [win(1), null]), ws(1)]);
-    expect(dropPlacement(s, env, 2, 0, 'left', null)).toEqual({ kind: 'slot', workspace: 0, slot: 1 });
-    const s2 = state([ws(0, [null, win(1)]), ws(1)]);
-    expect(dropPlacement(s2, env, 2, 0, 'right', null)).toEqual({ kind: 'slot', workspace: 0, slot: 0 });
+    expect(dropPlacement(s, env, 2, 0, 'left', null)).toEqual({ kind: 'slot', workspace: 0, slot: 0 });
+    // From the right it takes slot 1 and the resident keeps slot 0.
+    expect(dropPlacement(s, env, 2, 0, 'right', null)).toEqual({ kind: 'slot', workspace: 0, slot: 1 });
+  });
+
+  it('without a side, a free slot wins on the slot-1 default', () => {
+    const s = state([ws(0, [null, win(1)]), ws(1)]);
+    expect(dropPlacement(s, env, 2, 0, null, null)).toEqual({ kind: 'slot', workspace: 0, slot: 0 });
   });
 
   it('a free slot beats a crossing', () => {

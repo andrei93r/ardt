@@ -21,7 +21,8 @@ import { displayPlan } from '../../core/displays.js';
 import { normalizePlan } from '../../core/normalize.js';
 import type { NormalizeWindow } from '../../core/normalize.js';
 import {
-  dropPlacement, escapeSize, maximizeWindow, routeNewWindow, unmaximizeWindow, windowCount,
+  dropPlacement, escapeSize, impossibleSplit, maximizeWindow, refusalLadder, routeNewWindow,
+  unmaximizeWindow, windowCount,
 } from '../../core/placement.js';
 import type { Axis, Env, Placement, ScreenClass, State, Win, Ws } from '../../core/placement.js';
 import { reapPlan } from '../../core/workspaces.js';
@@ -33,9 +34,9 @@ const MAINTENANCE_SETTLE_MS = 200;
 import { checkPlan } from '../../core/invariants.js';
 import { SignatureCache, planSignature } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
-import { computePlans, ratioKey, screenArea } from '../../core/tiler.js';
+import { computePlans, effectiveGap, ratioKey, screenArea } from '../../core/tiler.js';
 import type { FocusDirection } from '../../core/focus.js';
-import { cycleOrder, pickDirectional } from '../../core/focus.js';
+import { cycleOrder, cycleSequence, pickDirectional } from '../../core/focus.js';
 import type { CycleEntry } from '../../core/focus.js';
 import { Layer } from '../../core/types.js';
 import type { Rect, Screen, TilePlan } from '../../core/types.js';
@@ -131,8 +132,6 @@ export class WindowSession {
   private crossScreenId: number | null = null;
   /** The screen the move is heading to; the arrival waits until it lands there. */
   private crossScreenTarget: number | null = null;
-  /** Bounded re-arms while a `move_to_monitor` is still in flight. */
-  private crossScreenAttempts = 0;
   /** When the dragged window last changed geometry (stale-drag watchdog). */
   private dragLastActivityMs = 0;
   /** True while a compositor state makes tiling pointless (the overview). */
@@ -158,6 +157,13 @@ export class WindowSession {
   private sweepFrameReads = 0;
   private sweepMsTotal = 0;
   private sweepMsMax = 0;
+  /**
+   * §6/§17: the fixed order of the focus-cycle lap in progress, and the last
+   * window it focused. A lap is built once (from the live stacking order) and
+   * kept until it wraps or focus changes by another route, so raising a float
+   * as it is focused cannot re-order the lap.
+   */
+  private cycleLap: { workspaceId: number; screenId: number; order: number[]; startId: number; lastId: number } | null = null;
 
   constructor(private readonly deps: SessionDeps) {}
 
@@ -180,7 +186,8 @@ export class WindowSession {
       this.onGrabEnd(win, op),
     );
     // Anything that can move, restack or re-parent a window triggers a
-    // debounced global reconcile pass.
+    // debounced global reconcile pass. `window-entered-monitor` is also what
+    // re-queues a pending cross-screen move once `move_to_monitor` lands (A106).
     this.displaySignals.push(
       global.display.connect('window-entered-monitor', () => this.scheduleReconcile('window-monitor')),
       global.display.connect('window-left-monitor', () => this.scheduleReconcile('window-monitor')),
@@ -446,8 +453,10 @@ export class WindowSession {
       this.scheduleReconcile('register-unmaximize');
       return;
     }
-    // §3: the routing decision comes from the pure model; the adapter applies it.
-    this.routeWindow(tracked);
+    // §3: routing comes from the pure model and is applied by the lane-2
+    // drain. Here we only record that the window is ready and push the work.
+    tracked.routePending = true;
+    this.scheduleReconcile('route');
   }
 
   /**
@@ -558,6 +567,9 @@ export class WindowSession {
     for (let index = 0; index < count; index++) workspaces.push({ id: index, slots: [null, null], minimized: [], floats: [] });
     for (const tracked of [...this.windows.values()].sort((a, b) => a.id - b.id)) {
       if (tracked.id === excludeId) continue;
+      // A newcomer whose placement is still pending holds no slot yet: its
+      // routing is derived from live state in the drain (§3/§11).
+      if (tracked.routePending) continue;
       const ws = workspaces[tracked.surface.workspaceId];
       if (ws === undefined) continue;
       const rec: Win = {
@@ -742,6 +754,7 @@ export class WindowSession {
   unregister(id: number): void {
     const tracked = this.windows.get(id);
     if (tracked === undefined) return;
+    if (this.crossScreenId === id) this.clearCrossScreenMove();
     const workspaceId = tracked.surface.workspaceId;
     const closedRect: Rect = { ...tracked.surface.frame };
     // Only windows we actually tiled get a close ghost; popups, menus,
@@ -1237,7 +1250,10 @@ export class WindowSession {
     // §6: a directional move that crossed a screen edge is arrived from here,
     // but only once Mutter has actually put the window on the target screen —
     // `move_to_monitor` is asynchronous and arriving early floats it against the
-    // source work area (A106).
+    // source work area (A106). The arrival is event-driven: `window-entered-
+    // monitor` (wired in `startScan`) pushes another lane-2 pass when the move
+    // lands, so a pass that still sees the source screen simply leaves the move
+    // pending — no retry counter, no private timer.
     if (this.crossScreenId !== null) {
       const id = this.crossScreenId;
       const tracked = this.windows.get(id);
@@ -1246,16 +1262,20 @@ export class WindowSession {
       } else {
         tracked.refreshFrame();
         const target = this.crossScreenTarget;
-        if (target !== null && tracked.surface.screenId !== target) {
-          this.crossScreenAttempts += 1;
-          if (this.crossScreenAttempts > 40) this.clearCrossScreenMove();
-          else this.scheduleReconcile('move-monitor-arrive');
-        } else {
+        if (target === null || tracked.surface.screenId === target) {
           const from = this.crossScreenFrom ?? 'left';
           this.clearCrossScreenMove();
           this.arriveCrossScreen(tracked, from);
         }
       }
+    }
+    // §3/§11: the routing decision is a property of the drain, never of the
+    // `onReady` timeout: the newcomer's placement is computed here from live
+    // state, so a raced spawn signal cannot leave the layout half-decided.
+    for (const tracked of [...this.windows.values()]) {
+      if (!tracked.routePending) continue;
+      tracked.routePending = false;
+      if (this.windows.has(tracked.id)) this.routeWindow(tracked);
     }
     // §4/§16: fullscreen and user-unmaximize transitions are re-derived here,
     // never acted on inside the Mutter signal handler that reported them.
@@ -1349,15 +1369,28 @@ export class WindowSession {
         // maximize property no longer needs to be enforced for it.
         tileables[0].maximizeRequested = false;
       }
-      // §10 step 3/§16: a client that insists on a minimum wider than its share
-      // cannot be split. It takes its own workspace (or keeps the single screen,
-      // §10 step 4); the window it was paired with keeps the screen.
+      // §10 steps 2-3: a client that insists on a minimum wider than its share
+      // is refused a split. The sibling adapts first (the tiler's ratio is
+      // clamped to its own minimum); only when the sibling cannot adapt either
+      // does the pair cease to exist — the trigger keeps the screen and the
+      // reactor gives way (own workspace, or minimized on a single screen).
       if (tileables.length > 1) {
         const refusing = tileables.find((t) => this.doesNotFit(t, this.placementEnv(t.surface.screenId)));
         if (refusing !== undefined) {
-          this.escapeTracked(refusing);
-          this.scheduleRetile(workspaceId, 'escape-refusal');
-          continue;
+          const sibling = tileables.find((t) => t.id !== refusing.id);
+          const screen = this.screenFor(refusing.surface.screenId);
+          if (
+            sibling !== undefined &&
+            screen !== null &&
+            this.refusalEscapes(refusing, sibling, screen, this.placementEnv(refusing.surface.screenId))
+          ) {
+            this.escapeRefusal(refusing, sibling);
+            this.scheduleRetile(workspaceId, 'escape-refusal');
+            continue;
+          }
+          // Step 2: the sibling adapts, so the pair stays. The tiler's clamp
+          // below gives the refusing window its minimum and the sibling the
+          // remainder; nothing is created, floated or minimized.
         }
       }
       // §4: a lone visible managed window is always maximized.
@@ -1462,6 +1495,8 @@ export class WindowSession {
       // §16: an escaped window owns its workspace at its own size; it is not
       // tiled and the lone law does not maximize it.
       if (tracked.escaped) continue;
+      // §3/§11: a newcomer whose placement has not been decided is not tiled.
+      if (tracked.routePending) continue;
       if (this.classify(tracked).tileable) out.push(tracked);
     }
     return out.sort((a, b) => a.id - b.id);
@@ -1538,17 +1573,55 @@ export class WindowSession {
    */
   focusCycle(): void {
     const current = this.focused();
-    if (current === null) return;
-    const entries = this.cycleEntries(current.surface.workspaceId, current.surface.screenId);
-    const next = cycleOrder(current.id, entries);
-    if (next === null || next === current.id) return;
+    if (current === null) {
+      this.cycleLap = null;
+      return;
+    }
+    const workspaceId = current.surface.workspaceId;
+    const screenId = current.surface.screenId;
+    const entries = this.cycleEntries(workspaceId, screenId);
+    const live = new Set(entries.filter((entry) => entry.minimized !== true).map((entry) => entry.id));
+    // Keep the lap's snapshot while it still describes this plane and the
+    // focused window is the one this lap last focused; a focus change by any
+    // other route (a click, a direction key) starts a fresh lap.
+    const lap = this.cycleLap;
+    const sameSet =
+      lap !== null &&
+      lap.order.length === live.size &&
+      lap.order.every((id) => live.has(id));
+    const order =
+      lap !== null &&
+      lap.workspaceId === workspaceId &&
+      lap.screenId === screenId &&
+      lap.lastId === current.id &&
+      sameSet
+        ? lap.order
+        : cycleSequence(entries);
+    if (lap === null || order !== lap.order) {
+      this.cycleLap = { workspaceId, screenId, order, startId: current.id, lastId: current.id };
+    }
+    const next = cycleOrder(current.id, entries, order);
+    if (next === null || next === current.id) {
+      this.cycleLap = null;
+      return;
+    }
     const target = this.windows.get(next);
-    if (target === undefined) return;
+    if (target === undefined) {
+      this.cycleLap = null;
+      return;
+    }
     if (target.surface.flags.floating || target.autoFloated) {
       target.win.raise();
     }
     this.logFocus('focus_cycle', { from: current.id, to: next });
     this.focus(next);
+    const active = this.cycleLap;
+    if (active !== null) {
+      // A lap ends when it wraps back to its first window; the next press then
+      // rebuilds the order from the then-live stacking.
+      if (next === active.startId) this.cycleLap = null;
+      else active.lastId = next;
+    }
   }
 
   /** Per-subsystem debug logging (§22): gated on `debug-focus`. */
@@ -2239,6 +2312,44 @@ export class WindowSession {
   }
 
   /**
+   * §10 step 2: whether the refusing window's sibling can adapt to the
+   * remainder. `escaped` false means the pair still exists, so the tiler's
+   * ratio clamp is left to give the refusing window its minimum and the
+   * sibling the rest; true means the pair cannot exist and step 3 applies.
+   */
+  private refusalEscapes(refusing: TrackedWindow, sibling: TrackedWindow, screen: Screen, env: Env): boolean {
+    const area = screenArea(screen);
+    const gap = effectiveGap(this.tilerConfig(), screen);
+    const extent = env.axis === 'vertical' ? area.height : area.width;
+    const split = Math.max(0, extent - gap);
+    const axis: 'width' | 'height' = env.axis === 'vertical' ? 'height' : 'width';
+    const keep = this.toTilerWindow(refusing).min[axis];
+    const siblingMinimum = this.toTilerWindow(sibling).min[axis];
+    return refusalLadder(keep, siblingMinimum, split).escaped;
+  }
+
+  /**
+   * §10 steps 3-4: the pair cannot exist, so the trigger keeps the screen and
+   * the reactor gives way. The refusing window is the one whose own demand
+   * broke the split: on a workspace-capable screen it is the one that escapes
+   * to its own workspace; on a single-workspace screen it keeps the screen
+   * maximized and the sibling is minimized.
+   */
+  private escapeRefusal(refusing: TrackedWindow, sibling: TrackedWindow): void {
+    const env = this.placementEnv(refusing.surface.screenId);
+    const single = env.screen === 'single';
+    const trigger = single ? refusing : sibling;
+    const reactor = single ? sibling : refusing;
+    const outcome = impossibleSplit(env, { id: trigger.id }, { id: reactor.id });
+    if (outcome.giveWayTo === 'minimized') {
+      this.maximizeInPlace(this.windows.get(outcome.keep) ?? trigger);
+      return;
+    }
+    this.escapeTracked(this.windows.get(outcome.giveWay) ?? reactor);
+  }
+
+
+  /**
    * §4/§5: minimize releases the slot; the pure reaper relocates a workspace
    * left holding only minimized windows. A window restored onto a full
    * workspace floats (§6).
@@ -2428,9 +2539,10 @@ export class WindowSession {
     this.crossScreenFrom = direction === 'right' ? 'left' : direction === 'left' ? 'right' : direction === 'down' ? 'above' : 'below';
     // `move_to_monitor` is asynchronous: the arrival ladder must not run while
     // the window is still on the source screen, or its float rect (computed from
-    // the source work area) drags it straight back (A106).
+    // the source work area) drags it straight back (A106). `window-entered-
+    // monitor` re-queues the drain when it lands; until then the move stays
+    // pending.
     this.crossScreenTarget = target.index;
-    this.crossScreenAttempts = 0;
     this.signatures.clearAll();
     this.scheduleReconcile('move-monitor');
   }
@@ -2439,7 +2551,6 @@ export class WindowSession {
     this.crossScreenId = null;
     this.crossScreenFrom = null;
     this.crossScreenTarget = null;
-    this.crossScreenAttempts = 0;
   }
 
   /**
