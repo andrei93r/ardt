@@ -13,6 +13,7 @@
 #   a maximised drag stays maximised at the drop     A108-maximised-drag-still-maximised-at-drop
 #   disconnect rescues the layout                    A109-disconnect-routes
 #   reconnect replays the remembered state           A110-reconnect-replays-state
+#   reconnect restores a float exactly               A143-reconnect-restores-float
 #   a primary change keeps slots, extras float       A111-primary-change-keeps-slots-and-the-extra-window-floats
 #   rescue side and order                            A122-rescue-side-and-order
 #   the arriving window takes its side from the      A124-screen-side-rule
@@ -29,6 +30,7 @@ A107-cross-monitor-drag-takes-the-free-slot-or-swaps
 A108-maximised-drag-still-maximised-at-drop
 A109-disconnect-routes
 A110-reconnect-replays-state
+A143-reconnect-restores-float
 A111-primary-change-keeps-slots-and-the-extra-window-floats
 A122-rescue-side-and-order
 A124-screen-side-rule

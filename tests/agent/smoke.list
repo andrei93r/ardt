@@ -51,6 +51,9 @@
 #     and under Shell chrome            A131-fullscreen-hides-highlight,
 #                                      A135-highlight-below-notifications
 #   drag drop-assist preview         A141-drag-preview
+#   gestures (3-finger / pinch;      A18-gesture-3-horizontal
+#     the disabled gate is A21, in     (the full set A18-A21 stays in the suite;
+#     the full suite)                  this one proves a gesture is handled)
 #   undo (swap, un-float)            A101-undo-restores-instance-and-config
 #   flags / trace / DumpState shape  A103-record-trace-shape
 #   cursor to the active window      A132-cursor-centre,
@@ -72,6 +75,8 @@ A01-pair-tiling
 # --- gaps: per-side outer, between, per screen (§10) ---
 A139-gaps
 A64-vertical-workspaces
+# --- gestures: a 3-finger swipe is handled and acts ---
+A18-gesture-3-horizontal
 # --- arrival routing ---
 A02-third-window
 # --- focus ---
