@@ -343,12 +343,15 @@ areas get two or three); the mapping is kept as comments in
 | undo (swap, un-float) | `A101-undo-restores-instance-and-config` |
 | flags / trace / `DumpState` shape | `A103-record-trace-shape` |
 
-Legitimately out of scope for a one-configuration smoke, and therefore left to
-the full suite: multi-monitor routing, cross-screen drags, disconnect rescue and
-reconnect replay (`A105`–`A111`, `A122`, `A124`), the four-monitor matrix
-(`A81`), and the opt-in long churn run (`A125`). A cursor-follows-focus line is
-deliberately not listed yet: that feature lives on the unmerged
-`v2/cursor-centre` branch, so the smoke stays valid before and after it lands.
+Multi-monitor scenarios are **added automatically when they apply**: the runner
+appends `tests/agent/smoke-multi.list` (nested) or `tests/session/smoke-multi.list`
+(live) when the run has more than one monitor — `ADRT_MONITORS` with two or more
+specs nested, or two or more connected screens live. So a laptop run stays short
+and a docked run still exercises cross-screen routing, disconnect rescue and
+reconnect replay, the per-screen axis and the four-monitor matrix
+(`A105`–`A111`, `A122`, `A124`, `A81`; `S15` live), each self-skipping when the
+screen count is not the one it needs. Only the opt-in long churn run (`A125`)
+stays out.
 
 > Note on versions: `metadata.json` carries `version-name` **0.2.0** while
 > `DumpState.build.version` is the internal module build (`1`), and `package.json`

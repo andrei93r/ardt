@@ -111,16 +111,18 @@ print(json.dumps(w[0]["rect"]) if w else "{}")')"
   # The switch is asynchronous: re-derive it as a property before asserting.
   wait_python 15 "import json,sys; sys.exit(0 if json.load(sys.stdin)['activeWorkspace'] == $other_ws else 1)" || true
 
-  poll "a workspace switch leaves the non-primary window exactly as it was" '
-import json, sys
+  # Pass the previous rect through the environment: its JSON contains double
+  # quotes, which cannot be embedded in the double-quoted python source.
+  BEFORE_RECT="$before_rect" poll "a workspace switch leaves the non-primary window exactly as it was" '
+import os, json, sys
 d = json.load(sys.stdin)
 w = [x for x in d["windows"] if x["id"] == int("'"$ID"'")]
 if not w:
     print("window gone"); sys.exit(1)
 if w[0]["monitor"] != int("'"$OTHER"'"):
     print("moved to monitor", w[0]["monitor"]); sys.exit(1)
-if json.dumps(w[0]["rect"]) != "'"$before_rect"'":
-    print("rect changed", w[0]["rect"], "'"$before_rect"'"); sys.exit(1)
+if json.dumps(w[0]["rect"]) != os.environ["BEFORE_RECT"]:
+    print("rect changed", w[0]["rect"], os.environ["BEFORE_RECT"]); sys.exit(1)
 print("untouched on the non-primary monitor")
 ' 15
 

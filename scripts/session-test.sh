@@ -23,6 +23,9 @@ FILTER="${ADRT_SESSION_SCENARIOS:-}"
 # the run rather than silently dropping it.
 SMOKE="${ADRT_SESSION_SMOKE:-0}"
 SMOKE_LIST="${ADRT_SESSION_SMOKE_LIST:-$SESSION_DIR/smoke.list}"
+# Extra scenarios that only make sense with a second monitor; they are added to
+# the smoke (and to nothing else) when the session actually has more than one.
+SMOKE_MULTI_LIST="${ADRT_SESSION_SMOKE_MULTI_LIST:-$SESSION_DIR/smoke-multi.list}"
 
 if ! gdbus call --session --dest org.adrt.Adrt --object-path /org/adrt/Adrt \
   --method org.adrt.Adrt.DumpState >/dev/null 2>&1; then
@@ -71,35 +74,68 @@ declare -a names=() statuses=()
 failures=0
 skips=0
 
+# How many monitors the live session has (for the adaptive smoke selection).
+monitor_count() {
+  gdbus call --session --dest org.adrt.Adrt --object-path /org/adrt/Adrt --method org.adrt.Adrt.DumpState 2>/dev/null \
+    | python3 "$ROOT/tests/agent/parse.py" 2>/dev/null \
+    | python3 -c 'import json, sys
+try:
+    print(len(json.load(sys.stdin)["monitors"]))
+except Exception:
+    print(1)'
+}
+
 shopt -s nullglob
-declare -A SMOKE_SET=()
+declare -A SMOKE_SET=() SMOKE_MULTI_SET=()
+
+# Load one smoke list into a named associative array. Any entry with no scenario
+# file is a hard failure, so a renamed scenario can never silently drop out.
+smoke_load_list() {
+  local list="$1" set="$2" sid missing=0
+  while read -r sid; do
+    sid="${sid%%#*}"
+    sid="$(printf '%s' "$sid" | awk 'NF { print $1 }')"
+    [ -n "$sid" ] || continue
+    if [ ! -f "$SESSION_DIR/$sid.sh" ]; then
+      echo "session-test: $(basename "$list") names '$sid' but $SESSION_DIR/$sid.sh does not exist" >&2
+      missing=$((missing + 1))
+      continue
+    fi
+    eval "$set[\$sid]=1"
+  done < "$list"
+  [ "$missing" -eq 0 ]
+}
+
+MONITORS=1
+SMOKE_MULTI=0
 if [ "$SMOKE" = "1" ]; then
   if [ ! -f "$SMOKE_LIST" ]; then
     echo "session-test: ADRT_SESSION_SMOKE=1 but the smoke list is missing: $SMOKE_LIST" >&2
     exit 2
   fi
-  smoke_missing=0
-  while read -r sid; do
-    sid="${sid%%#*}"
-    sid="$(printf '%s' "$sid" | awk 'NF { print $1 }')"
-    [ -n "$sid" ] || continue
-    SMOKE_SET["$sid"]=1
-    if [ ! -f "$SESSION_DIR/$sid.sh" ]; then
-      echo "session-test: smoke.list names '$sid' but $SESSION_DIR/$sid.sh does not exist" >&2
-      smoke_missing=$((smoke_missing + 1))
-    fi
-  done < "$SMOKE_LIST"
-  if [ "$smoke_missing" -ne 0 ]; then
-    echo "session-test: refusing to run live smoke: $smoke_missing smoke.list entr(ies) have no scenario file" >&2
+  MONITORS="$(monitor_count)"
+  smoke_load_list "$SMOKE_LIST" SMOKE_SET || {
+    echo "session-test: refusing to run live smoke: a smoke.list entry has no scenario file" >&2
     exit 2
+  }
+  if [ "${MONITORS:-1}" -gt 1 ]; then
+    SMOKE_MULTI=1
+    if [ -f "$SMOKE_MULTI_LIST" ]; then
+      smoke_load_list "$SMOKE_MULTI_LIST" SMOKE_MULTI_SET || {
+        echo "session-test: refusing to run: a smoke-multi.list entry has no scenario file" >&2
+        exit 2
+      }
+    fi
   fi
-  echo "session-test: live smoke mode — ${#SMOKE_SET[@]} scenarios from $(basename "$SMOKE_LIST")"
+  echo "session-test: live smoke mode — ${#SMOKE_SET[@]} scenarios from $(basename "$SMOKE_LIST")$([ "$SMOKE_MULTI" = 1 ] && echo " plus $(basename "$SMOKE_MULTI_LIST") (${MONITORS} monitors)")"
   echo
 fi
 for script in "$SESSION_DIR"/S*.sh; do
   name="$(basename "$script" .sh)"
   if [ "$SMOKE" = "1" ]; then
-    [ -n "${SMOKE_SET[$name]:-}" ] || continue
+    if [ -n "${SMOKE_SET[$name]:-}" ]; then :
+    elif [ "${SMOKE_MULTI:-0}" = "1" ] && [ -n "${SMOKE_MULTI_SET[$name]:-}" ]; then :
+    else continue; fi
   elif [ -n "$FILTER" ] && ! echo "$name" | grep -qE "$FILTER"; then continue; fi
   echo "=== $name ==="
   output="$(bash "$script" 2>&1)"

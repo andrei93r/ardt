@@ -24,6 +24,18 @@ FILTER="${ADRT_SCENARIOS:-}"
 # failure (below), never a silent drop.
 SMOKE="${ADRT_SMOKE:-0}"
 SMOKE_LIST="${ADRT_SMOKE_LIST:-$AGENT_DIR/smoke.list}"
+# Scenarios that only make sense with more than one screen; the smoke adds them
+# when the run is configured with more than one virtual monitor (ADRT_MONITORS).
+SMOKE_MULTI_LIST="${ADRT_SMOKE_MULTI_LIST:-$AGENT_DIR/smoke-multi.list}"
+
+# How many `WxH` virtual monitors this run will start (colon-separated specs).
+configured_monitors() {
+  local specs="${ADRT_MONITORS:-1280x800}" n=0 s
+  local -a parts=()
+  IFS=':' read -r -a parts <<< "$specs"
+  for s in "${parts[@]}"; do [ -n "$s" ] && n=$((n + 1)); done
+  printf '%s' "$n"
+}
 # Most cores, minus headroom for the user's live session. Measured: the suite is
 # ~88% scenario time, so workers are the main lever; the shared budget below still
 # caps the total across concurrent runs. ADRT_WORKERS overrides this.
@@ -216,33 +228,44 @@ rm -f "$BASE_STATE"/worker-*.out "$BASE_STATE"/worker-*.results.txt 2>/dev/null 
 # or deleted scenario fails fast and loudly instead of being silently dropped.
 # Any entry without a matching tests/agent/<id>.sh aborts the run and names it.
 declare -a SMOKE_FILES=()
-if [ "$SMOKE" = "1" ]; then
-  if [ ! -f "$SMOKE_LIST" ]; then
-    echo "agent-test: ADRT_SMOKE=1 but the smoke list is missing: $SMOKE_LIST" >&2
-    exit 1
-  fi
-  smoke_missing=0
+
+# Append one smoke list to SMOKE_FILES, counting entries with no scenario file.
+smoke_add_file_list() {
+  local list="$1" smoke_id
   while read -r smoke_id; do
     [ -n "$smoke_id" ] || continue
     case "$smoke_id" in
       *.sh) smoke_id="${smoke_id%.sh}" ;;
     esac
     if [ ! -f "$AGENT_DIR/$smoke_id.sh" ]; then
-      echo "agent-test: smoke.list names '$smoke_id' but $AGENT_DIR/$smoke_id.sh does not exist" >&2
+      echo "agent-test: $(basename "$list") names '$smoke_id' but $AGENT_DIR/$smoke_id.sh does not exist" >&2
       smoke_missing=$((smoke_missing + 1))
       continue
     fi
     SMOKE_FILES+=("$AGENT_DIR/$smoke_id.sh")
-  done < <(sed 's/#.*//' "$SMOKE_LIST" | awk 'NF { print $1 }')
+  done < <(sed 's/#.*//' "$list" | awk 'NF { print $1 }')
+}
+
+if [ "$SMOKE" = "1" ]; then
+  if [ ! -f "$SMOKE_LIST" ]; then
+    echo "agent-test: ADRT_SMOKE=1 but the smoke list is missing: $SMOKE_LIST" >&2
+    exit 1
+  fi
+  smoke_missing=0
+  smoke_add_file_list "$SMOKE_LIST"
+  monitors="$(configured_monitors)"
+  if [ "${monitors:-1}" -gt 1 ] && [ -f "$SMOKE_MULTI_LIST" ]; then
+    smoke_add_file_list "$SMOKE_MULTI_LIST"
+  fi
   if [ "$smoke_missing" -ne 0 ]; then
-    echo "agent-test: refusing to run smoke: $smoke_missing smoke.list entr(ies) have no scenario file" >&2
+    echo "agent-test: refusing to run smoke: $smoke_missing smoke entry(ies) have no scenario file" >&2
     exit 1
   fi
   if [ "${#SMOKE_FILES[@]}" -eq 0 ]; then
     echo "agent-test: smoke.list has no scenarios: $SMOKE_LIST" >&2
     exit 1
   fi
-  echo "== smoke mode: ${#SMOKE_FILES[@]} scenarios from $(basename "$SMOKE_LIST") =="
+  echo "== smoke mode: ${#SMOKE_FILES[@]} scenarios from $(basename "$SMOKE_LIST")$([ "${monitors:-1}" -gt 1 ] && echo " + $(basename "$SMOKE_MULTI_LIST") (${monitors} screens)") =="
 fi
 
 echo "== preflight (lint, build, core tests) =="

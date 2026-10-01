@@ -1,0 +1,31 @@
+# smoke-multi.list — smoke scenarios that need more than one screen.
+#
+# Added to the nested smoke (`ADRT_SMOKE=1`) only when the run is configured with
+# more than one virtual monitor (`ADRT_MONITORS='1280x800:1280x800'`, the monitor
+# matrix). Entries self-skip when the harness screen count is not the one they
+# need, so this is safe to include only when it applies. Same rules as
+# smoke.list: one id per line, `#` comments, and an entry with no scenario file
+# aborts the run by name.
+#
+#   per-screen axis (each screen tiles on its own)   A105-per-screen-axis
+#   a window on a second screen is not exiled        A106-no-cross-monitor-exile
+#   cross-screen drag takes the free slot / swaps    A107-cross-monitor-drag-takes-the-free-slot-or-swaps
+#   a maximised drag stays maximised at the drop     A108-maximised-drag-still-maximised-at-drop
+#   disconnect rescues the layout                    A109-disconnect-routes
+#   reconnect replays the remembered state           A110-reconnect-replays-state
+#   a primary change keeps slots, extras float       A111-primary-change-keeps-slots-and-the-extra-window-floats
+#   rescue side and order                            A122-rescue-side-and-order
+#   the arriving window takes its side from the      A124-screen-side-rule
+#     monitor signal
+#   the four-monitor matrix                          A81-four-monitors
+
+A105-per-screen-axis
+A106-no-cross-monitor-exile
+A107-cross-monitor-drag-takes-the-free-slot-or-swaps
+A108-maximised-drag-still-maximised-at-drop
+A109-disconnect-routes
+A110-reconnect-replays-state
+A111-primary-change-keeps-slots-and-the-extra-window-floats
+A122-rescue-side-and-order
+A124-screen-side-rule
+A81-four-monitors

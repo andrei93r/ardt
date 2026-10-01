@@ -1,0 +1,14 @@
+# smoke-multi.list — smoke scenarios that need a second monitor.
+#
+# Added to the live smoke (`ADRT_SESSION_SMOKE=1`) only when the session has more
+# than one monitor connected, so a one-screen laptop run stays short while a
+# docked/multi-screen run also exercises the multi-monitor behaviour. Entries
+# self-skip when the hardware is not there, so this is safe to include only when
+# it applies. Same rules as smoke.list: one id per line, `#` comments, and an
+# entry with no scenario file aborts the run by name.
+#
+#   multi-monitor tiling, non-primary tileable, move across screens without a
+#   stale classification, and the other screen surviving a workspace switch
+#                                        S15-multi-monitor
+
+S15-multi-monitor
