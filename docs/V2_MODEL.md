@@ -183,7 +183,9 @@ anywhere except §7's single-workspace-capable pair rule.
 - **A float adrt places is offset, never perfectly aligned with what is under it**: the
   initial placement is the centre shifted by an offset (a cascade), so a float over a
   pair is visibly distinct and immediately grabbable instead of exactly covering the
-  window beneath. A float the *user* positioned is left exactly where they put it.
+  window beneath. The offset applies to the **incoming** window, and it is always kept
+  fully inside the work area — clickable and visible, never hanging off the screen. A
+  float the *user* positioned is left exactly where they put it (at the size it had).
 
 **Drags and drops.**
 - Dragging the **inner** edge of a pair changes the ratio; the tiler resizes the
@@ -214,7 +216,8 @@ anywhere except §7's single-workspace-capable pair rule.
   orientation": moving left out of a landscape screen onto a portrait one picks the
   window nearest your current vertical position, and the reverse likewise.
 - **Focus cycle** walks the windows of the **current screen and workspace**: the
-  managed windows in slot order, then the **floats** in stacking order, wrapping round.
+  managed windows in slot order, then the **floats from left to right** by position
+  (floats that overlap perfectly resolve by stacking order), wrapping round.
   **Minimized windows are skipped**, and it never crosses a screen or a workspace;
   focusing a float raises it.
 - **Focus never switches workspace.** A keyboard **move** reaches another workspace
@@ -899,6 +902,31 @@ never debug-gated (the deduplication and rate limits still apply).
 80. **Disabling the extension stops it without undoing the session** (review gap 6):
     every window is left exactly as it is — positions, minimized windows, floats — and
     only the border disappears. Turning it back on normalises again (§20).
+
+81. **A new window beside a fullscreen window gets its own workspace** (Q1): the
+    fullscreen window's geometry is never touched, so the newcomer is maximized on a
+    workspace to the right and the view follows.
+
+82. **Fullscreen on a float fills where it is and stays floating** (Q2).
+
+83. **Unmaximizing into a neighbour that holds only a minimized window** (Q3): that
+    counts as exactly one window; the unmaximized window joins there and maximizes
+    among the visible windows.
+
+84. **Floats are never part of a drop's calculation** (Q5): a float is not a tiled
+    window, so it is not a crossing target; the managed window beneath it is, and with
+    none the drop takes a free slot as usual.
+
+85. **A no-room float stays where it was dropped**, at the size it had (Q6).
+
+86. **A placed float is offset so it stays clickable and visible** (Q7): the offset
+    applies to the incoming window and never leaves it outside the work area.
+
+87. **The float order in the focus cycle is left to right** (Q8), falling back to
+    stacking order when two floats overlap perfectly.
+
+88. **A rescued fullscreen window keeps its fullscreen** (Q9 of the layout Q&A), and
+    display memory remembers it.
 
 ## Deliberate non-goals
 
