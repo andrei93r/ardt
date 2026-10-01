@@ -65,9 +65,12 @@ changes never move a window.
   Nothing is created.
 - Routing is decided **per arrival**: a second window always finds the first (a
   maximized single to split with), never a simultaneous evaluation of both.
-- **The arrival rule**: any window arriving into a workspace — routed, moved, dragged,
-  restored from minimized, or unmaximized into a pair — takes the **right** slot when
-  it is free, else the left; the window already there keeps its side.
+- **Slot order when a pair forms**: the window the change is *about* — routed, moved,
+  dragged, restored from minimized, or unmaximized into a pair — takes the **right**
+  slot when it is free, else the left. The window it joins keeps its side, and so do
+  minimized windows returning from the same unmaximize (they take the left). `A | B`
+  maximized and then unmaximized comes back as `B | A`; restoring A onto a lone B
+  gives `B | A` too.
 - Routing does not apply to hotplug, which has its own rule (§9).
 
 ## 4. Maximize, unmaximize, fullscreen, minimize
@@ -620,10 +623,12 @@ happens. All default off, deduplicated and rate-limited per event.
 40. **The primary is always GNOME's current primary**, re-read whenever it changes;
     adrt never assumes, stores or sets it (S10).
 
-41. **The arrival rule** (test scenario S12): a window arriving into a workspace —
-    restored from minimized, unmaximized into a pair, moved, dragged or routed —
-    takes the **right** slot when it is free, else the left, and the window already
-    there keeps its side. Restoring A onto a lone B therefore gives `B | A`.
+41. **Slot order when a pair forms** (test scenarios S12, S13): the window the change
+    is about — restored from minimized, unmaximized into a pair, moved, dragged or
+    routed — takes the **right** slot when it is free, else the left. The window it
+    joins keeps its side, and minimized windows returning from the same unmaximize
+    take the left first. Restoring A onto a lone B gives `B | A`; maximizing `A | B`
+    and then unmaximizing A also comes back as `B | A`.
 
 ## Deliberate non-goals
 
