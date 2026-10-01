@@ -73,6 +73,7 @@ changes never move a window.
   gives `B | A` too. **A cross-screen arrival is the exception**: the direction it came
   from is known, so it takes the slot on **that** side — from the left or above, slot
   0; from the right or below, slot 1 — landing against the edge it just crossed.
+  If it ends up alone, it maximizes like any lone window.
 - Routing does not apply to hotplug, which has its own rule (§9).
 
 ## 4. Maximize, unmaximize, fullscreen, minimize
@@ -675,7 +676,9 @@ happens. All default off, deduplicated and rate-limited per event.
     after S19): a window crossing an edge takes the slot on that side — left or above
     → slot 0, right or below → slot 1 — instead of the within-workspace slot-1
     default. The direction is known for a drag and for a directional move; a
-    perimeter crossing still swaps; a full target still floats.
+    perimeter crossing still swaps; a full target still floats. A window that ends up
+    alone on the target still maximizes - the side rule only decides the slot once a
+    pair forms. The directional move key follows the same side rule.
 
 ## Deliberate non-goals
 
