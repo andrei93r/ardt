@@ -837,6 +837,10 @@ never debug-gated (the deduplication and rate limits still apply).
     11, confirmed): no slot is freed and nobody gives way; the window returns as a
     float, offset from the pair, and no toast is raised because something did happen.
 
+71. **A workspace that only looks empty is free** (round scenario 12, confirmed): a
+    new window opening there is alone among the visible windows, so it maximizes; the
+    minimized windows keep their place and stay minimized.
+
 ## Deliberate non-goals
 
 
