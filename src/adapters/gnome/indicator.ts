@@ -16,6 +16,7 @@ import { layoutManager, messageTray } from 'resource:///org/gnome/shell/ui/main.
 import type { Rect } from '../../core/types.js';
 import type { IndicatorBackend } from '../../platform/indicator.js';
 import type { GnomeSettings } from './settings.js';
+import type { GnomeTiming } from './timing.js';
 
 const CSS_CLASS = 'adrt-indicator';
 const PREVIEW_CLASS = 'adrt-indicator-preview';
@@ -41,7 +42,10 @@ export class GnomeIndicator implements IndicatorBackend {
   private pulseActive = false;
   private interfaceSettings: any = null;
 
-  constructor(private readonly settings: GnomeSettings) {
+  constructor(
+    private readonly settings: GnomeSettings,
+    private readonly timing: GnomeTiming,
+  ) {
     this.widget = new St.Widget({ style_class: CSS_CLASS, reactive: false, visible: false });
     this.preview = new St.Widget({ style_class: PREVIEW_CLASS, reactive: false, visible: false, opacity: 120 });
     this.applyStyle();
@@ -65,6 +69,7 @@ export class GnomeIndicator implements IndicatorBackend {
     this.widget.set_size(rect.width, rect.height);
     this.widget.show();
     if (this.settings.boolean('indicator-animated-pulse', false)) this.startPulse();
+    else this.stopPulse();
   }
 
   hide(): void {
@@ -84,6 +89,9 @@ export class GnomeIndicator implements IndicatorBackend {
 
   ghostClose(rect: Rect, durationMs: number): void {
     if (!this.settings.boolean('close-animation-enabled', true)) return;
+    // §18: an OS that disabled animations, or a zero resolved duration, means
+    // no fade at all rather than an instant flash of chrome.
+    if (!this.timing.animationsEnabled() || durationMs <= 0) return;
     const ghost = new St.Widget({ style_class: CSS_CLASS, reactive: false });
     ghost.set_position(rect.x, rect.y);
     ghost.set_size(rect.width, rect.height);
@@ -105,9 +113,9 @@ export class GnomeIndicator implements IndicatorBackend {
       ghost.destroy();
     };
 
-    // A frame-clock-less compositor may never complete the ease; the timeout
-    // guarantees the ghost is destroyed either way.
-    sourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, durationMs + 50, () => {
+    // A frame-clock-less compositor may never complete the ease; a few frames
+    // past the duration guarantees the ghost is destroyed either way.
+    sourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, durationMs + this.timing.sampleIntervalMs(3), () => {
       sourceId = 0;
       cleanup();
       return GLib.SOURCE_REMOVE;
@@ -137,13 +145,15 @@ export class GnomeIndicator implements IndicatorBackend {
   }
 
   /** Resolved styling, for `DumpState` and diagnostics. */
-  describe(): { color: string; width: number; opacity: number; radius: number; stackedBelowTray: boolean } {
+  describe(): { color: string; width: number; opacity: number; radius: number; stackedBelowTray: boolean; pulseDurationMs: number; animationsEnabled: boolean } {
     return {
       color: this.colour(),
       width: this.settings.int('indicator-width', 3),
       opacity: this.settings.int('indicator-opacity', 100),
       radius: this.settings.int('indicator-corner-radius', 8),
       stackedBelowTray: this.isBelowTray(),
+      pulseDurationMs: this.timing.effectiveDuration(this.settings.int('indicator-pulse-duration', 900)),
+      animationsEnabled: this.timing.animationsEnabled(),
     };
   }
 
@@ -181,10 +191,17 @@ export class GnomeIndicator implements IndicatorBackend {
 
   private startPulse(): void {
     if (this.pulseActive) return;
+    // §18: the pulse is an animation; skip it when the OS asked to save power.
+    if (!this.timing.animationsEnabled()) {
+      this.stopPulse();
+      return;
+    }
+    const duration = this.timing.effectiveDuration(this.settings.int('indicator-pulse-duration', 900));
+    if (duration <= 0) return;
     this.pulseActive = true;
     this.widget.ease({
       opacity: 160,
-      duration: 900,
+      duration,
       mode: Clutter.AnimationMode.EASE_IN_OUT_SINE,
       repeatCount: -1,
       autoReverse: true,

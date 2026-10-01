@@ -256,8 +256,9 @@ That screen then has exactly one workspace.
   workspaces, and drag one of a pair onto the other. Expected: smooth; clone-free
   slides; no doubles or overshoot; the closing-window ghost fades at the closing
   window's rect.
-- [ ] **`disable-animations` on** switches off GNOME's own Shell animations too,
-  not only adrt's.
+- [ ] **`disable-animations` on** stops adrt's own animations, but does not change
+  GNOME's global animation setting (`org.gnome.desktop.interface enable-animations`).
+  A user who disabled animations keeps them disabled after enabling/disabling adrt.
 - [ ] **Watch for artefacts:** a stuck border, a window drawn twice, a tear, or a
   clone left behind after a switch.
 

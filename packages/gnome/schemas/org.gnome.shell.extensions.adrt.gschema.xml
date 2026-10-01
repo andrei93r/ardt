@@ -179,6 +179,11 @@
       <summary>Indicator pulse</summary>
       <description>Pulse the border while focused.</description>
     </key>
+    <key name="indicator-pulse-duration" type="i">
+      <default>900</default>
+      <summary>Indicator pulse duration</summary>
+      <description>Milliseconds for one half of the border pulse, before OS frame alignment and slow-down.</description>
+    </key>
     <key name="close-animation-enabled" type="b">
       <default>true</default>
       <summary>Close ghost animation</summary>

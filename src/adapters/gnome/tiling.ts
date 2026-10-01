@@ -8,7 +8,6 @@
  */
 
 import GLib from 'gi://GLib';
-import St from 'gi://St';
 
 import { ratioKey, screenArea } from '../../core/tiler.js';
 import type { SplitAxis } from '../../core/tiler.js';
@@ -20,16 +19,21 @@ import type { FrameClockAnimator } from './frame-clock.js';
 import type { GnomeHost } from './host.js';
 import type { History } from './history.js';
 import type { GnomeSettings } from './settings.js';
+import type { GnomeTiming } from './timing.js';
 import type { TrackedWindow } from './tracked-window.js';
 import type { ChangeLog, InstanceConfig } from '../../core/undo.js';
 
 const VERIFY_TOLERANCE = 2;
+/** Internal safety: the shortest wait before verifying a frame. A surface the
+ * compositor has configured but not drawn can read back its old geometry, and
+ * the retry ladder exists precisely for slow apps. Not a frame cadence. */
 const MIN_SETTLE_MS = 100;
-const MAX_FRAME_INTERVAL_MS = 100;
 
 export interface TilingDeps {
   host: GnomeHost;
   settings: GnomeSettings;
+  /** §11.3/§18: the OS animation state and per-screen frame interval. */
+  timing: GnomeTiming;
   history: History;
   /** §12: the app registry; `adapt` is timing-only. */
   registry: RegistryStore;
@@ -294,7 +298,7 @@ export class Tiling {
 
     if (animationsEnabled) {
       const from = { ...tracked.surface.frame };
-      const duration = this.durationFor(from, target);
+      const duration = this.durationFor(screen);
       this.deps.animator.animate(actor, tracked.id, from, target, duration, () =>
         this.scheduleVerify(tracked, target, reason, attempt), screenArea(screen),
       );
@@ -410,17 +414,22 @@ export class Tiling {
   }
 
   private animationsAllowed(tracked: TrackedWindow): boolean {
-    if (this.deps.settings.boolean('disable-animations', false)) return false;
-    if (!St.Settings.get().enable_animations) return false;
+    // §18: one source of truth — the OS animation state (mirrored adrt
+    // `disable-animations` included), read through the timing resolver.
+    if (!this.deps.timing.animationsEnabled()) return false;
     if (!tracked.profile.animate) return false;
     if (this.deps.registry.skipAnimation(tracked.appKey)) return false;
     return true;
   }
 
-  private durationFor(from: Rect, to: Rect): number {
-    const base = this.deps.settings.int('animation-duration', 180);
-    const delta = Math.abs(from.x - to.x) + Math.abs(from.y - to.y) + Math.abs(from.width - to.width) + Math.abs(from.height - to.height);
-    return delta > 400 ? Math.min(240, base) : Math.max(130, Math.min(190, base));
+  /**
+   * The user's base duration resolved to whole compositor frames on the
+   * window's own screen, scaled by the OS slow-down factor and zero when
+   * animations are off. The previous fixed 130/190/240 ms branches were dead
+   * (they all resolved to the setting) and assumed 60 Hz.
+   */
+  private durationFor(screen: Screen): number {
+    return this.deps.timing.effectiveDuration(this.deps.settings.int('animation-duration', 180), screen.index);
   }
 
   private within(a: Rect, b: Rect): boolean {
@@ -446,5 +455,3 @@ export class Tiling {
 function settleFor(tracked: TrackedWindow): number {
   return Math.max(MIN_SETTLE_MS, tracked.profile.retriesMs[0] ?? MIN_SETTLE_MS);
 }
-
-export const FRAME_INTERVAL_BUDGET_MS = MAX_FRAME_INTERVAL_MS;
