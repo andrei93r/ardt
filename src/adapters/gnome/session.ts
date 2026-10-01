@@ -36,7 +36,7 @@ import { SignatureCache, planSignature } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
 import { computePlans, effectiveGap, ratioKey, screenArea } from '../../core/tiler.js';
 import type { FocusDirection } from '../../core/focus.js';
-import { cycleOrder, pickDirectional } from '../../core/focus.js';
+import { cycleOrder, cycleSequence, pickDirectional } from '../../core/focus.js';
 import type { CycleEntry } from '../../core/focus.js';
 import { Layer } from '../../core/types.js';
 import type { Rect, Screen, TilePlan } from '../../core/types.js';
@@ -159,6 +159,13 @@ export class WindowSession {
   private sweepFrameReads = 0;
   private sweepMsTotal = 0;
   private sweepMsMax = 0;
+  /**
+   * §6/§17: the fixed order of the focus-cycle lap in progress, and the last
+   * window it focused. A lap is built once (from the live stacking order) and
+   * kept until it wraps or focus changes by another route, so raising a float
+   * as it is focused cannot re-order the lap.
+   */
+  private cycleLap: { workspaceId: number; screenId: number; order: number[]; startId: number; lastId: number } | null = null;
 
   constructor(private readonly deps: SessionDeps) {}
 
@@ -1567,17 +1574,55 @@ export class WindowSession {
    */
   focusCycle(): void {
     const current = this.focused();
-    if (current === null) return;
-    const entries = this.cycleEntries(current.surface.workspaceId, current.surface.screenId);
-    const next = cycleOrder(current.id, entries);
-    if (next === null || next === current.id) return;
+    if (current === null) {
+      this.cycleLap = null;
+      return;
+    }
+    const workspaceId = current.surface.workspaceId;
+    const screenId = current.surface.screenId;
+    const entries = this.cycleEntries(workspaceId, screenId);
+    const live = new Set(entries.filter((entry) => entry.minimized !== true).map((entry) => entry.id));
+    // Keep the lap's snapshot while it still describes this plane and the
+    // focused window is the one this lap last focused; a focus change by any
+    // other route (a click, a direction key) starts a fresh lap.
+    const lap = this.cycleLap;
+    const sameSet =
+      lap !== null &&
+      lap.order.length === live.size &&
+      lap.order.every((id) => live.has(id));
+    const order =
+      lap !== null &&
+      lap.workspaceId === workspaceId &&
+      lap.screenId === screenId &&
+      lap.lastId === current.id &&
+      sameSet
+        ? lap.order
+        : cycleSequence(entries);
+    if (lap === null || order !== lap.order) {
+      this.cycleLap = { workspaceId, screenId, order, startId: current.id, lastId: current.id };
+    }
+    const next = cycleOrder(current.id, entries, order);
+    if (next === null || next === current.id) {
+      this.cycleLap = null;
+      return;
+    }
     const target = this.windows.get(next);
-    if (target === undefined) return;
+    if (target === undefined) {
+      this.cycleLap = null;
+      return;
+    }
     if (target.surface.flags.floating || target.autoFloated) {
       target.win.raise();
     }
     this.logFocus('focus_cycle', { from: current.id, to: next });
     this.focus(next);
+    const active = this.cycleLap;
+    if (active !== null) {
+      // A lap ends when it wraps back to its first window; the next press then
+      // rebuilds the order from the then-live stacking.
+      if (next === active.startId) this.cycleLap = null;
+      else active.lastId = next;
+    }
   }
 
   /** Per-subsystem debug logging (§22): gated on `debug-focus`. */

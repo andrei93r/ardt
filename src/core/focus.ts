@@ -35,9 +35,9 @@ export interface CycleEntry {
   /** Position, for a float: left to right, then a stable tiebreak. */
   rect?: Rect;
   /**
-   * Compositor stacking position. Recorded by callers, but deliberately *not*
-   * used to order the cycle: focusing a float raises it, so a live stacking
-   * order would flip two perfectly-overlapping floats mid-lap.
+   * Compositor stacking position, used to order a perfect overlap when a lap
+   * starts. The caller snapshots the resulting sequence for the duration of the
+   * lap (`cycleSequence`), so raising a float does not re-order the lap.
    */
   z?: number;
   minimized?: boolean;
@@ -57,28 +57,46 @@ function compareCycle(a: CycleEntry, b: CycleEntry): number {
   if (Math.abs(dx) > 1) return dx;
   const dy = ra.y - rb.y;
   if (Math.abs(dy) > 1) return dy;
-  // Perfect overlap: order by a stable key, never the live stacking order.
-  // Focusing a float raises it, so a `z` tiebreak would flip two
-  // perfectly-overlapping floats as the cycle steps between them and one would
-  // be skipped. A fixed id tiebreak makes each lap a deterministic permutation
-  // that visits every member exactly once.
+  // Perfect overlap: the stacking order (§6/§17). Focusing a float raises it,
+  // so this order is only used when a lap *starts*; the caller snapshots the
+  // resulting sequence and keeps it for the whole lap. The stable id is the
+  // fallback when two floats report the same stacking position.
+  const dz = (a.z ?? 0) - (b.z ?? 0);
+  if (dz !== 0) return dz;
   return a.id - b.id;
 }
 
 /**
- * §6/§17 focus cycle order: the managed windows of the current screen and
- * workspace in slot order, then the floats left to right (a perfect overlap
- * resolves by a stable id tiebreak, not the live stacking order); minimized
- * windows are skipped. Returns the next id after `current`, wrapping, or the
- * first entry when `current` is not in the cycle. `null` when there is nothing
- * to focus.
+ * The full focus-cycle sequence of a plane: the managed windows in slot order,
+ * then the floats left to right, a perfect overlap by stacking order and the id
+ * as the final tiebreak. Minimized windows are skipped. Built once per lap so
+ * that focusing a float (which raises it) cannot re-order the lap in flight.
  */
-export function cycleOrder(current: number | null, entries: readonly CycleEntry[]): number | null {
-  const live = entries.filter((entry) => entry.minimized !== true).sort(compareCycle);
+export function cycleSequence(entries: readonly CycleEntry[]): number[] {
+  return entries.filter((entry) => entry.minimized !== true).sort(compareCycle).map((entry) => entry.id);
+}
+
+/**
+ * §6/§17 focus cycle order: the managed windows of the current screen and
+ * workspace in slot order, then the floats left to right (a perfect overlap by
+ * stacking order, the id as the final tiebreak); minimized windows are skipped.
+ * Returns the next id after `current`, wrapping, or the first entry when
+ * `current` is not in the cycle. `null` when there is nothing to focus.
+ *
+ * `order` is an optional lap snapshot from `cycleSequence`: when the caller
+ * keeps it for the duration of a lap, the order is fixed and a float that is
+ * raised by focusing it cannot move within the lap.
+ */
+export function cycleOrder(
+  current: number | null,
+  entries: readonly CycleEntry[],
+  order?: readonly number[],
+): number | null {
+  const live = order ?? cycleSequence(entries);
   if (live.length === 0) return null;
-  const index = current === null ? -1 : live.findIndex((entry) => entry.id === current);
-  if (index < 0) return live[0].id;
-  return live[(index + 1) % live.length].id;
+  const index = current === null ? -1 : live.indexOf(current);
+  if (index < 0) return live[0];
+  return live[(index + 1) % live.length];
 }
 
 export function pickDirectional(
