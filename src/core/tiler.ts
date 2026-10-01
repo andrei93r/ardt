@@ -18,6 +18,19 @@ export interface TilerConfig {
   gapPortrait: number;
   /** Negative values inherit `gapBase` (§6). */
   gapLandscape: number;
+  /**
+   * §10 per-side outer gaps. Default 0 (flush edge) when unset; a negative
+   * value inherits the resolved base gap (orientation override or `gapBase`).
+   */
+  gapLeft?: number;
+  gapRight?: number;
+  gapTop?: number;
+  gapBottom?: number;
+  /**
+   * §10 gap at the split between the two windows. Unset or negative inherits the
+   * resolved base gap (orientation override or `gapBase`).
+   */
+  gapBetween?: number;
   minSizePolicy: MinSizePolicy;
   primaryApps: readonly string[];
   /** 0..1, clamped to 0.2–0.8 when applied. */
@@ -87,17 +100,53 @@ export function screenArea(screen: Screen): Rect {
   return screen.workArea ?? screen.geometry;
 }
 
+/**
+ * §6/§10: the resolved base gap for a monitor. `gaps-portrait`/`gaps-landscape`
+ * override `gaps-base` per orientation; a negative override inherits the base.
+ * The between-window gap and any negative per-side gap inherit this value.
+ */
 export function effectiveGap(config: TilerConfig, screen: Screen): number {
   const override = isPortrait(screen) ? config.gapPortrait : config.gapLandscape;
   return override >= 0 ? override : config.gapBase;
 }
 
-function inset(rect: Rect, gap: number): Rect {
+/** §10: the four outer insets and the split gap, resolved for one monitor. */
+export interface Gaps {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  between: number;
+}
+
+/**
+ * §10: resolve the gaps for the monitor being planned, so "per-monitor gaps"
+ * follows that monitor's orientation. Outer sides default to 0 and a negative
+ * per-side value inherits the base; the between-window gap defaults to the base.
+ */
+export function resolveGaps(config: TilerConfig, screen: Screen): Gaps {
+  const base = effectiveGap(config, screen);
+  const outer = (value: number | undefined): number => {
+    if (value === undefined) return 0;
+    return value < 0 ? base : value;
+  };
+  const between = config.gapBetween === undefined || config.gapBetween < 0 ? base : config.gapBetween;
   return {
-    x: rect.x + gap,
-    y: rect.y + gap,
-    width: Math.max(0, rect.width - 2 * gap),
-    height: Math.max(0, rect.height - 2 * gap),
+    left: outer(config.gapLeft),
+    right: outer(config.gapRight),
+    top: outer(config.gapTop),
+    bottom: outer(config.gapBottom),
+    between,
+  };
+}
+
+/** Inset a rect by each outer side independently (§10). */
+function inset(rect: Rect, gaps: Gaps): Rect {
+  return {
+    x: rect.x + gaps.left,
+    y: rect.y + gaps.top,
+    width: Math.max(0, rect.width - gaps.left - gaps.right),
+    height: Math.max(0, rect.height - gaps.top - gaps.bottom),
   };
 }
 
@@ -273,8 +322,9 @@ export function computePlans(windows: readonly TilerWindow[], screen: Screen, co
   const byId = [...windows].sort((a, b) => a.id - b.id);
   if (byId.length === 0) return { placements: [] };
 
-  const gap = effectiveGap(config, screen);
-  const avail = inset(screenArea(screen), gap);
+  const gaps = resolveGaps(config, screen);
+  const gap = gaps.between;
+  const avail = inset(screenArea(screen), gaps);
 
   if (byId.length === 1) {
     const only = byId[0];

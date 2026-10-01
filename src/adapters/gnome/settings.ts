@@ -142,6 +142,15 @@ export class GnomeSettings implements SettingsStore {
       gapBase: this.int('gaps-base', 8),
       gapPortrait: this.int('gaps-portrait', -1),
       gapLandscape: this.int('gaps-landscape', -1),
+      // §10: outer sides default to 0; negative inherits the base. The schema
+      // defaults these keys to -1, so the schema must default them to 0 for the
+      // model's flush outer edge.
+      gapLeft: this.int('gaps-left', 0),
+      gapRight: this.int('gaps-right', 0),
+      gapTop: this.int('gaps-top', 0),
+      gapBottom: this.int('gaps-bottom', 0),
+      // §10: unset or negative inherits the base gap.
+      gapBetween: this.int('gaps-between', -1),
       minSizePolicy,
       primaryApps: this.strv('primary-apps'),
       primaryAppRatio: this.int('primary-app-ratio', 50) / 100,
