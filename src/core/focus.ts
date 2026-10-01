@@ -25,6 +25,55 @@ export interface FocusCandidate {
  * for a stacked one — and what lets it reach another monitor. If nothing
  * overlaps (an offset layout), a second pass drops that requirement.
  */
+/** One step of the focus cycle: a managed window or a float on the plane. */
+export interface CycleEntry {
+  id: number;
+  /** Managed windows cycle in slot order; floats after them, left to right. */
+  kind: 'managed' | 'float';
+  /** The slot, for a managed window. */
+  slot?: 0 | 1;
+  /** Position, for a float: left-to-right, then stacking order. */
+  rect?: Rect;
+  /** Compositor stacking position, used to break a perfect overlap. */
+  z?: number;
+  minimized?: boolean;
+}
+
+function compareCycle(a: CycleEntry, b: CycleEntry): number {
+  if (a.kind !== b.kind) return a.kind === 'managed' ? -1 : 1;
+  if (a.kind === 'managed') {
+    const sa = a.slot ?? 0;
+    const sb = b.slot ?? 0;
+    if (sa !== sb) return sa - sb;
+    return a.id - b.id;
+  }
+  const ra = a.rect ?? { x: 0, y: 0, width: 0, height: 0 };
+  const rb = b.rect ?? { x: 0, y: 0, width: 0, height: 0 };
+  const dx = ra.x - rb.x;
+  if (Math.abs(dx) > 1) return dx;
+  const dy = ra.y - rb.y;
+  if (Math.abs(dy) > 1) return dy;
+  // Perfect overlap: resolve by stacking order, then id as a stable tiebreak.
+  const dz = (a.z ?? 0) - (b.z ?? 0);
+  if (dz !== 0) return dz;
+  return a.id - b.id;
+}
+
+/**
+ * §6/§17 focus cycle order: the managed windows of the current screen and
+ * workspace in slot order, then the floats left to right (a perfect overlap
+ * resolves by stacking order); minimized windows are skipped. Returns the next
+ * id after `current`, wrapping, or the first entry when `current` is not in the
+ * cycle. `null` when there is nothing to focus.
+ */
+export function cycleOrder(current: number | null, entries: readonly CycleEntry[]): number | null {
+  const live = entries.filter((entry) => entry.minimized !== true).sort(compareCycle);
+  if (live.length === 0) return null;
+  const index = current === null ? -1 : live.findIndex((entry) => entry.id === current);
+  if (index < 0) return live[0].id;
+  return live[(index + 1) % live.length].id;
+}
+
 export function pickDirectional(
   current: Rect,
   candidates: readonly FocusCandidate[],

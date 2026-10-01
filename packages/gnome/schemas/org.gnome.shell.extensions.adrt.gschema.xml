@@ -46,11 +46,6 @@
       <summary>Keyboard nudge step</summary>
       <description>Percentage moved per nudge.</description>
     </key>
-    <key name="undo-stack-size" type="i">
-      <default>20</default>
-      <summary>Undo stack size</summary>
-      <description>Number of retiles remembered for undo.</description>
-    </key>
     <key name="follow-moved-window" type="b">
       <default>true</default>
       <summary>Follow a moved window</summary>
@@ -172,6 +167,41 @@
       <default>false</default>
       <summary>Debug logging</summary>
       <description>Log per-operation detail.</description>
+    </key>
+    <key name="debug-tiling" type="b">
+      <default>false</default>
+      <summary>Debug tiling</summary>
+      <description>Log the tiler's per-pass decisions.</description>
+    </key>
+    <key name="debug-focus" type="b">
+      <default>false</default>
+      <summary>Debug focus</summary>
+      <description>Log focus and move-direction decisions.</description>
+    </key>
+    <key name="debug-displays" type="b">
+      <default>false</default>
+      <summary>Debug displays</summary>
+      <description>Log screen and work-area changes.</description>
+    </key>
+    <key name="debug-undo" type="b">
+      <default>false</default>
+      <summary>Debug undo</summary>
+      <description>Log undo capture, application and refusal.</description>
+    </key>
+    <key name="debug-session" type="b">
+      <default>false</default>
+      <summary>Debug session</summary>
+      <description>Log session-mode transitions.</description>
+    </key>
+    <key name="record" type="b">
+      <default>false</default>
+      <summary>Record a replayable trace</summary>
+      <description>Expose the journal and decisions as a replayable trace (DumpTrace).</description>
+    </key>
+    <key name="perf-enabled" type="b">
+      <default>true</default>
+      <summary>Performance counters</summary>
+      <description>Collect queue, drain and apply-latency statistics in DumpState.</description>
     </key>
     <key name="trace-enabled" type="b">
       <default>false</default>

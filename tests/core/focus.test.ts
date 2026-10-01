@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { FocusCandidate } from '../../src/core/focus.js';
-import { pickDirectional } from '../../src/core/focus.js';
+import { cycleOrder, pickDirectional } from '../../src/core/focus.js';
 import { rect } from './helpers.js';
 
 // A 1920x1080 screen split in two ways, plus a second 1920x1080 monitor.
@@ -59,5 +59,44 @@ describe('pickDirectional', () => {
 
   it('ignores candidates behind the current window', () => {
     expect(pickDirectional(right, [ids.left], 'right')).toBeNull();
+  });
+});
+
+describe('cycleOrder — the focus cycle (§6/§17)', () => {
+  const managed = (id: number, slot: 0 | 1) => ({ id, kind: 'managed' as const, slot });
+  const float = (id: number, x: number, y: number, z = 0) => ({
+    id,
+    kind: 'float' as const,
+    rect: rect(x, y, 200, 150),
+    z,
+  });
+
+  it('walks managed windows in slot order, then floats left to right', () => {
+    const entries = [managed(5, 1), float(9, 100, 0), managed(4, 0), float(8, 10, 0)];
+    expect(cycleOrder(null, entries)).toBe(4);
+    expect(cycleOrder(4, entries)).toBe(5);
+    expect(cycleOrder(5, entries)).toBe(8);
+    expect(cycleOrder(8, entries)).toBe(9);
+  });
+
+  it('wraps around and skips minimized windows', () => {
+    const entries = [managed(1, 0), { ...managed(2, 1), minimized: true }, float(3, 0, 0)];
+    expect(cycleOrder(1, entries)).toBe(3);
+    expect(cycleOrder(3, entries)).toBe(1);
+  });
+
+  it('breaks a perfect overlap by stacking order', () => {
+    const entries = [float(1, 0, 0, 5), float(2, 0, 0, 1)];
+    expect(cycleOrder(null, entries)).toBe(2);
+    expect(cycleOrder(2, entries)).toBe(1);
+  });
+
+  it('returns null when there is nothing to cycle', () => {
+    expect(cycleOrder(null, [])).toBeNull();
+    expect(cycleOrder(1, [{ ...managed(1, 0), minimized: true }])).toBeNull();
+  });
+
+  it('starts at the first entry when the current window is not in the cycle', () => {
+    expect(cycleOrder(99, [managed(1, 0), managed(2, 1)])).toBe(1);
   });
 });

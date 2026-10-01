@@ -25,10 +25,10 @@ ticked and its target runs pass.
 | 0 Grounding and event-confirmed triggers | done | 17/17 | — |
 | 1 Queue mechanism and records | done | 7/7 | — |
 | 2 The model: slots, routing, maximise, emptiness | in progress | 14/18 | — |
-| 3 User-driven interactions | not started | 0/8 | — |
-| 4 App registry, prefs, migration | not started | 0/11 | — |
-| 5 Displays and hotplug | not started | 0/7 | — |
-| 6 Undo, flags, replay | not started | 0/6 | — |
+| 3 User-driven interactions | done | 8/8 | — |
+| 4 App registry, prefs, migration | in progress | 2/11 | — |
+| 5 Displays and hotplug | in progress | 1/7 | — |
+| 6 Undo, flags, replay | done | 6/6 | — |
 | 7 Monitor matrix and vertical | not started | 0/5 | — |
 | 8 Docs, dead code, perf re-scope | not started | 0/5 | — |
 <!-- /plan-status -->
@@ -209,11 +209,11 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 - [ ] `headless` (new + rewritten) · `session-like` (S02/S04/S05/S14 rewritten) ·
       `session`
 
-## Stage 3 — User-driven interactions (0/8)
+## Stage 3 — User-driven interactions (8/8)
 
 **Failing scenarios first**
 
-- [ ] `A94-overview-drop-onto-full-floats` · `A95-restore-onto-full-floats` ·
+- [x] `A94-overview-drop-onto-full-floats` · `A95-restore-onto-full-floats` ·
       `A96-reorder-is-honoured-and-an-empty-workspace-is-pruned` ·
       `A97-drop-onto-single-maximised-splits` ·
       `A107-cross-monitor-drag-takes-the-free-slot-or-swaps` ·
@@ -222,26 +222,26 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 
 **Implementation**
 
-- [ ] Real-grab drag path (Stage 0 injection) driving the swap-on-perimeter-crossing,
+- [x] Real-grab drag path (Stage 0 injection) driving the swap-on-perimeter-crossing,
       now slot-aware; the slot decision uses the window's rect centre and a re-read frame
-- [ ] Cross-monitor drops: monitor chosen by Mutter (centre rule); **a free slot wins**
+- [x] Cross-monitor drops: monitor chosen by Mutter (centre rule); **a free slot wins**
       (on the side it came from); a crossing swaps only when there is no free slot; no
       room floats it there; a maximized window is un-maximized at the drop
-- [ ] A user reorder is **honoured exactly** — no correction, no tagging, no toast;
+- [x] A user reorder is **honoured exactly** — no correction, no tagging, no toast;
       reaping is a property, so an empty workspace is pruned wherever it sits and the
       spare is never removed
-- [ ] Overview drops: onto a maximized single it splits; onto a full pair it floats; onto
+- [x] Overview drops: onto a maximized single it splits; onto a full pair it floats; onto
       the empty trailing workspace it maximizes there and GNOME adds a new one
-- [ ] The **focus cycle** and the float cycle order (managed in slot order, then floats
+- [x] The **focus cycle** and the float cycle order (managed in slot order, then floats
       left to right, perfect overlaps by stacking order; minimized skipped)
-- [ ] Animation pass (§18): clone-free slides, no doubles, the reference
+- [x] Animation pass (§18): clone-free slides, no doubles, the reference
       maximise → workspace-switch behaviour
 
 **Target runs**
 
-- [ ] `headless` (real grabs) · `session-like` · `session` (S13, real drags)
+- [x] `headless` (real grabs) · `session-like` · `session` (S13, real drags)
 
-## Stage 4 — App registry, prefs, migration (0/11)
+## Stage 4 — App registry, prefs, migration (2/11)
 
 **Failing scenarios first**
 
@@ -251,9 +251,9 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 
 **Implementation** (the pure modules are parallelisable)
 
-- [ ] `core/identity.ts`: desktop id → sandboxed id → gtk id → AppImage ancestor →
+- [x] `core/identity.ts`: desktop id → sandboxed id → gtk id → AppImage ancestor →
       `wm_class` → session-only, plus normalisation
-- [ ] `core/appregistry.ts`: entry shape, `neverTile` precedence, ordinals, migration from
+- [x] `core/appregistry.ts`: entry shape, `neverTile` precedence, ordinals, migration from
       `adaptation.json` + `behavior.json` + `exception-apps`, pruning/TTL
 - [ ] Adapter: populate on every window; resolve at first frame; re-key on
       `tracked-windows-changed`/`notify::wm-class`; adaptation **timing-only**;
@@ -279,7 +279,7 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 
 - [ ] `headless` · `session-like` (real apt/flatpak/snap apps) · `session`
 
-## Stage 5 — Displays and hotplug (0/7)
+## Stage 5 — Displays and hotplug (1/7)
 
 **Failing scenarios first**
 
@@ -289,7 +289,7 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 
 **Implementation**
 
-- [ ] `core/displays.ts`: `displayPlan(prev, next, memory, env) → { moves, remember,
+- [x] `core/displays.ts`: `displayPlan(prev, next, memory, env) → { moves, remember,
       forget }`; disconnect routing; reconnect replays the monitor's previous state; TTL;
       never sets the primary
 - [ ] Adapter: `monitors-changed`/`workareas-changed` → lane 2; `SimulateScreens`
@@ -305,29 +305,29 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 
 - [ ] `headless` (fixtures) · `session-like` · `session` (physical hotplug)
 
-## Stage 6 — Undo, flags, replay (0/6)
+## Stage 6 — Undo, flags, replay (6/6)
 
 **Failing scenarios first**
 
-- [ ] `A101-undo-restores-instance-and-config` · `A102-undo-toasts-when-impossible` ·
+- [x] `A101-undo-restores-instance-and-config` · `A102-undo-toasts-when-impossible` ·
       `A103-record-trace-shape` · `A104-queue-depth-returns-to-zero` · `A123-session-modes`
 
 **Implementation**
 
-- [ ] Undo: one in-memory entry, per instance + configuration + ratios — including a
+- [x] Undo: one in-memory entry, per instance + configuration + ratios — including a
       **swap** (two instances) and an **un-float** (the float flag); validate everything
       before applying; toast on impossibility; drop `undo-stack-size` and the persisted
       stack; a routed new window is not an undoable change
-- [ ] Session modes (§19): lock/unlock pauses new work, lets the queue finish, then
+- [x] Session modes (§19): lock/unlock pauses new work, lets the queue finish, then
       retiles once; sharing keeps tiling and hides the highlight; suspend is lock
-- [ ] Flags: `debug.*` per subsystem; `record` (journal + decisions → a replayable
+- [x] Flags: `debug.*` per subsystem; `record` (journal + decisions → a replayable
       trace); `perf.*` (queue depth, drain time, apply latency, p50/p95); `DumpDecisions`
-- [ ] `core/replay.ts` plus a determinism test (a recorded trace replayed through the
+- [x] `core/replay.ts` plus a determinism test (a recorded trace replayed through the
       planners gives identical decisions)
 
 **Target runs**
 
-- [ ] `headless` · `session-like` · `session` (S03)
+- [x] `headless` · `session-like` · `session` (S03)
 
 ## Stage 7 — Monitor matrix and vertical hardening (0/5)
 

@@ -12,6 +12,7 @@ import Gio from 'gi://Gio';
 import Clutter from 'gi://Clutter';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
+import St from 'gi://St';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import { layoutManager, notify, overview, sessionMode, wm } from 'resource:///org/gnome/shell/ui/main.js';
 
@@ -21,6 +22,7 @@ import { BorderState } from '../../core/border.js';
 import type { SuppressionReason } from '../../core/border.js';
 import { SessionMachine } from '../../core/session.js';
 import type { SessionMode } from '../../core/session.js';
+import { ChangeLog } from '../../core/undo.js';
 import type { SplitAxis } from '../../core/tiler.js';
 import { NoticeGate, isAlwaysNotice, noticeTitle } from '../../core/notify.js';
 import { clamp } from '../../core/types.js';
@@ -34,12 +36,13 @@ import { GnomeDbus } from './dbus.js';
 import { FrameClockAnimator } from './frame-clock.js';
 import { GestureInput } from './gesture-input.js';
 import { GnomeHost } from './host.js';
-import { History, UndoStack } from './history.js';
+import { History } from './history.js';
 import { GnomeIndicator } from './indicator.js';
 import { EventJournal } from './journal.js';
 import { WindowSession } from './session.js';
 import { GnomeSettings } from './settings.js';
 import { Tiling } from './tiling.js';
+import type { TraceInitial, TraceWorkspace, TraceEntry } from '../../core/replay.js';
 
 const EXTENSION_VERSION = 1;
 /** §23.2: how often the focused actor's position is sampled, and how many
@@ -95,7 +98,7 @@ export default class AdrtExtension extends Extension {
   private floats!: FloatStore;
   private history!: History;
   private journal!: EventJournal;
-  private undo!: UndoStack;
+  private changes!: ChangeLog;
   private indicator!: GnomeIndicator;
   private animator!: FrameClockAnimator;
   private tiling!: Tiling;
@@ -135,6 +138,8 @@ export default class AdrtExtension extends Extension {
   private keybindings: string[] = [];
   private hostUnsubscribers: (() => void)[] = [];
   private frameSamples = 0;
+  /** §22/Stage 6: the model state recording started from, for a replayable trace. */
+  private recordInitial: TraceInitial | null = null;
 
   enable(): void {
     const started = GLib.get_monotonic_time();
@@ -155,6 +160,7 @@ export default class AdrtExtension extends Extension {
       this.buildDirMtimeMs = 0;
     }
     this.settings = new GnomeSettings(this.getSettings());
+    this.applyAnimationSetting();
 
     this.history = new History(
       this.settings.boolean('history-enabled', true),
@@ -168,7 +174,7 @@ export default class AdrtExtension extends Extension {
     this.adaptation.load();
     this.floats = new FloatStore(this.settings.boolean('float-persistence', false));
     this.floats.load();
-    this.undo = new UndoStack(this.settings.int('undo-stack-size', 20));
+    this.changes = new ChangeLog();
     this.border = new BorderState();
 
     this.host = new GnomeHost();
@@ -187,7 +193,7 @@ export default class AdrtExtension extends Extension {
       history: this.history,
       adaptation: this.adaptation,
       animator: this.animator,
-      undo: this.undo,
+      changes: this.changes,
       windows: () => this.session.windows,
       isPaused: () => this.isPaused(),
       onRatiosChanged: () => this.saveState(),
@@ -201,7 +207,7 @@ export default class AdrtExtension extends Extension {
       history: this.history,
       adaptation: this.adaptation,
       floats: this.floats,
-      undo: this.undo,
+      changes: this.changes,
       isPaused: () => this.isPaused(),
       onStateChanged: () => this.onStateChanged(),
       onStubborn: (appId) => this.onStubborn(appId),
@@ -211,6 +217,7 @@ export default class AdrtExtension extends Extension {
       onNotice: (key, subject) => {
         this.toast(key, subject);
       },
+      onModelEvent: (event, fields) => this.onModelEvent(event, fields),
       isAnimating: () => this.animator.activeCount > 0,
     });
 
@@ -229,6 +236,8 @@ export default class AdrtExtension extends Extension {
     this.subscribeHost();
     this.watchSettings();
 
+    // §22: the trace's initial state is the model before any window is adopted.
+    this.captureRecordInitial();
     for (const win of global.display.list_all_windows()) this.session.register(win);
 
     this.gestures.configure();
@@ -306,6 +315,12 @@ export default class AdrtExtension extends Extension {
     this.floats.flush();
     this.history.destroy();
     this.saveState();
+    // §18: leave GNOME's animations as we found them.
+    try {
+      St.Settings.get().enable_animations = true;
+    } catch {
+      /* no St.Settings */
+    }
   }
 
   // ---------------------------------------------------------------- session
@@ -315,7 +330,9 @@ export default class AdrtExtension extends Extension {
   }
 
   private isPaused(): boolean {
-    return this.sessionMachine.isPaused;
+    // §19: while the drain finishes the backlog a pause caught, policy runs as
+    // if unpaused; new work is still refused where it is pushed.
+    return this.sessionMachine.isPaused && !(this.session?.isDrainingBacklog() ?? false);
   }
 
   private applySessionMode(mode: SessionMode, initial = false): void {
@@ -349,6 +366,9 @@ export default class AdrtExtension extends Extension {
       this.host.on('workspace-switched', (payload) => this.onWorkspaceSwitched(payload as { from: number; to: number })),
       this.host.on('screens-changed', () => {
         this.session.clearSignatures();
+        if (this.settings.boolean('debug-displays', false)) {
+          this.history.log('screens_changed', { monitors: this.host.screens().length });
+        }
         // §11: no policy in a signal handler. The work-area change needs a
         // settle, so it is a maintenance pass; the retile rides the layout lane.
         this.session.scheduleReconcile('screens-changed');
@@ -748,7 +768,7 @@ export default class AdrtExtension extends Extension {
       ['indicator-animated-pulse', () => this.syncIndicator()],
       ['history-enabled', () => this.history.setEnabled(this.settings.boolean('history-enabled', true))],
       ['history-max-bytes', () => this.history.setMaxBytes(this.settings.int('history-max-bytes', 8388608))],
-      ['undo-stack-size', () => this.undo.setMaxSize(this.settings.int('undo-stack-size', 20))],
+      ['disable-animations', () => this.applyAnimationSetting()],
       // Changing a shortcut re-registers the bindings so it takes effect at once.
       ...this.keybindingSettingNames().map((key): [string, () => void] => [key, () => {
         this.unregisterKeybindings();
@@ -756,6 +776,19 @@ export default class AdrtExtension extends Extension {
       }]),
     ];
     for (const [key, cb] of reactive) this.settingWatchers.push(this.settings.onChanged(key, cb));
+  }
+
+  /**
+   * §18: `disable-animations` switches off *everything*, GNOME's own Shell
+   * animations included, not just adrt's frame animations.
+   */
+  private applyAnimationSetting(): void {
+    const enabled = !this.settings.boolean('disable-animations', false);
+    try {
+      St.Settings.get().enable_animations = enabled;
+    } catch {
+      /* St.Settings unavailable in a bare test shell: nothing to switch */
+    }
   }
 
   /** The frozen v2 keybinding surface (§17): every name is one settings key. */
@@ -915,7 +948,6 @@ export default class AdrtExtension extends Extension {
       return;
     }
     if (raw.ratios !== undefined) this.tiling.loadRatios(raw.ratios, raw.swapPairs ?? []);
-    if (Array.isArray(raw.undo)) this.undo.restore(raw.undo);
   }
 
   private saveState(): void {
@@ -924,7 +956,6 @@ export default class AdrtExtension extends Extension {
       version: 1,
       ratios: this.tiling.getRatios(),
       swapPairs: this.tiling.getSwapPairs(),
-      undo: this.undo.toJSON(),
     };
     writeAtomic(this.stateFile(), JSON.stringify(payload));
   }
@@ -986,6 +1017,68 @@ export default class AdrtExtension extends Extension {
 
   private simulateNotice(key: string, subject: string): boolean {
     return this.toast(key, subject);
+  }
+
+  // --------------------------------------------------- trace (Stage 6, §22)
+
+  /** Journal one model-level event for the replayable trace. */
+  private onModelEvent(event: string, fields: Record<string, unknown>): void {
+    this.journal.record('model', event, fields);
+  }
+
+  /** The model state a trace replays from: the workspaces and their occupants. */
+  private buildTraceInitial(): TraceInitial {
+    const count = Math.max(1, this.session.countWorkspaces());
+    const workspaces: TraceWorkspace[] = [];
+    for (let index = 0; index < count; index++) {
+      workspaces.push({ id: index, slots: [null, null], minimized: [], floats: [] });
+    }
+    const windows: TraceInitial['windows'] = [];
+    const slots = new Map<number, 0 | 1>();
+    for (const tracked of this.session.windows.values()) {
+      const workspace = workspaces[tracked.surface.workspaceId];
+      if (workspace === undefined) continue;
+      tracked.surface.refresh();
+      windows.push({
+        id: tracked.id,
+        appId: tracked.surface.appId,
+        title: tracked.surface.title,
+        screenId: tracked.surface.screenId,
+        rect: tracked.surface.frame,
+        min: tracked.minSize,
+        max: tracked.maxSize,
+        maximized: tracked.surface.flags.maximized,
+      });
+      if (tracked.surface.flags.minimized) {
+        (workspace.minimized ??= []).push(tracked.id);
+        continue;
+      }
+      if (tracked.surface.flags.floating) {
+        (workspace.floats ??= []).push(tracked.id);
+        continue;
+      }
+      const slot = this.slotOf(tracked.surface.frame, this.workAreaOf(tracked.surface.screenId), this.axisOf(tracked.surface.screenId));
+      if ((slot === 0 || slot === 1) && workspace.slots[slot] === null && !slots.has(tracked.id)) {
+        workspace.slots[slot] = tracked.id;
+        slots.set(tracked.id, slot);
+      } else {
+        (workspace.floats ??= []).push(tracked.id);
+      }
+    }
+    return { viewed: this.host.activeWorkspaceId(), workspaces, windows };
+  }
+
+  /** Capture the recording's initial model state (called at enable). */
+  private captureRecordInitial(): void {
+    this.recordInitial = this.buildTraceInitial();
+  }
+
+  /** §22/Stage 6: the recorded journal + decisions as a replayable trace. */
+  private dumpTrace(limit: number): string {
+    const initial = this.recordInitial ?? this.buildTraceInitial();
+    const events = this.journal.tail(4000, 'model') as unknown as TraceEntry[];
+    const decisions = this.journal.decisionsTail(limit) as unknown as TraceEntry[];
+    return JSON.stringify({ version: 1, initial, events, decisions });
   }
 
   // ------------------------------------------------ platform probe, injection
@@ -1115,6 +1208,7 @@ export default class AdrtExtension extends Extension {
       ProbePlatform: () => this.probePlatform(),
       DumpEvents: (limit, filter) => JSON.stringify(this.journal.tail(limit, filter)),
       DumpDecisions: (limit) => JSON.stringify(this.journal.decisionsTail(limit)),
+      DumpTrace: (limit) => this.dumpTrace(limit),
       InjectPointerMove: (x, y) => this.injectPointerMove(x, y),
       InjectPointerButton: (button, pressed) => this.injectPointerButton(button, pressed),
       InjectKey: (keyval, pressed) => this.injectKey(keyval, pressed),
@@ -1222,6 +1316,7 @@ export default class AdrtExtension extends Extension {
       },
       ResetLayoutState: () => {
         this.tiling.loadRatios({}, []);
+        this.changes.clear();
         this.saveState();
         this.session.clearSignatures();
         this.session.scheduleReconcile('reset-layout');
@@ -1327,6 +1422,18 @@ export default class AdrtExtension extends Extension {
       platform: 'gnome',
       paused: this.isPaused(),
       mode: this.sessionMachine.state.mode,
+      flags: {
+        debug: {
+          enabled: this.settings.boolean('debug-enabled', false),
+          tiling: this.settings.boolean('debug-tiling', false),
+          focus: this.settings.boolean('debug-focus', false),
+          displays: this.settings.boolean('debug-displays', false),
+          undo: this.settings.boolean('debug-undo', false),
+          session: this.settings.boolean('debug-session', false),
+        },
+        record: this.settings.boolean('record', false),
+        perf: this.settings.boolean('perf-enabled', true),
+      },
       activeWorkspace: this.host.activeWorkspaceId(),
       workspaceLayoutRows: global.workspace_manager.layout_rows,
       build: { version: EXTENSION_VERSION, dirMtimeMs: this.buildDirMtimeMs },
@@ -1357,6 +1464,14 @@ export default class AdrtExtension extends Extension {
       motionSkip: this.motionSkip,
       adaptations: this.adaptation.size,
       perf: this.session.perf(),
+      perfStats: {
+        queueDepth: this.session.counters().queuePending,
+        drains: this.session.counters().drains,
+        drainMsP50: this.session.counters().drainMsP50,
+        drainMsP95: this.session.counters().drainMsP95,
+        applyMsP50: this.session.counters().applyMsP50,
+        applyMsP95: this.session.counters().applyMsP95,
+      },
       counters: {
         ...this.session.counters(),
         configBuilds: this.settings.configBuilds,
@@ -1471,6 +1586,7 @@ export default class AdrtExtension extends Extension {
     if (screen === undefined) return false;
     const axis = screen.geometry.width >= screen.geometry.height ? 'horizontal' : 'vertical';
     const key = [first.surface.appId, second.surface.appId].sort();
+    this.session.capturePairChange(a, b);
     this.tiling.setRatio(`${key[0]}|${key[1]}|${axis}`, ratio);
     this.session.clearSignatures();
     this.session.retile(first.surface.workspaceId, 'simulate-resize');
@@ -1522,8 +1638,9 @@ export default class AdrtExtension extends Extension {
     return true;
   }
   private simulateSessionMode(mode: string): boolean {
-    if (mode !== 'user' && mode !== 'unlock-dialog' && mode !== 'screen-sharing') return false;
-    this.applySessionMode(mode);
+    if (mode !== 'user' && mode !== 'unlock-dialog' && mode !== 'screen-sharing' && mode !== 'suspend') return false;
+    // §19: suspend is treated as lock.
+    this.applySessionMode(mode === 'suspend' ? 'unlock-dialog' : mode);
     return true;
   }
 

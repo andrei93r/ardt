@@ -173,6 +173,53 @@ export function routeNewWindow(
   return { workspace: target, slot: 1, createRight: true, maximize: true, note: 'workspace-created' };
 }
 
+/**
+ * §6: the outcome of a user drop (a drag or an overview drop) on a target
+ * workspace. The ladder, in order:
+ *   * a **free slot wins**, on the side the window came from;
+ *   * otherwise a window whose perimeter was crossed is **swapped** with;
+ *   * otherwise the window **floats** where it was dropped.
+ * A drop onto the empty trailing workspace maximises there (a lone arrival);
+ * the single-workspace screen never swaps — with no free slot it floats.
+ */
+export type DropResult =
+  | { kind: 'slot'; workspace: number; slot: 0 | 1 }
+  | { kind: 'maximize'; workspace: number }
+  | { kind: 'swap'; workspace: number; with: number }
+  | { kind: 'float'; workspace: number };
+
+export function dropPlacement(
+  state: State,
+  env: Env,
+  _id: number,
+  workspace: number,
+  from: Direction | null = null,
+  crossed: number | null = null,
+): DropResult {
+  const ws = state.workspaces[workspace];
+  if (ws === undefined) return { kind: 'float', workspace };
+  const free = arrivalSlot(ws, from);
+  if (env.screen === 'single') {
+    // §7: a single-workspace screen never swaps; overflow floats.
+    if (free === null) return { kind: 'float', workspace };
+    return visibleCount(ws) === 0 ? { kind: 'maximize', workspace } : { kind: 'slot', workspace, slot: free };
+  }
+  if (env.screen === 'fixed' && free === null) {
+    // §7: fixed screens route to the nearest existing workspace with room.
+    const next = nearestWithRoom(state, workspace);
+    if (next === null) return { kind: 'float', workspace };
+    return { kind: 'slot', workspace: next, slot: freeSlot(state.workspaces[next]) ?? 1 };
+  }
+  if (free !== null) {
+    // A workspace that only looks empty hosts the drop alone → it maximises.
+    return visibleCount(ws) === 0 ? { kind: 'maximize', workspace } : { kind: 'slot', workspace, slot: free };
+  }
+  if (crossed !== null && visibleIds(ws).includes(crossed)) {
+    return { kind: 'swap', workspace, with: crossed };
+  }
+  return { kind: 'float', workspace };
+}
+
 /** The nearest workspace with a free slot, right first, then left (§7). */
 export function nearestWithRoom(state: State, from: number): number | null {
   for (let index = from + 1; index < state.workspaces.length; index++) {

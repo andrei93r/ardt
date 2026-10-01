@@ -18,9 +18,10 @@ import type { AdaptationStore } from './adapt.js';
 import * as compat from './compat.js';
 import type { FrameClockAnimator } from './frame-clock.js';
 import type { GnomeHost } from './host.js';
-import type { History, UndoStack } from './history.js';
+import type { History } from './history.js';
 import type { GnomeSettings } from './settings.js';
 import type { TrackedWindow } from './tracked-window.js';
+import type { ChangeLog, InstanceConfig } from '../../core/undo.js';
 
 const VERIFY_TOLERANCE = 2;
 const MIN_SETTLE_MS = 100;
@@ -32,7 +33,7 @@ export interface TilingDeps {
   history: History;
   adaptation: AdaptationStore;
   animator: FrameClockAnimator;
-  undo: UndoStack;
+  changes: ChangeLog;
   windows(): Map<number, TrackedWindow>;
   isPaused(): boolean;
   onRatiosChanged(): void;
@@ -198,14 +199,26 @@ export class Tiling {
 
     this.appliedPlans += 1;
 
-    const workspaceId = placements.length > 0 ? this.deps.windows().get(placements[0].surfaceId)?.surface.workspaceId ?? 0 : 0;
-    // §15: capture the ratios the "before" rects came from, so undo restores a
-    // self-consistent layout. A safety-net pass (scan / periodic retile) is not
-    // a user action and must not push a masking entry over the real one.
+    // §13: a user action holds exactly one change — the instances and the ratios
+    // that produced the "before" rects. A safety-net pass (scan / periodic
+    // retile) is not a user action and must not mask the real change.
     if (rememberUndo) {
       const ratios = this.ratiosBeforeChange ?? this.getRatios();
       this.ratiosBeforeChange = null;
-      this.deps.undo.push(workspaceId, before, moved, ratios);
+      const instances: InstanceConfig[] = [];
+      for (const item of before) {
+        const tracked = this.deps.windows().get(item.id);
+        if (tracked === undefined) continue;
+        instances.push({
+          id: item.id,
+          workspace: tracked.surface.workspaceId,
+          slot: tracked.pendingSlot,
+          rect: item.rect,
+          maximized: compat.isMaximized(tracked.win),
+          floating: tracked.surface.flags.floating,
+        });
+      }
+      this.deps.changes.set({ instances, ratios });
     }
 
     for (const placement of placements) {

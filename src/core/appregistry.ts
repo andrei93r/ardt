@@ -386,11 +386,17 @@ export class AppRegistry {
           report.skipped.push(appId);
           continue;
         }
+        const existing = this.table.get(appId);
         const entry = this.ensure(appId, now);
         const firstSeen = typeof record.firstSeen === 'number' && Number.isFinite(record.firstSeen) ? record.firstSeen : now;
         const lastSeen = typeof record.lastSeen === 'number' && Number.isFinite(record.lastSeen) ? record.lastSeen : now;
-        entry.firstSeen = Math.min(entry.firstSeen, firstSeen);
-        entry.lastSeen = Math.max(entry.lastSeen, lastSeen);
+        if (existing === undefined) {
+          entry.firstSeen = firstSeen;
+          entry.lastSeen = lastSeen;
+        } else {
+          entry.firstSeen = Math.min(existing.firstSeen, firstSeen);
+          entry.lastSeen = Math.max(existing.lastSeen, lastSeen);
+        }
         if (typeof record.observations === 'number' && Number.isFinite(record.observations)) {
           entry.windowsSeen = Math.max(entry.windowsSeen, record.observations);
         }

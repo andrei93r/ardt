@@ -91,6 +91,7 @@ const INTERFACE_XML = `
       <arg type="i" direction="in"/><arg type="s" direction="in"/><arg type="s" direction="out"/>
     </method>
     <method name="DumpDecisions"><arg type="i" direction="in"/><arg type="s" direction="out"/></method>
+    <method name="DumpTrace"><arg type="i" direction="in"/><arg type="s" direction="out"/></method>
     <method name="InjectPointerMove">
       <arg type="i" direction="in"/><arg type="i" direction="in"/><arg type="b" direction="out"/>
     </method>

@@ -30,6 +30,7 @@ export interface DbusHandlers {
   ProbePlatform(): string;
   DumpEvents(limit: number, filter: string): string;
   DumpDecisions(limit: number): string;
+  DumpTrace(limit: number): string;
   InjectPointerMove(x: number, y: number): boolean;
   InjectPointerButton(button: number, pressed: boolean): boolean;
   InjectKey(keyval: number, pressed: boolean): boolean;

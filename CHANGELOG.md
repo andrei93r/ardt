@@ -95,6 +95,51 @@ code changes, MINOR for features, PATCH for fixes.
   `respect-user-workspace-move`.
 - The auto-float pull-back from the coherence sweep: a float pins its workspace.
 
+### Added (Stage 3 — user-driven interactions)
+
+- **The drop ladder** (`core/placement.ts` `dropPlacement`): a free slot wins, on
+  the side the window came from; otherwise a window whose perimeter was crossed
+  is swapped with; otherwise the window floats where it was dropped. Same-plane
+  drops that cross nothing simply return to their tile. Cross-screen moves pick
+  the adjacent screen by geometry and run the same ladder; a maximized window is
+  un-maximized at the drop.
+- **Focus order** (`core/focus.ts` `cycleOrder`): the cycle walks the current
+  screen and workspace — managed windows in slot order, then floats left to
+  right (a perfect overlap resolves by stacking order), minimized skipped,
+  wrapping; focusing a float raises it. A direction with nothing that way stays
+  silent (the opposite-direction fallback is gone).
+- Dialogs are raised as well as centred; `un-float` with both slots taken toasts
+  and changes nothing.
+- `disable-animations` now switches off GNOME's own Shell animations
+  (`St.Settings.enable_animations`) as well as adrt's frame animations.
+- New scenarios: `A94`, `A95`, `A96`, `A97`, `A107`, `A108`, `A119`, `A120`,
+  `A121` (`A107`/`A108` need two screens and skip otherwise, like `A106`).
+
+### Added (Stage 6 — undo, flags, replay)
+
+- **Undo** (`core/undo.ts`): exactly one in-memory change, per instance and
+  configuration — workspace, slot, rect, maximized, floating — plus the ratios.
+  It reverses a swap (two instances) and an un-float (the flag), validates the
+  whole change before applying any of it, and toasts (`undo-impossible`,
+  `nothing-to-undo`) when it cannot. A routed new window is not a change.
+  `ChangeLog` replaces the persisted `UndoStack`; `undo-stack-size` and its
+  persisted state are gone.
+- **Session modes** (§19): lock/suspend pauses new work, lets the queue finish
+  what it already holds, then retiles once on resume; screen sharing keeps tiling
+  and hides the highlight.
+- **Flags**: per-subsystem `debug.*` (`debug-tiling`, `debug-focus`,
+  `debug-displays`, `debug-undo`, `debug-session`), `perf-enabled` with a
+  `perfStats` block (queue depth, drains, drain/apply p50 and p95), and `record`
+  plus `DumpTrace`, which exposes the model journal and decisions as a replayable
+  trace (`core/replay.ts` shape).
+- New scenarios: `A101`, `A102`, `A103`, `A104`, `A123`.
+
+### Changed (Stage 3/6)
+
+- `A44` is retired with a recorded skip: the v1 opposite-direction focus fallback
+  is deleted by the model (§6/§17, decision 58); the silent direction is covered
+  by `A57`/`A121`.
+
 ## [0.1.0] - 2026-09-29
 
 ### Added

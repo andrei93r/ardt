@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  escapeSize, freeSlot, impossibleSplit, minimizeRelocation, routeNewWindow, sideSlot, unmaximizeWindow,
+  dropPlacement, escapeSize, freeSlot, impossibleSplit, minimizeRelocation, routeNewWindow, sideSlot, unmaximizeWindow,
 } from '../../src/core/placement.js';
 import type { State, Win, Ws } from '../../src/core/placement.js';
 
@@ -190,5 +190,48 @@ describe('impossibleSplit (the trigger wins, §10 step 3-4)', () => {
   it('on a single-workspace screen the reactor is minimized', () => {
     expect(impossibleSplit({ screen: 'single', axis: 'horizontal' }, win(1), win(2)))
       .toMatchObject({ keep: 1, giveWay: 2, giveWayTo: 'minimized' });
+  });
+});
+
+describe('dropPlacement (the user drop ladder, §6)', () => {
+  const env = { screen: 'dynamic' as const, axis: 'horizontal' as const };
+
+  it('a free slot wins', () => {
+    const s = state([ws(0, [win(1), null]), ws(1)]);
+    expect(dropPlacement(s, env, 2, 0, 'left', null)).toEqual({ kind: 'slot', workspace: 0, slot: 1 });
+    const s2 = state([ws(0, [null, win(1)]), ws(1)]);
+    expect(dropPlacement(s2, env, 2, 0, 'right', null)).toEqual({ kind: 'slot', workspace: 0, slot: 0 });
+  });
+
+  it('a free slot beats a crossing', () => {
+    const s = state([ws(0, [null, win(1)]), ws(1)]);
+    expect(dropPlacement(s, env, 2, 0, null, 1)).toEqual({ kind: 'slot', workspace: 0, slot: 0 });
+  });
+
+  it('swaps with a crossed window only when there is no free slot', () => {
+    const s = state([ws(0, [win(1), win(2)]), ws(1)]);
+    expect(dropPlacement(s, env, 9, 0, null, 2)).toEqual({ kind: 'swap', workspace: 0, with: 2 });
+  });
+
+  it('floats on a full workspace when nothing was crossed', () => {
+    const s = state([ws(0, [win(1), win(2)]), ws(1)]);
+    expect(dropPlacement(s, env, 9, 0, null, null)).toEqual({ kind: 'float', workspace: 0 });
+  });
+
+  it('maximises on the empty trailing workspace', () => {
+    const s = state([ws(0, [win(1)]), ws(1)]);
+    expect(dropPlacement(s, env, 2, 1, null, null)).toEqual({ kind: 'maximize', workspace: 1 });
+  });
+
+  it('never swaps on a single-workspace screen: a full target floats', () => {
+    const single = { screen: 'single' as const, axis: 'horizontal' as const };
+    const s = state([ws(0, [win(1), win(2)])]);
+    expect(dropPlacement(s, single, 9, 0, null, 2)).toEqual({ kind: 'float', workspace: 0 });
+  });
+
+  it('routes a fixed screen to the nearest workspace with room', () => {
+    const fixed = { screen: 'fixed' as const, axis: 'horizontal' as const };
+    const s = state([ws(0, [win(1), win(2)]), ws(1, [win(3), null]), ws(2)]);
+    expect(dropPlacement(s, fixed, 9, 0, null, 2)).toEqual({ kind: 'slot', workspace: 1, slot: 1 });
   });
 });

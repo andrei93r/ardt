@@ -2,9 +2,15 @@
 # Generated with AI for personal use.
 # Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
 # and can maintain this code.
-# A44 Focus direction fallback: with no window on the requested side, focus the
-# one on the other side; with none at all, do nothing.
+# A44 Focus direction fallback: RETIRED in Stage 3. The v1 rule fell back to the
+# opposite direction; the v2 model (§6/§17, decision 58) says a direction with
+# nothing that way stays silent. Cross-screen focus and the silent direction are
+# covered by A121 and A57.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+skip "the opposite-direction fallback is retired: a direction with nothing that way stays silent (§6/§17)"
+summary
+exit 0
 
 ensure_clean
 open_pair

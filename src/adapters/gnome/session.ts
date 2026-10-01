@@ -17,10 +17,12 @@ import { classifyAdjust } from '../../core/adjust.js';
 import type { AdjustMode } from '../../core/adjust.js';
 import { EventQueue } from '../../core/queue.js';
 import {
-  escapeSize, maximizeWindow, routeNewWindow, unmaximizeWindow, windowCount,
+  dropPlacement, escapeSize, maximizeWindow, routeNewWindow, unmaximizeWindow, windowCount,
 } from '../../core/placement.js';
 import type { Axis, Env, Placement, ScreenClass, State, Win, Ws } from '../../core/placement.js';
 import { reapPlan } from '../../core/workspaces.js';
+import type { Change, ChangeLog, InstanceConfig, LiveInstance } from '../../core/undo.js';
+import { validateChange } from '../../core/undo.js';
 
 /** §10: how long a maintenance pass waits for the surface to settle. */
 const MAINTENANCE_SETTLE_MS = 200;
@@ -29,13 +31,14 @@ import { SignatureCache, planSignature } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
 import { computePlans, pairKey, ratioKey, screenArea } from '../../core/tiler.js';
 import type { FocusDirection } from '../../core/focus.js';
-import { pickDirectional } from '../../core/focus.js';
+import { cycleOrder, pickDirectional } from '../../core/focus.js';
+import type { CycleEntry } from '../../core/focus.js';
 import { Layer } from '../../core/types.js';
 import type { Rect, Screen, TilePlan } from '../../core/types.js';
 import type { AdaptationStore, FloatStore } from './adapt.js';
 import * as compat from './compat.js';
 import type { GnomeHost } from './host.js';
-import type { History, UndoStack } from './history.js';
+import type { History } from './history.js';
 import type { GnomeSettings } from './settings.js';
 import type { Tiling } from './tiling.js';
 import { TrackedWindow } from './tracked-window.js';
@@ -47,7 +50,7 @@ export interface SessionDeps {
   history: History;
   adaptation: AdaptationStore;
   floats: FloatStore;
-  undo: UndoStack;
+  changes: ChangeLog;
   isPaused(): boolean;
   onStateChanged(): void;
   onStubborn(appId: string): void;
@@ -57,6 +60,8 @@ export interface SessionDeps {
   onWindowMoving(): void;
   /** Raise a decision notification (§21); the extension owns the gate. */
   onNotice?(key: string, subject: string): void;
+  /** Journal one model-level event for the replayable trace (§22, Stage 6). */
+  onModelEvent?(event: string, fields: Record<string, unknown>): void;
   /** Whether any window is mid-animation (the drain waits for it rather than
    * applying a frame onto a moving surface). */
   isAnimating?: () => boolean;
@@ -89,9 +94,15 @@ export class WindowSession {
   private readonly queue = new EventQueue();
   /** Re-queued layout passes waiting for an animation to finish. */
   private drainDeferrals = 0;
+  /** §19: set while the drain finishes the backlog a pause caught. */
+  private drainingBacklog = false;
   private drainArmed: { 2: boolean; 3: boolean } = { 2: false, 3: false };
   private drains = 0;
   private drainMsMax = 0;
+  /** §22 perf: bounded samples for p50/p95 of drain and apply latency. */
+  private readonly drainSamples: number[] = [];
+  private readonly applySamples: number[] = [];
+  private static readonly SAMPLE_RING = 256;
   private readonly timeoutSources = new Set<number>();
   private reorderSignal = 0;
   private displaySignals: number[] = [];
@@ -100,6 +111,13 @@ export class WindowSession {
   private grabEndSignal = 0;
   private dragging = false;
   private dragStartRect: Rect | null = null;
+  /** The plane the drag started on, so the drop can tell a same-plane return
+   * from an arrival from another workspace or screen (§6). */
+  private dragStartWorkspace = 0;
+  private dragStartScreen = 0;
+  /** A cross-screen move reported by a directional key; the drain arrives it. */
+  private crossScreenFrom: 'left' | 'right' | 'above' | 'below' | null = null;
+  private crossScreenId: number | null = null;
   /** When the dragged window last changed geometry (stale-drag watchdog). */
   private dragLastActivityMs = 0;
   /** True while a compositor state makes tiling pointless (the overview). */
@@ -110,6 +128,8 @@ export class WindowSession {
   private wmPreferencesSettings: any = null;
   private adjustId: number | null = null;
   private adjustSource: number | null = null;
+  /** A released drag whose gesture the drain still has to interpret (§6/§11). */
+  private readonly dropPending = new Map<number, AdjustMode>();
   /** While set, plan-mismatch re-applies are suppressed (e.g. right after Undo). */
   private ignoreMismatchUntilMs = 0;
   private scanPerfCounter = 0;
@@ -215,6 +235,8 @@ export class WindowSession {
     this.dragging = true;
     this.dragLastActivityMs = Date.now();
     this.dragStartRect = { ...tracked.surface.frame };
+    this.dragStartWorkspace = tracked.surface.workspaceId;
+    this.dragStartScreen = tracked.surface.screenId;
     this.deps.onDragChanged(true);
     return true;
   }
@@ -243,10 +265,10 @@ export class WindowSession {
   }
 
   /**
-   * Drag released: interpret the gesture before reflowing.
-   * - §12 inner-edge resize of a pair saves the new split ratio.
-   * - §13 dragging one window past its sibling swaps the pair.
-   * - otherwise the workspace simply reflows.
+   * Drag released. §11: the signal handler only records the intent; the drain
+   * interprets the gesture. - §12 inner-edge resize of a pair saves the new
+   * split ratio; - §6 dragging one window past another swaps, takes a free
+   * slot, or floats; - otherwise the workspace simply reflows.
    */
   endDrag(id: number): boolean {
     const tracked = this.windows.get(id);
@@ -258,12 +280,10 @@ export class WindowSession {
     if (!wasDragging) return true;
 
     tracked.refreshFrame();
-    this.interpretDrop(tracked, this.adjustMode(tracked));
+    this.dropPending.set(id, this.adjustMode(tracked));
     this.dragStartRect = null;
     this.signatures.clearAll();
-    // A drop must take effect at once: the swap flag was just set, so retile
-    // immediately rather than waiting out the reconcile debounce.
-    this.retile(tracked.surface.workspaceId, 'drag-end');
+    this.scheduleReconcile('drag-end');
     return true;
   }
 
@@ -274,31 +294,12 @@ export class WindowSession {
     return peers.length === 1 ? peers[0] : null;
   }
 
-  /**
-   * §13: the window was dropped onto its sibling. The trigger is geometric:
-   * the drop's centre inside the sibling, or more than half the smaller
-   * window's area overlapping it. Crossing the centre is not required.
-   */
+  /** §6/§13: the window was dropped onto its sibling, so the pair trades sides. */
   private applySwapIntent(tracked: TrackedWindow, sibling: TrackedWindow): void {
-    const rect = tracked.surface.frame;
-    const other = sibling.surface.frame;
-    if (!this.landsOn(rect, other)) return;
+    this.captureChange([tracked.id, sibling.id]);
     this.deps.tiling.toggleSwap(tracked.id, sibling.id);
     this.clearPendingSlots(tracked.id, sibling.id);
     this.deps.history.log('swap', { a: tracked.id, b: sibling.id, reason: 'drag' });
-  }
-
-  /** Would a drop at `rect` land on `target`? */
-  private landsOn(rect: Rect, target: Rect): boolean {
-    const overlapX = Math.max(0, Math.min(rect.x + rect.width, target.x + target.width) - Math.max(rect.x, target.x));
-    const overlapY = Math.max(0, Math.min(rect.y + rect.height, target.y + target.height) - Math.max(rect.y, target.y));
-    const overlap = overlapX * overlapY;
-    const minArea = Math.min(rect.width * rect.height, target.width * target.height);
-    const centreX = rect.x + rect.width / 2;
-    const centreY = rect.y + rect.height / 2;
-    const centreInside =
-      centreX >= target.x && centreX <= target.x + target.width && centreY >= target.y && centreY <= target.y + target.height;
-    return centreInside || (minArea > 0 && overlap >= minArea * 0.35);
   }
 
   /** §12: a shared inner edge moved; save the resulting ratio. */
@@ -338,6 +339,7 @@ export class WindowSession {
     const sortedFirstIsLeft = leftAppId <= rightAppId;
     const axis = horizontal ? 'horizontal' : 'vertical';
     const key = ratioKey(tracked.surface.appId, sibling.surface.appId, axis);
+    this.captureChange([tracked.id, sibling.id]);
     this.deps.tiling.setRatio(key, sortedFirstIsLeft ? ratioLeft : 1 - ratioLeft);
     this.deps.history.log('split_resize', { pair: key, ratio: ratioLeft, reason: 'drag' });
   }
@@ -520,6 +522,17 @@ export class WindowSession {
   /** §3: route a newly opened window through the pure model, then apply it. */
   private routeWindow(tracked: TrackedWindow): void {
     const own = tracked.surface.workspaceId;
+    // Trace (§22): the arrival is the replayable event; the placement decision
+    // is derived from the model, never recorded here.
+    this.deps.onModelEvent?.('window-opened', {
+      id: tracked.id,
+      appId: tracked.surface.appId,
+      screenId: tracked.surface.screenId,
+      workspace: own,
+      rect: tracked.surface.frame,
+      min: tracked.minSize,
+      max: tracked.maxSize,
+    });
     const env = this.placementEnv(tracked.surface.screenId);
     const state = this.buildPlacementState(tracked.id);
     if (this.doesNotFit(tracked, env)) {
@@ -660,6 +673,7 @@ export class WindowSession {
     this.windows.delete(id);
     this.deps.host.forgetSurface(id);
     if (wasTiled) this.deps.onClosed(id, closedRect);
+    this.deps.onModelEvent?.('window-closed', { id });
     this.signatures.clear(`ws:${workspaceId}`);
     this.deps.history.log('close', { id, workspaceId });
     this.deps.onStateChanged();
@@ -706,6 +720,8 @@ export class WindowSession {
    * coalesced entry is the whole point of the queue.
    */
   simulateBurst(count: number, reason: string): number {
+    // §19: a pause refuses new work; the queue only carries what it held.
+    if (this.deps.isPaused()) return 0;
     for (let i = 0; i < Math.max(0, Math.trunc(count)); i++) {
       this.queue.push(2, 'reconcile-all', 'reconcile', { reason: `${reason}#${i}` });
     }
@@ -752,6 +768,21 @@ export class WindowSession {
     const events = this.queue.drain();
     if (events.length === 0) return;
     this.drains += 1;
+    // §19: a pause lets the queue finish what it already holds. `isPaused()` is
+    // consulted through the extension, which returns false while this flag is
+    // set; new work is still refused at push time, so only the backlog runs.
+    this.drainingBacklog = this.deps.isPaused();
+    try {
+      this.drainEvents(events);
+    } finally {
+      this.drainingBacklog = false;
+    }
+    const ms = (GLib.get_monotonic_time() - started) / 1000;
+    this.drainMsMax = Math.max(this.drainMsMax, ms);
+    this.pushSample(this.drainSamples, ms);
+  }
+
+  private drainEvents(events: ReturnType<EventQueue['drain']>): void {
     for (const event of events) {
       const data = (event.data ?? {}) as Record<string, unknown>;
       if (event.kind === 'reconcile') {
@@ -778,7 +809,11 @@ export class WindowSession {
         this.deps.history.log('maintenance', { kind });
       }
     }
-    this.drainMsMax = Math.max(this.drainMsMax, (GLib.get_monotonic_time() - started) / 1000);
+  }
+
+  /** §19: true while the drain is finishing the backlog a pause caught. */
+  isDrainingBacklog(): boolean {
+    return this.drainingBacklog;
   }
 
   /** Check every workspace on every screen and correct anything out of place.
@@ -786,6 +821,27 @@ export class WindowSession {
    * entries, so they can never mask the entry a user action pushed. */
   reconcileAll(reason: string, rememberUndo = false): void {
     if (this.deps.isPaused() || this.suspended || this.dragging || this.adjustId !== null) return;
+    // §6/§11: a released drag is interpreted here, not inside the grab signal.
+    for (const [id, mode] of [...this.dropPending]) {
+      this.dropPending.delete(id);
+      const tracked = this.windows.get(id);
+      if (tracked !== undefined) this.interpretDrop(tracked, mode);
+    }
+    // §7.6/§8: after a user reorder every index moved; re-derive them here,
+    // never in the signal handler.
+    if (this.reorderPending) {
+      this.reorderPending = false;
+      this.realignWorkspaces();
+    }
+    // §6: a directional move that crossed a screen edge is arrived from here.
+    if (this.crossScreenId !== null) {
+      const id = this.crossScreenId;
+      const from = this.crossScreenFrom ?? 'left';
+      this.crossScreenId = null;
+      this.crossScreenFrom = null;
+      const tracked = this.windows.get(id);
+      if (tracked !== undefined) this.arriveCrossScreen(tracked, from);
+    }
     // §4/§16: fullscreen and user-unmaximize transitions are re-derived here,
     // never acted on inside the Mutter signal handler that reported them.
     for (const tracked of [...this.windows.values()]) {
@@ -818,6 +874,7 @@ export class WindowSession {
     for (const tracked of this.windows.values()) {
       if (!seen.has(tracked.surface.workspaceId)) this.retile(tracked.surface.workspaceId, reason, true, rememberUndo);
     }
+    this.deps.onModelEvent?.('layout', { reason });
     this.deps.onStateChanged();
   }
 
@@ -827,7 +884,9 @@ export class WindowSession {
 
   /** §7.6: the user reordered workspaces; every index moved. */
   private onWorkspacesReordered(): void {
-    this.realignWorkspaces();
+    // §11: no policy in a Mutter signal handler. The new indexes are re-derived
+    // in the drain; here we only record the intent.
+    this.reorderPending = true;
     this.signatures.clearAll();
     if (this.deps.settings.boolean('log-workspace-reorder', false)) {
       this.deps.history.log('ws_removed', { reason: 'reorder' });
@@ -836,6 +895,8 @@ export class WindowSession {
     // emission, so the drain does the work.
     this.scheduleReconcile('workspace-reorder');
   }
+  /** Set by a reorder signal; the drain re-derives every index from Mutter. */
+  private reorderPending = false;
   /** Re-derive every tracked window's workspace index from Mutter. */
   private realignWorkspaces(): void {
     for (const tracked of this.windows.values()) {
@@ -933,6 +994,7 @@ export class WindowSession {
       // §36.14: one retile must complete well under 10ms.
       this.lastApplyMs = (GLib.get_monotonic_time() - startedUs) / 1000;
       this.lastApplyAtMs = Date.now();
+      this.pushSample(this.applySamples, this.lastApplyMs);
       if (this.lastApplyMs > 5 && this.deps.settings.boolean('debug-enabled', false)) {
         this.deps.history.log('perf', { workspaceId, screen: screen.index, apply_ms: this.lastApplyMs });
       }
@@ -1049,14 +1111,54 @@ export class WindowSession {
     return this.windows.get(win.get_id()) ?? null;
   }
 
-  /** §14 focus cycle: next tileable on the same monitor/workspace, wrapping. */
+  /**
+   * §6/§17 focus cycle: the managed windows of the current screen and
+   * workspace in slot order, then the floats left to right (a perfect overlap
+   * resolves by stacking order), minimized skipped, wrapping. It never crosses
+   * a screen or a workspace; focusing a float raises it.
+   */
   focusCycle(): void {
     const current = this.focused();
     if (current === null) return;
-    const peers = this.tileables(current.surface.workspaceId).filter((t) => t.surface.screenId === current.surface.screenId);
-    if (peers.length < 2) return;
-    const index = peers.findIndex((t) => t.id === current.id);
-    this.focus(peers[(index + 1) % peers.length].id);
+    const entries = this.cycleEntries(current.surface.workspaceId, current.surface.screenId);
+    const next = cycleOrder(current.id, entries);
+    if (next === null || next === current.id) return;
+    const target = this.windows.get(next);
+    if (target === undefined) return;
+    if (target.surface.flags.floating || target.autoFloated) {
+      target.win.raise();
+    }
+    this.logFocus('focus_cycle', { from: current.id, to: next });
+    this.focus(next);
+  }
+
+  /** Per-subsystem debug logging (§22): gated on `debug-focus`. */
+  private logFocus(event: string, fields: Record<string, unknown>): void {
+    if (this.deps.settings.boolean('debug-focus', false)) this.deps.history.log(event, fields);
+  }
+
+  /** The focus cycle of one plane: managed in slot order, then floats. */
+  private cycleEntries(workspaceId: number, screenId: number): CycleEntry[] {
+    const entries: CycleEntry[] = [];
+    for (const tracked of this.windows.values()) {
+      if (tracked.surface.workspaceId !== workspaceId) continue;
+      if (tracked.surface.screenId !== screenId) continue;
+      // A float is unmanaged but still part of the cycle; a dialog or popup is
+      // neither managed nor a float and is skipped.
+      const floating = tracked.surface.flags.floating || tracked.autoFloated;
+      if (!floating && !this.classify(tracked).tileable) continue;
+      if (tracked.surface.flags.minimized) {
+        entries.push({ id: tracked.id, kind: 'managed', minimized: true });
+        continue;
+      }
+      if (floating) {
+        tracked.surface.captureZ();
+        entries.push({ id: tracked.id, kind: 'float', rect: tracked.surface.frame, z: tracked.surface.zPosition });
+        continue;
+      }
+      entries.push({ id: tracked.id, kind: 'managed', slot: this.slotFor(tracked) ?? 0 });
+    }
+    return entries;
   }
 
   /** §13: keyboard move toward the sibling toggles the swap flag. */
@@ -1070,6 +1172,7 @@ export class WindowSession {
       const horizontal = direction === 'left' || direction === 'right';
       const splitHorizontal = this.workspaceSplitHorizontal();
       if (horizontal === splitHorizontal) {
+        this.captureChange([current.id, sibling.id]);
         this.deps.tiling.toggleSwap(current.id, sibling.id);
         this.clearPendingSlots(current.id, sibling.id);
         this.signatures.clearAll();
@@ -1085,9 +1188,22 @@ export class WindowSession {
     const tracked = this.windows.get(id);
     if (tracked === undefined) return false;
     const floating = !tracked.surface.flags.floating;
+    // §21: un-floating when both slots are taken changes nothing and toasts.
+    if (!floating) {
+      const others = this.tileables(tracked.surface.workspaceId).filter(
+        (t) => t.id !== id && t.surface.screenId === tracked.surface.screenId,
+      );
+      if (others.length >= 2) {
+        this.deps.onNotice?.('un-float-full', String(id));
+        return false;
+      }
+    }
+    this.capturePlane([tracked.surface.workspaceId], tracked.surface.screenId);
     tracked.autoFloated = false;
     tracked.surface.setFloating(floating);
     this.deps.host.applyLayer(id, floating ? Layer.FLOATING : Layer.TILED, 0);
+    // The durable per-app path is the registry's neverTile (§12); this session
+    // store only records the mark when persistence is on (it defaults off).
     this.deps.floats.set(tracked.surface.appId, floating);
     tracked.invalidateClassification();
     this.deps.history.log('float_toggle', { id, floating });
@@ -1096,30 +1212,151 @@ export class WindowSession {
     return floating;
   }
 
-  /** §15 Undo: restore the last snapshot, activating its workspace first. */
+  /** §13: capture the pair's current configuration before a user ratio change. */
+  capturePairChange(a: number, b: number): void {
+    this.captureChange([a, b]);
+  }
+
+  /**
+   * §13 Undo: revert the one change — every instance's workspace, slot, rect,
+   * maximized and floating state, plus the ratios. Everything is validated
+   * before anything is applied; an impossible undo is announced and changes
+   * nothing.
+   */
   undo(): boolean {
-    const entry = this.deps.undo.pop();
-    if (entry === null) {
+    const change = this.deps.changes.take();
+    if (change === null) {
       // §13: an undo with nothing to revert is announced, never silent.
       this.deps.onNotice?.('nothing-to-undo', 'undo');
       return false;
     }
-    // §15: restore the split ratios too, so the plan and the restored rects
-    // agree and no later reconcile re-tiles over the undo.
-    if (entry.ratios !== undefined) this.deps.tiling.restoreRatios(entry.ratios);
-    if (this.deps.host.activeWorkspaceId() !== entry.workspaceId) {
-      this.activateWorkspace(entry.workspaceId);
+    const live: LiveInstance[] = [];
+    for (const tracked of this.windows.values()) {
+      live.push({ id: tracked.id, workspace: tracked.surface.workspaceId, slot: this.slotFor(tracked) });
     }
-    for (const item of entry.rects) {
-      const tracked = this.windows.get(item.id);
+    const check = validateChange(change, live);
+    if (!check.ok) {
+      this.deps.history.log('undo_impossible', { problem: check.problem, instances: change.instances.map((instance) => instance.id) });
+      this.deps.onNotice?.('undo-impossible', check.problem ?? 'unknown');
+      return false;
+    }
+    // Ratios first, so the retile that follows agrees with the restored rects.
+    if (change.ratios !== undefined) this.deps.tiling.restoreRatios(change.ratios);
+    for (const instance of change.instances) {
+      const tracked = this.windows.get(instance.id);
       if (tracked === undefined) continue;
+      // Workspace.
+      if (tracked.surface.workspaceId !== instance.workspace) {
+        this.moveWindowToWorkspace(tracked, instance.workspace);
+      }
+      // Floated flag (§6): undoing an un-float puts the window back in tiling.
+      if (tracked.surface.flags.floating !== instance.floating) {
+        tracked.autoFloated = false;
+        tracked.surface.setFloating(instance.floating);
+        this.deps.tiling.noteSelfApply();
+        this.deps.host.applyLayer(tracked.id, instance.floating ? Layer.FLOATING : Layer.TILED, 0);
+        tracked.invalidateClassification();
+      }
+      // Maximized (§4).
+      if (instance.maximized !== compat.isMaximized(tracked.win)) {
+        this.deps.tiling.noteSelfApply();
+        if (instance.maximized) {
+          this.deps.host.maximize(tracked.id);
+        } else {
+          tracked.selfUnmaximize = true;
+          try {
+            this.deps.host.unmaximize(tracked.id);
+          } finally {
+            tracked.selfUnmaximize = false;
+          }
+        }
+      }
       tracked.refreshFrame();
-      this.deps.tiling.applyFrame(tracked, item.rect, this.screenFor(tracked.surface.screenId) ?? fallbackScreen(), false, 'undo', 0);
     }
-    this.deps.history.log('undo', { workspaceId: entry.workspaceId, windows: entry.rects.length });
+    // Slots: clear stale pins on the workspaces involved, then set the change's.
+    const touched = new Set<number>();
+    for (const instance of change.instances) touched.add(instance.workspace);
+    for (const other of this.windows.values()) {
+      if (touched.has(other.surface.workspaceId) && !change.instances.some((instance) => instance.id === other.id)) {
+        other.pendingSlot = null;
+      }
+    }
+    for (const instance of change.instances) {
+      const tracked = this.windows.get(instance.id);
+      if (tracked !== undefined) tracked.pendingSlot = instance.slot;
+    }
+    // Geometry last, from the rects captured before the change.
+    for (const instance of change.instances) {
+      const tracked = this.windows.get(instance.id);
+      if (tracked === undefined) continue;
+      this.deps.tiling.applyFrame(
+        tracked,
+        instance.rect,
+        this.screenFor(tracked.surface.screenId) ?? fallbackScreen(),
+        false,
+        'undo',
+        0,
+      );
+    }
+    if (change.instances.length > 0 && this.deps.host.activeWorkspaceId() !== change.instances[0].workspace) {
+      this.activateWorkspace(change.instances[0].workspace);
+    }
+    this.deps.history.log('undo', { instances: change.instances.map((instance) => instance.id) });
     // Do not immediately re-tile over the restored rects.
     this.ignoreMismatchUntilMs = Date.now() + 4000;
+    this.signatures.clearAll();
     return true;
+  }
+
+  /** Capture every tiled window on the given workspaces of one screen. */
+  private capturePlane(workspaceIds: readonly number[], screenId: number): void {
+    const ids: number[] = [];
+    for (const workspaceId of workspaceIds) {
+      for (const tracked of this.tileables(workspaceId)) {
+        if (tracked.surface.screenId === screenId) ids.push(tracked.id);
+      }
+    }
+    if (ids.length > 0) this.captureChange(ids);
+  }
+
+  /** Snapshot the current configuration of `ids` as the single undo change. */
+  private captureChange(ids: readonly number[], workspaceOverride?: number): void {
+    const instances: InstanceConfig[] = [];
+    for (const id of ids) {
+      const tracked = this.windows.get(id);
+      if (tracked === undefined) continue;
+      tracked.refreshFrame();
+      instances.push({
+        id,
+        workspace: workspaceOverride ?? tracked.surface.workspaceId,
+        slot: this.slotFor(tracked),
+        rect: { ...tracked.surface.frame },
+        maximized: compat.isMaximized(tracked.win),
+        floating: tracked.surface.flags.floating,
+      });
+    }
+    if (instances.length === 0) return;
+    const ratios: Record<string, number> = this.deps.tiling.getRatios();
+    this.deps.changes.set({ instances, ratios } satisfies Change);
+    this.deps.history.log('undo_captured', { instances: instances.map((instance) => instance.id) });
+  }
+
+  /** The slot a window holds: its pin, else read from its rect and screen axis. */
+  private slotFor(tracked: TrackedWindow): 0 | 1 | null {
+    if (tracked.pendingSlot !== null) return tracked.pendingSlot;
+    if (tracked.surface.flags.maximized || tracked.surface.flags.floating) return null;
+    const screen = this.screenFor(tracked.surface.screenId);
+    if (screen === null) return null;
+    const axis = this.axisFor(tracked.surface.screenId);
+    const area = screen.workArea ?? screen.geometry;
+    const span = axis === 'vertical' ? area.height : area.width;
+    if (span <= 0) return null;
+    const rect = tracked.surface.frame;
+    const start =
+      (axis === 'vertical' ? rect.y - area.y : rect.x - area.x) +
+      (axis === 'vertical' ? rect.height : rect.width) / 2;
+    if (Math.abs(start - span / 2) < span * 0.1) return null;
+    return start < span / 2 ? 0 : 1;
   }
 
   /** Test hook: mark a window "always on top" (it must still be tiled). */
@@ -1243,10 +1480,12 @@ export class WindowSession {
       return false;
     }
     if (index < 0 || index >= count || index === current.surface.workspaceId) return false;
+    const from = current.surface.workspaceId;
+    // §13: a user workspace move is the change undo will revert, on both planes.
+    this.capturePlane([from, index], current.surface.screenId);
     this.suppress.add(current.id);
     this.deps.tiling.noteSelfApply();
     this.deps.onWindowMoving();
-    const from = current.surface.workspaceId;
     this.deps.host.applyWorkspace(current.id, index);
     this.suppress.delete(current.id);
     current.surface.workspaceId = index;
@@ -1278,10 +1517,12 @@ export class WindowSession {
   nudgeFocused(direction: string, step: number): boolean {
     const focused = this.focused();
     if (focused === null) return false;
+    const sibling = this.pairSibling(focused);
     if (!this.deps.tiling.nudgeSplit(focused.id, direction, step)) {
       this.deps.onNotice?.('nothing-to-nudge', String(focused.id));
       return false;
     }
+    if (sibling !== null) this.captureChange([focused.id, sibling.id]);
     this.signatures.clearAll();
     this.scheduleReconcile('nudge');
     return true;
@@ -1443,16 +1684,21 @@ export class WindowSession {
       this.escapeTracked(tracked);
       return;
     }
+    // §13: the pair it leaves behind reacts (the survivor maximizes); capture
+    // the whole plane so undo restores both windows.
+    this.capturePlane([tracked.surface.workspaceId], tracked.surface.screenId);
     const own = tracked.surface.workspaceId;
     const env = this.placementEnv(tracked.surface.screenId);
     const state = this.buildPlacementState();
     this.applyPlacement(tracked, maximizeWindow(state, env, own), own === state.viewed, 'maximize');
+    this.deps.onModelEvent?.('window-maximized', { id: tracked.id, workspace: own });
   }
 
   /** §4: the unmaximize ladder, from the pure model (no origin memory). */
   private unmaximizeTracked(tracked: TrackedWindow): void {
     tracked.maximizeRequested = false;
     const own = tracked.surface.workspaceId;
+    this.capturePlane([own - 1, own, own + 1], tracked.surface.screenId);
     const env = this.placementEnv(tracked.surface.screenId);
     const state = this.buildPlacementState();
     const placement = unmaximizeWindow(state, env, own, tracked.id);
@@ -1467,6 +1713,7 @@ export class WindowSession {
     }
     const follow = own === state.viewed || placement.workspace !== own;
     this.applyPlacement(tracked, placement, follow, 'unmaximize');
+    this.deps.onModelEvent?.('window-unmaximized', { id: tracked.id, workspace: placement.workspace });
     if (env.screen === 'single') this.restoreMinimizedOn(placement.workspace, tracked.surface.screenId);
     this.schedulePrune();
   }
@@ -1492,6 +1739,8 @@ export class WindowSession {
     const env = this.placementEnv(tracked.surface.screenId);
     const screen = this.screenFor(tracked.surface.screenId);
     if (screen === null) return;
+    // §13: the escape moves the window to a new workspace; it is undoable.
+    this.capturePlane([tracked.surface.workspaceId], tracked.surface.screenId);
     const area = screenArea(screen);
     const size = escapeSize(
       env.axis === 'vertical' ? area.height : area.width,
@@ -1565,6 +1814,7 @@ export class WindowSession {
       this.scheduleRetile(tracked.surface.workspaceId, 'unminimize');
       return;
     }
+    this.deps.onModelEvent?.('window-minimized', { id: tracked.id, workspace: tracked.surface.workspaceId });
     this.scheduleRetile(tracked.surface.workspaceId, 'minimize');
     this.schedulePrune();
   }
@@ -1711,21 +1961,78 @@ export class WindowSession {
     return -1;
   }
 
-  /** §14 move to an adjacent monitor when there is no sibling in that direction. */
+  /**
+   * §6/§14: move to the adjacent screen in `direction`, chosen by geometry; the
+   * target screen's own drop ladder (free slot on the side it came from, a
+   * crossing swap, else a float) is applied from the drain.
+   */
   private moveToAdjacentMonitor(tracked: TrackedWindow, direction: string): void {
-    const screens = this.deps.host.screens();
-    if (screens.length < 2) return;
-    const current = screens.findIndex((s) => s.index === tracked.surface.screenId);
-    if (current < 0) return;
-    const adjacent = direction === 'left' || direction === 'up' ? current - 1 : current + 1;
-    if (adjacent < 0 || adjacent >= screens.length) return;
-    tracked.win.move_to_monitor(screens[adjacent].index);
+    const target = this.adjacentScreen(tracked, direction);
+    if (target === null) return;
+    this.captureChange([tracked.id]);
+    tracked.win.move_to_monitor(target.index);
     tracked.userMovedAtMs = Date.now();
+    this.crossScreenId = tracked.id;
+    this.crossScreenFrom = direction === 'right' ? 'left' : direction === 'left' ? 'right' : direction === 'down' ? 'above' : 'below';
     this.signatures.clearAll();
-    this.scheduleRetile(tracked.surface.workspaceId, 'move-monitor');
+    this.scheduleReconcile('move-monitor');
+  }
+
+  /** The screen next to this one in `direction`, by geometry (never by index). */
+  private adjacentScreen(tracked: TrackedWindow, direction: string): Screen | null {
+    const screens = this.deps.host.screens();
+    const from = this.screenFor(tracked.surface.screenId);
+    if (from === null) return null;
+    const cx = from.geometry.x + from.geometry.width / 2;
+    const cy = from.geometry.y + from.geometry.height / 2;
+    let best: Screen | null = null;
+    let bestGap = Number.POSITIVE_INFINITY;
+    for (const screen of screens) {
+      if (screen.index === from.index) continue;
+      const ox = screen.geometry.x + screen.geometry.width / 2;
+      const oy = screen.geometry.y + screen.geometry.height / 2;
+      const gap =
+        direction === 'left' ? cx - ox : direction === 'right' ? ox - cx : direction === 'up' ? cy - oy : oy - cy;
+      if (gap <= 0) continue;
+      // Prefer a screen whose centre is on the requested side; a small
+      // perpendicular offset keeps the choice the nearest one.
+      const perpendicular = direction === 'left' || direction === 'right' ? Math.abs(oy - cy) : Math.abs(ox - cx);
+      const score = gap + perpendicular;
+      if (score < bestGap) {
+        bestGap = score;
+        best = screen;
+      }
+    }
+    return best;
+  }
+
+  /** §6: arrive on another screen (a drag or a directional move). */
+  private arriveCrossScreen(tracked: TrackedWindow, from: 'left' | 'right' | 'above' | 'below'): void {
+    tracked.refreshFrame();
+    // A maximized window dragged across screens is un-maximized at the drop.
+    if (compat.isMaximized(tracked.win)) {
+      tracked.selfUnmaximize = true;
+      try {
+        this.deps.host.unmaximize(tracked.id);
+      } finally {
+        tracked.selfUnmaximize = false;
+      }
+      tracked.refreshFrame();
+    }
+    const crossed = this.crossedWindow(tracked);
+    const env = this.placementEnv(tracked.surface.screenId);
+    const state = this.buildPlacementState(tracked.id);
+    const result = dropPlacement(state, env, tracked.id, tracked.surface.workspaceId, from, crossed);
+    this.applyDropResult(tracked, result);
   }
 
   private recenterModal(tracked: TrackedWindow): void {
+    // §16: a dialog floats, is centred on its parent and raised.
+    try {
+      tracked.win.raise();
+    } catch {
+      /* window gone */
+    }
     const parentId = tracked.surface.parentId;
     if (parentId === null) return;
     const parent = this.windows.get(parentId);
@@ -1863,6 +2170,8 @@ export class WindowSession {
     // Anchor to the last geometry we planned: `surface.frame` is already the
     // user's new rect by the time this signal arrives.
     this.dragStartRect = { ...(tracked.lastTarget ?? tracked.surface.frame) };
+    this.dragStartWorkspace = tracked.surface.workspaceId;
+    this.dragStartScreen = tracked.surface.screenId;
     this.deps.onDragChanged(true);
   }
 
@@ -1954,18 +2263,120 @@ export class WindowSession {
   }
 
   private interpretDrop(tracked: TrackedWindow, mode: AdjustMode): void {
-    const sibling = this.pairSibling(tracked);
     const screen = this.screenFor(tracked.surface.screenId);
-    if (sibling === null || screen === null) return;
-    // Landing on the sibling is a swap attempt whatever the reported mode says:
-    // a client or the compositor can clamp a dragged window, changing its size,
-    // which would otherwise read as an inner-edge resize and skew the split
-    // ratio instead of swapping at all (§13).
-    if (mode === 'move' || this.landsOn(tracked.surface.frame, sibling.surface.frame)) {
-      this.applySwapIntent(tracked, sibling);
+    if (screen === null) return;
+    const sibling = this.pairSibling(tracked);
+    const samePlane = tracked.surface.workspaceId === this.dragStartWorkspace && tracked.surface.screenId === this.dragStartScreen;
+
+    // §10: the inner edge of a pair changes the ratio. Landing on the sibling is
+    // a crossing, never a resize — a client can clamp a dragged window, changing
+    // its size, which used to read as an inner-edge resize (§6/A77).
+    if (
+      sibling !== null &&
+      samePlane &&
+      mode === 'resize' &&
+      !this.overlaps(tracked.surface.frame, sibling.surface.frame)
+    ) {
+      this.applyResizeIntent(tracked, sibling, screen);
       return;
     }
-    this.applyResizeIntent(tracked, sibling, screen);
+
+    const crossed = samePlane ? this.crossedWindow(tracked) : null;
+    if (samePlane) {
+      // A same-plane drop that crossed a sibling swaps; one that crossed
+      // nothing simply returns to its tile (there is no float for staying put).
+      if (crossed !== null) this.applySwapIntent(tracked, this.windows.get(crossed)!);
+      return;
+    }
+
+    // An arrival from another workspace or screen follows the target's rules.
+    const from = this.dropFrom(tracked);
+    const env = this.placementEnv(tracked.surface.screenId);
+    const state = this.buildPlacementState(tracked.id);
+    const result = dropPlacement(state, env, tracked.id, tracked.surface.workspaceId, from, crossed);
+    this.applyDropResult(tracked, result);
+  }
+
+  /** The direction a drop arrived from, from the plane it started on (§3/§6). */
+  private dropFrom(tracked: TrackedWindow): 'left' | 'right' | 'above' | 'below' | null {
+    if (tracked.surface.screenId !== this.dragStartScreen) {
+      const from = this.screenFor(this.dragStartScreen);
+      const to = this.screenFor(tracked.surface.screenId);
+      if (from !== null && to !== null) {
+        if (to.geometry.x > from.geometry.x) return 'left';
+        if (to.geometry.x < from.geometry.x) return 'right';
+        if (to.geometry.y > from.geometry.y) return 'above';
+        if (to.geometry.y < from.geometry.y) return 'below';
+      }
+    }
+    if (tracked.surface.workspaceId !== this.dragStartWorkspace) {
+      return tracked.surface.workspaceId > this.dragStartWorkspace ? 'left' : 'right';
+    }
+    return null;
+  }
+
+  /** A visible managed window on the drop's plane whose rect the drop crosses. */
+  private crossedWindow(tracked: TrackedWindow): number | null {
+    const rect = tracked.surface.frame;
+    let best: number | null = null;
+    let bestOverlap = 0;
+    for (const other of this.windows.values()) {
+      if (other.id === tracked.id) continue;
+      if (other.surface.workspaceId !== tracked.surface.workspaceId) continue;
+      if (other.surface.screenId !== tracked.surface.screenId) continue;
+      if (other.surface.flags.minimized) continue;
+      if (!this.classify(other).tileable) continue;
+      const overlap = this.overlapArea(rect, other.surface.frame);
+      if (overlap > bestOverlap) {
+        bestOverlap = overlap;
+        best = other.id;
+      }
+    }
+    return best;
+  }
+
+  /** Any genuine overlap of two rects, with a couple of pixels of slack. */
+  private overlaps(a: Rect, b: Rect): boolean {
+    return this.overlapArea(a, b) > 4;
+  }
+
+  private overlapArea(a: Rect, b: Rect): number {
+    const x = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x) - 2);
+    const y = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y) - 2);
+    return x * y;
+  }
+
+  /** Apply the pure drop decision through Mutter. */
+  private applyDropResult(
+    tracked: TrackedWindow,
+    result: ReturnType<typeof dropPlacement>,
+  ): void {
+    const workspaceChanged = result.workspace !== tracked.surface.workspaceId;
+    // §13: a drop is a user move, so it is undoable; capture the origin first.
+    this.captureChange([tracked.id]);
+    if (workspaceChanged) this.moveWindowToWorkspace(tracked, result.workspace);
+    switch (result.kind) {
+      case 'slot':
+        this.pinSlots(result.workspace, tracked, result.slot);
+        this.unmaximizeOccupants(result.workspace, tracked.id);
+        break;
+      case 'maximize':
+        this.deps.tiling.noteSelfApply();
+        this.deps.host.maximize(tracked.id);
+        break;
+      case 'swap': {
+        const withWin = this.windows.get(result.with);
+        if (withWin !== undefined) this.applySwapIntent(tracked, withWin);
+        break;
+      }
+      case 'float':
+        this.floatWindow(tracked);
+        break;
+      default:
+        break;
+    }
+    this.signatures.clearAll();
+    this.scheduleReconcile('drop');
   }
 
   private onMaximizeSignal(tracked: TrackedWindow): void {
@@ -2001,6 +2412,8 @@ export class WindowSession {
     // one — and the change would be missed entirely (the overview-drag case).
     const from = tracked.lastWorkspaceIdx;
     if (index === from) return;
+    // §13: the user's move is the change undo reverts, captured on its origin.
+    this.captureChange([tracked.id], from);
     tracked.surface.workspaceId = index;
     tracked.lastWorkspaceIdx = index;
     // A user move takes the window back into the ordinary tiling.
@@ -2199,6 +2612,11 @@ export class WindowSession {
     drains: number;
     queuePending: number;
     drainMsMax: number;
+    drainMsP50: number;
+    drainMsP95: number;
+    applyMsP50: number;
+    applyMsP95: number;
+    applySamples: number;
   } {
     const round = (value: number): number => Math.round(value * 1000) / 1000;
     return {
@@ -2212,7 +2630,17 @@ export class WindowSession {
       drains: this.drains,
       queuePending: this.queue.pending,
       drainMsMax: round(this.drainMsMax),
+      drainMsP50: round(percentile(this.drainSamples, 0.5)),
+      drainMsP95: round(percentile(this.drainSamples, 0.95)),
+      applyMsP50: round(percentile(this.applySamples, 0.5)),
+      applyMsP95: round(percentile(this.applySamples, 0.95)),
+      applySamples: this.applySamples.length,
     };
+  }
+
+  private pushSample(samples: number[], value: number): void {
+    samples.push(value);
+    while (samples.length > WindowSession.SAMPLE_RING) samples.shift();
   }
 
   /** §21: bounded state assertion. */
@@ -2236,14 +2664,15 @@ export class WindowSession {
     return pairKey(a, b);
   }
 
-  /** §14 focus by direction, closest by centre; falls back to the other axis side. */
+  /**
+   * §6/§17/§58: focus by direction, positional, never crossing a workspace. A
+   * direction with nothing that way stays silent — that is the single exception
+   * to "a request that changes nothing toasts".
+   */
   focusDirection(direction: string): void {
     const current = this.focused();
     if (current === null) return;
-    if (this.focusClosest(current, direction)) return;
-    // Nothing in that direction: try the opposite one, otherwise do nothing.
-    const opposite = direction === 'left' ? 'right' : direction === 'right' ? 'left' : direction === 'up' ? 'down' : 'up';
-    this.focusClosest(current, opposite);
+    this.focusClosest(current, direction);
   }
 
   /**
@@ -2265,4 +2694,12 @@ export class WindowSession {
 
 function fallbackScreen(): Screen {
   return { index: 0, connector: '', geometry: { x: 0, y: 0, width: 1920, height: 1080 }, scale: 1, refreshRate: 60, isPrimary: true };
+}
+
+/** Nearest-rank percentile of a small bounded sample set; 0 when empty. */
+function percentile(samples: readonly number[], p: number): number {
+  if (samples.length === 0) return 0;
+  const sorted = [...samples].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1));
+  return sorted[index];
 }
