@@ -27,7 +27,9 @@ if len({w["workspace"] for w in ws}) != 1:
 if any(w["maximized"] for w in ws):
     print("a window is still maximized"); sys.exit(1)
 for w in ws:
-    if w["rect"]["width"] >= area["width"] - 1 or w["rect"]["height"] >= area["height"] - 1:
+    # A side-by-side tile is full HEIGHT (§10: outer gaps default 0), so only a
+    # window spanning both dimensions is a maximized single, not a tile.
+    if w["rect"]["width"] >= area["width"] - 1 and w["rect"]["height"] >= area["height"] - 1:
         print("window spans the whole area", w["id"], w["rect"]); sys.exit(1)
 a, b = ws[0]["rect"], ws[1]["rect"]
 if a["x"] < b["x"] + b["width"] and b["x"] < a["x"] + a["width"] and a["y"] < b["y"] + b["height"] and b["y"] < a["y"] + a["height"]:
