@@ -816,6 +816,13 @@ never debug-gated (the deduplication and rate limits still apply).
     nothing floats and no workspace is created; a window opened while the screen was
     away stays where it is, and the screen that stayed goes back to its own layout.
 
+67. **Changing the primary moves no window** (round scenario 8, confirmed): the two
+    screens keep their own windows; the top bar and the work areas move, so the
+    tiled windows re-slot and resize; the screen that loses workspace capability shows
+    everything it held at once, which is why a window from another of its workspaces
+    becomes a **float** over the pair that stays. Which screen has workspaces follows
+    GNOME.
+
 ## Deliberate non-goals
 
 
