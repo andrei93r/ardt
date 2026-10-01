@@ -208,6 +208,7 @@ export default class AdrtExtension extends Extension {
       onClosed: (id, rect) => this.onWindowClosed(id, rect),
       onDragChanged: (dragging) => this.onDragChanged(dragging),
       onWindowMoving: () => this.suppressForWorkspaceSwitch(),
+      isAnimating: () => this.animator.activeCount > 0,
     });
 
     const injectedFailures = this.settings.int('debug-inject-verify-failure', 0);
@@ -324,7 +325,7 @@ export default class AdrtExtension extends Extension {
     }
     this.session.setScanning(effects.scanTickRunning);
     this.syncIndicator();
-    if (!initial && effects.retileOnResume) this.session.retileAll('session-resume');
+    if (!initial && effects.retileOnResume) this.session.scheduleReconcile('session-resume');
     this.history.log('session_mode', { mode, paused: effects.paused });
   }
 
@@ -345,7 +346,10 @@ export default class AdrtExtension extends Extension {
       this.host.on('workspace-switched', (payload) => this.onWorkspaceSwitched(payload as { from: number; to: number })),
       this.host.on('screens-changed', () => {
         this.session.clearSignatures();
-        this.session.retileAll('screens-changed');
+        // §11: no policy in a signal handler. The work-area change needs a
+        // settle, so it is a maintenance pass; the retile rides the layout lane.
+        this.session.scheduleReconcile('screens-changed');
+        this.session.scheduleMaintenance('work-area', { reason: 'screens-changed' });
       }),
     );
   }
@@ -612,8 +616,9 @@ export default class AdrtExtension extends Extension {
     }
     this.motionSkip = '';
     this.motionRetiles += 1;
-    // A safety-net pass is not a user action: it must not push undo entries.
-    this.session.retile(focused.surface.workspaceId, 'motion-tick', true, false);
+    // §11: the gate decides here, the drain applies. A safety-net pass is not a
+    // user action, so the queue's reconcile keeps its "no undo entry" default.
+    this.session.scheduleReconcile('motion-tick');
   }
 
   private syncIndicator(): void {
@@ -1078,6 +1083,7 @@ export default class AdrtExtension extends Extension {
       InjectPointerButton: (button, pressed) => this.injectPointerButton(button, pressed),
       InjectKey: (keyval, pressed) => this.injectKey(keyval, pressed),
       SimulateNotice: (key, subject) => this.simulateNotice(key, subject),
+      SimulateBurst: (count, reason) => this.session.simulateBurst(count, reason),
       LookupWindow: (id) => this.lookupWindow(id),
       ListWindows: () => JSON.stringify(this.listWindows()),
       ListMonitors: () => JSON.stringify(this.host.screens().map((screen) => screen.connector)),
@@ -1184,7 +1190,7 @@ export default class AdrtExtension extends Extension {
         this.tiling.loadRatios({}, []);
         this.saveState();
         this.session.clearSignatures();
-        this.session.retileAll('reset-layout');
+        this.session.scheduleReconcile('reset-layout');
         return true;
       },
     };

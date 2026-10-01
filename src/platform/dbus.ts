@@ -33,6 +33,7 @@ export interface DbusHandlers {
   InjectPointerButton(button: number, pressed: boolean): boolean;
   InjectKey(keyval: number, pressed: boolean): boolean;
   SimulateNotice(key: string, subject: string): boolean;
+  SimulateBurst(count: number, reason: string): number;
 }
 
 export interface DbusBackend {

@@ -16,6 +16,10 @@ import type { HeuristicContext } from '../../core/classify.js';
 import { classifyAdjust } from '../../core/adjust.js';
 import type { AdjustMode } from '../../core/adjust.js';
 import { RateBudget } from '../../core/budget.js';
+import { EventQueue } from '../../core/queue.js';
+
+/** §10: how long a maintenance pass waits for the surface to settle. */
+const MAINTENANCE_SETTLE_MS = 200;
 import { checkPlan } from '../../core/invariants.js';
 import { SignatureCache, planSignature } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
@@ -47,6 +51,9 @@ export interface SessionDeps {
   onDragChanged(dragging: boolean): void;
   /** The window is being moved to another workspace: hide the border now. */
   onWindowMoving(): void;
+  /** Whether any window is mid-animation (the drain waits for it rather than
+   * applying a frame onto a moving surface). */
+  isAnimating?: () => boolean;
 }
 
 interface WindowSignal {
@@ -55,8 +62,6 @@ interface WindowSignal {
 
 /** Quiet period after the last user frame change before a drop is interpreted. */
 const ADJUST_SETTLE_MS = 150;
-/** Debounce before a global reconcile pass. */
-const RECONCILE_DEBOUNCE_MS = 60;
 /**
  * A drag whose release never arrived must not disable tiling forever: every
  * path (reconcile, sweep, periodic retile) skips while `dragging` is set. A
@@ -81,7 +86,18 @@ export class WindowSession {
   private readonly signals = new Map<number, WindowSignal[]>();
   private readonly signatures = new SignatureCache();
   private readonly suppress = new Set<number>();
-  private reconcileSource: number | null = null;
+  /**
+   * §11: one scheduling path. Every signal handler pushes here; a single
+   * deferred drain runs the policy, in lane order, with per-key coalescing.
+   * Lane 2 (layout) is armed on the compositor's resize later, lane 3
+   * (maintenance) on idle; both are removed as soon as the drain runs.
+   */
+  private readonly queue = new EventQueue();
+  /** Re-queued layout passes waiting for an animation to finish. */
+  private drainDeferrals = 0;
+  private drainArmed: { 2: boolean; 3: boolean } = { 2: false, 3: false };
+  private drains = 0;
+  private drainMsMax = 0;
   private readonly timeoutSources = new Set<number>();
   /** Workspaces this extension created; empty ones are removed again (§16). */
   private readonly dynamicWorkspaces = new Set<number>();
@@ -451,7 +467,7 @@ export class WindowSession {
     // A close can leave a window we had floated over a pair with nowhere to
     // float: run the sweep so it comes back into the tiling and its "above"
     // flag is cleared with it.
-    this.addTimeout(150, () => this.coherenceSweep());
+    this.addTimeout(150, () => this.scheduleMaintenance('sweep'));
   }
 
   /** Re-classify and retile after a settings change. */
@@ -473,15 +489,93 @@ export class WindowSession {
   scheduleReconcile(reason: string): void {
     if (this.deps.isPaused() || this.suspended) return;
     if (this.dragging || this.adjustId !== null) return;
-    if (this.reconcileSource !== null) return;
     // Only a genuine user adjust is undoable; a signal-driven reconcile is a
     // safety net and must not push an entry that masks the user's own action.
     const rememberUndo = reason === 'user-adjust';
-    this.reconcileSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, RECONCILE_DEBOUNCE_MS, () => {
-      this.reconcileSource = null;
-      this.reconcileAll(reason, rememberUndo);
+    // One key for every reconcile: a burst of signals is one pass, and the drain
+    // runs on the next compositor resize tick rather than on a private timer.
+    if (this.queue.push(2, 'reconcile-all', 'reconcile', { reason, rememberUndo })) this.armDrain(2);
+  }
+
+  /**
+   * Test hook: push N layout events for the same key inside one call, the way a
+   * same-frame signal storm does, and report the queue depth afterwards. One
+   * coalesced entry is the whole point of the queue.
+   */
+  simulateBurst(count: number, reason: string): number {
+    for (let i = 0; i < Math.max(0, Math.trunc(count)); i++) {
+      this.queue.push(2, 'reconcile-all', 'reconcile', { reason: `${reason}#${i}` });
+    }
+    if (this.queue.depth(2) > 0) this.armDrain(2);
+    return this.queue.depth(2);
+  }
+
+  /** Queue a maintenance job (lane 3): cheap, can wait for idle. */
+  scheduleMaintenance(kind: string, data?: Record<string, unknown>): void {
+    if (this.queue.push(3, `maintenance:${kind}`, 'maintenance', { kind, ...data })) this.armDrain(3);
+  }
+
+  private armDrain(lane: 2 | 3): void {
+    if (this.drainArmed[lane]) return;
+    this.drainArmed[lane] = true;
+    const run = (): number => {
+      this.drainArmed[lane] = false;
+      this.runDrain();
       return GLib.SOURCE_REMOVE;
-    });
+    };
+    if (lane === 3) {
+      // §10: a work-area change can arrive before the shell has set its struts,
+      // so maintenance waits for the surface to settle.
+      GLib.timeout_add(GLib.PRIORITY_DEFAULT, MAINTENANCE_SETTLE_MS, run);
+      return;
+    }
+    try {
+      const laters = global.compositor.get_laters();
+      const laterTypes: Record<string, unknown> = Meta.LaterType ?? {};
+      const type = lane === 2
+        ? (laterTypes.META_LATER_RESIZE ?? laterTypes.BEFORE_REDRAW)
+        : (laterTypes.IDLE ?? laterTypes.BEFORE_REDRAW);
+      laters.add(type, run);
+    } catch {
+      // No later machinery (or the enum moved): a short timeout is still one
+      // deferred pass, never policy inside the signal handler.
+      GLib.timeout_add(GLib.PRIORITY_DEFAULT, lane === 2 ? 16 : 32, run);
+    }
+  }
+
+  /** Run what the queue holds, in lane order. */
+  private runDrain(): void {
+    const started = GLib.get_monotonic_time();
+    const events = this.queue.drain();
+    if (events.length === 0) return;
+    this.drains += 1;
+    for (const event of events) {
+      const data = (event.data ?? {}) as Record<string, unknown>;
+      if (event.kind === 'reconcile') {
+        // A frame applied while another window is animating lands on a moving
+        // surface and drifts (A72): wait for the animation instead of fighting
+        // it, bounded so a stuck animation cannot starve the layout.
+        if (this.deps.isAnimating?.() === true && this.drainDeferrals < 60) {
+          this.drainDeferrals += 1;
+          this.queue.push(2, event.key, event.kind, data);
+          this.armDrain(2);
+          continue;
+        }
+        this.drainDeferrals = 0;
+        this.reconcileAll(String(data.reason ?? 'queue'), data.rememberUndo === true);
+      } else if (event.kind === 'maintenance') {
+        const kind = String(data.kind ?? 'unknown');
+        switch (kind) {
+          case 'sweep':
+            this.coherenceSweep();
+            break;
+          default:
+            break;
+        }
+        this.deps.history.log('maintenance', { kind });
+      }
+    }
+    this.drainMsMax = Math.max(this.drainMsMax, (GLib.get_monotonic_time() - started) / 1000);
   }
 
   /** Check every workspace on every screen and correct anything out of place.
@@ -930,10 +1024,8 @@ export class WindowSession {
     for (const id of this.signals.keys()) this.disconnectWindow(id);
     this.signals.clear();
     this.stopScan();
-    if (this.reconcileSource !== null) {
-      GLib.source_remove(this.reconcileSource);
-      this.reconcileSource = null;
-    }
+    this.queue.clear();
+    this.drainArmed = { 2: false, 3: false };
     for (const id of this.timeoutSources) GLib.source_remove(id);
     this.timeoutSources.clear();
     if (this.adjustSource !== null) {
@@ -1875,6 +1967,9 @@ export class WindowSession {
     classifyMisses: number;
     plansComputed: number;
     sweepFrameReads: number;
+    drains: number;
+    queuePending: number;
+    drainMsMax: number;
   } {
     const round = (value: number): number => Math.round(value * 1000) / 1000;
     return {
@@ -1885,6 +1980,9 @@ export class WindowSession {
       classifyMisses: this.classifyMisses,
       plansComputed: this.plansComputed,
       sweepFrameReads: this.sweepFrameReads,
+      drains: this.drains,
+      queuePending: this.queue.pending,
+      drainMsMax: round(this.drainMsMax),
     };
   }
 
@@ -1892,7 +1990,8 @@ export class WindowSession {
   memoryBounds(): { windows: number; sources: number; signals: number } {
     let signalCount = 0;
     for (const handlers of this.signals.values()) signalCount += handlers.length;
-    return { windows: this.windows.size, sources: this.reconcileSource !== null ? 1 : 0, signals: signalCount };
+    const armed = (this.drainArmed[2] ? 1 : 0) + (this.drainArmed[3] ? 1 : 0);
+    return { windows: this.windows.size, sources: this.queue.pending > 0 ? armed : 0, signals: signalCount };
   }
 
   /** §21: retile timings for the perf event. */

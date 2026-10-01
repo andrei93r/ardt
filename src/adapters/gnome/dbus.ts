@@ -96,6 +96,9 @@ const INTERFACE_XML = `
     <method name="InjectPointerButton">
       <arg type="i" direction="in"/><arg type="b" direction="in"/><arg type="b" direction="out"/>
     </method>
+    <method name="SimulateBurst">
+      <arg type="i" direction="in"/><arg type="s" direction="in"/><arg type="i" direction="out"/>
+    </method>
     <method name="SimulateNotice">
       <arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="b" direction="out"/>
     </method>

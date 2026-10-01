@@ -50,6 +50,12 @@ export class Tiling {
   private verifyFailuresRemaining = 0;
   /** When set, only this window's applies are failed (null = any window). */
   private verifyFailuresFor: number | null = null;
+  /**
+   * The last refusal per window: a minimum is only learned when the same target
+   * was refused twice with the window's size unchanged, so a stale size under
+   * load cannot teach a bogus minimum (A52).
+   */
+  private readonly refusalSightings = new Map<number, { target: string; current: string; count: number }>();
   private lastAppliedAtMs = 0;
   /** Diagnostics: plans that actually moved at least one window. */
   private appliedPlans = 0;
@@ -311,8 +317,26 @@ export class Tiling {
     // than the rect we asked for. A window that stayed smaller than the target
     // (a max-size app) must not teach us a minimum — doing so pinned, e.g.,
     // Chrome to its current width and made a 50/50 split impossible.
-    if (current.width > target.width + VERIFY_TOLERANCE || current.height > target.height + VERIFY_TOLERANCE) {
-      this.deps.adaptation.observeRefusedMin(tracked.surface.appId, current.width, current.height);
+    // A minimum has to be a *stable* property: the same target refused twice
+    // with the window's size unchanged. One sample can be a drop, a slow client
+    // or a stale size under load — learning from that pinned windows that never
+    // refused at all (A52).
+    const larger = current.width > target.width + VERIFY_TOLERANCE || current.height > target.height + VERIFY_TOLERANCE;
+    if (larger) {
+      const signature = `${target.x},${target.y},${target.width},${target.height}`;
+      const size = `${current.width}x${current.height}`;
+      const seen = this.refusalSightings.get(tracked.id);
+      if (seen !== undefined && seen.target === signature && seen.current === size) {
+        seen.count += 1;
+        if (seen.count >= 2) {
+          this.deps.adaptation.observeRefusedMin(tracked.surface.appId, current.width, current.height);
+          this.refusalSightings.delete(tracked.id);
+        }
+      } else {
+        this.refusalSightings.set(tracked.id, { target: signature, current: size, count: 1 });
+      }
+    } else {
+      this.refusalSightings.delete(tracked.id);
     }
     const stubborn = this.deps.adaptation.noteRefusal(tracked.surface.appId);
     this.deps.history.log('stubborn', { id: tracked.id, appId: tracked.surface.appId, refusals: tracked.refusals });

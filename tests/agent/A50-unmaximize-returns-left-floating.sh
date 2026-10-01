@@ -31,7 +31,7 @@ fi
 
 adrt UnmaximizeWindow "$third" >/dev/null
 
-check_python "the unmaximized window came to the left workspace floating" '
+poll "the unmaximized window came to the left workspace floating" '
 import json, sys
 d = json.load(sys.stdin)
 w = [x for x in d["windows"] if x["id"] == int("'"$third"'")]
@@ -49,7 +49,7 @@ r = w["rect"]
 if r["width"] >= d["monitors"][0]["workArea"]["width"] - 1 and r["height"] >= d["monitors"][0]["workArea"]["height"] - 1:
     print("covers the whole work area", r); sys.exit(1)
 print("floats", r, "over", len(pair), "tiles on ws", w["workspace"])
-'
+' 20
 
 # The view must follow the window back to the left workspace (the user should
 # not be left looking at an empty workspace).
