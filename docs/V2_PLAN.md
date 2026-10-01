@@ -158,6 +158,10 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 > with a reason); the focus cycle **snapshots its lap**, so the stacking rule for perfect
 > overlaps survives a raise; and the cross-screen move arrives on the monitor signal
 > instead of a 40-step retry counter. `A34` was confirmed passing 3× and needed no change.
+>
+> **Known gap, flagged for the user's run:** `A113`/`A116` describe the trigger trade on
+> the single-screen configuration and now skip on multi-screen harnesses with a recorded
+> reason. On the docked desktop that rule should be checked by hand (tests/MANUAL.md §3).
 
 **Failing scenarios first**
 
@@ -384,6 +388,8 @@ Notes: a refactor stage — the existing suite must stay green throughout.
       (O(1) host lookup) onto the new code; delete its Stage 3 and the sweep back-off;
       re-measure with the existing counters
 - [x] A long mixed run asserting no `invariant_violated` entries in the journal
+      — `A125-long-mixed-run` is opt-in (`ADRT_LONG_RUN=1`) and defaults to 180 s; the
+      recorded evidence is two clean runs: 240 s / 15 iterations and 180 s / 8 iterations
       (`A125-long-mixed-run`, opt-in via `ADRT_LONG_RUN=1`; 240 s, 15 iterations,
       no violation in the journal file or the decision tail)
 
