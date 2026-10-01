@@ -17,6 +17,13 @@ NESTED="$ROOT/scripts/nested-shell.sh"
 AGENT_DIR="$ROOT/tests/agent"
 BASE_STATE="${ADRT_BASE_STATE:-${XDG_RUNTIME_DIR:-/tmp}/adrt}"
 FILTER="${ADRT_SCENARIOS:-}"
+# Smoke mode: run the curated subset in tests/agent/smoke.list in one
+# configuration for a fast "is the build sane" signal. The full suite stays the
+# release gate. `ADRT_SMOKE_LIST` points at another list; the normal glob path is
+# completely untouched when neither flag is set. A missing list entry is a hard
+# failure (below), never a silent drop.
+SMOKE="${ADRT_SMOKE:-0}"
+SMOKE_LIST="${ADRT_SMOKE_LIST:-$AGENT_DIR/smoke.list}"
 # Most cores, minus headroom for the user's live session. Measured: the suite is
 # ~88% scenario time, so workers are the main lever; the shared budget below still
 # caps the total across concurrent runs. ADRT_WORKERS overrides this.
@@ -24,6 +31,16 @@ DEFAULT_WORKERS=$(( ($(nproc 2>/dev/null || echo 4) * 75) / 100 ))
 [ "$DEFAULT_WORKERS" -lt 2 ] && DEFAULT_WORKERS=2
 [ "$DEFAULT_WORKERS" -gt 12 ] && DEFAULT_WORKERS=12
 WORKERS="${ADRT_WORKERS:-$DEFAULT_WORKERS}"
+# A curated smoke subset is small, but covering every feature area needs a
+# couple of dozen scenarios and a handful of them are slow (reorder, focus
+# cycle, resize-undo), so a wider fan-out keeps the honest set inside ~30s
+# while still below the normal 12-way default and the shared budget. An
+# explicit ADRT_WORKERS (or ADRT_SMOKE_WORKERS) still wins, and the normal
+# default is never raised.
+if [ "$SMOKE" = "1" ] && [ -z "${ADRT_WORKERS:-}" ]; then
+  WORKERS="${ADRT_SMOKE_WORKERS:-10}"
+  [ "$WORKERS" -gt "$DEFAULT_WORKERS" ] && WORKERS="$DEFAULT_WORKERS"
+fi
 [ "$WORKERS" -lt 1 ] && WORKERS=1
 
 # --------------------------------------------------------- concurrent runs
@@ -115,6 +132,13 @@ adopt_slot() {
 
 scenario_files() {
   local script
+  # Smoke mode: the scenario set is the curated list, in list order (the
+  # sharding sort below reorders it by duration). It was resolved and validated
+  # before the preflight, so a missing entry never reaches here.
+  if [ "$SMOKE" = "1" ]; then
+    printf '%s\n' "${SMOKE_FILES[@]}"
+    return
+  fi
   for script in "$AGENT_DIR"/A[0-9][0-9]*.sh; do
     [ -e "$script" ] || continue
     if [ -n "$FILTER" ] && ! basename "$script" | grep -qE "$FILTER"; then
@@ -187,6 +211,39 @@ fi
 
 mkdir -p "$BASE_STATE"
 rm -f "$BASE_STATE"/worker-*.out "$BASE_STATE"/worker-*.results.txt 2>/dev/null || true
+
+# Smoke mode: resolve the curated list now, before the preflight, so a renamed
+# or deleted scenario fails fast and loudly instead of being silently dropped.
+# Any entry without a matching tests/agent/<id>.sh aborts the run and names it.
+declare -a SMOKE_FILES=()
+if [ "$SMOKE" = "1" ]; then
+  if [ ! -f "$SMOKE_LIST" ]; then
+    echo "agent-test: ADRT_SMOKE=1 but the smoke list is missing: $SMOKE_LIST" >&2
+    exit 1
+  fi
+  smoke_missing=0
+  while read -r smoke_id; do
+    [ -n "$smoke_id" ] || continue
+    case "$smoke_id" in
+      *.sh) smoke_id="${smoke_id%.sh}" ;;
+    esac
+    if [ ! -f "$AGENT_DIR/$smoke_id.sh" ]; then
+      echo "agent-test: smoke.list names '$smoke_id' but $AGENT_DIR/$smoke_id.sh does not exist" >&2
+      smoke_missing=$((smoke_missing + 1))
+      continue
+    fi
+    SMOKE_FILES+=("$AGENT_DIR/$smoke_id.sh")
+  done < <(sed 's/#.*//' "$SMOKE_LIST" | awk 'NF { print $1 }')
+  if [ "$smoke_missing" -ne 0 ]; then
+    echo "agent-test: refusing to run smoke: $smoke_missing smoke.list entr(ies) have no scenario file" >&2
+    exit 1
+  fi
+  if [ "${#SMOKE_FILES[@]}" -eq 0 ]; then
+    echo "agent-test: smoke.list has no scenarios: $SMOKE_LIST" >&2
+    exit 1
+  fi
+  echo "== smoke mode: ${#SMOKE_FILES[@]} scenarios from $(basename "$SMOKE_LIST") =="
+fi
 
 echo "== preflight (lint, build, core tests) =="
 ( cd "$ROOT" && npm run lint ) > "$BASE_STATE/lint.out" 2>&1 &

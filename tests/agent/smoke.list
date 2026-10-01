@@ -1,0 +1,104 @@
+# smoke.list — the curated ADRT_SMOKE=1 scenario set.
+#
+# One configuration only: a single 1280x800 screen with dynamic workspaces
+# (GNOME defaults), which is what scripts/agent-test.sh starts by default.
+# The list is an ordered subset of the existing tests/agent/A*.sh scenarios,
+# chosen for speed and independence, at least one per feature area (a couple of
+# areas get two or three) so a developer gets a fast "is this build sane"
+# signal. The full suite (the A[0-9][0-9]* glob)
+# stays the release gate; this only replaces the scenario *set*, never an
+# assertion.
+#
+# Format: one scenario id per line, with or without a trailing `.sh`; blank
+# lines and `#` comments are ignored. An entry whose file does not exist is a
+# hard failure of the smoke run, named on stderr — the list can never silently
+# drop a scenario when one is renamed.
+#
+# Feature -> scenario map (see docs/V2_MODEL.md sections and tests/MANIFEST.md):
+#
+#   tiling / split / axis            A01-pair-tiling, A64-vertical-workspaces
+#   arrival routing (third window    A02-third-window
+#     gets its own workspace)
+#   focus (cycle + direction)        A121-focus-cycle-order,
+#                                    A57-keyboard-focus-system
+#   move (toward, onto a full        A127-swap-is-invertible,
+#     workspace -> float)            A54-overview-move-onto-pair
+#   resize ratio + undo              A09-undo
+#   swap (invertible) + undo         A127-swap-is-invertible (invertible),
+#                                    A101-undo-restores-instance-and-config
+#                                    (undo of a drag-swap / un-float)
+#   maximize / unmaximize ladders    A04-maximized-window,
+#                                    A90-unmaximise-joins-pair-forming-left,
+#                                    A91-unmaximise-parks-when-no-neighbour-
+#                                    can-pair
+#   fullscreen                       A57-keyboard-focus-system (behaviour),
+#                                    A131-fullscreen-hides-highlight
+#   float / above-floats             A11-float-toggle, A61-above-floats
+#   minimize / reap                  A35-minimize-removes-workspace
+#   lone-window maximize             A58-lone-window-maximized
+#   workspaces (create / reorder /   A96-reorder-is-honoured-and-an-empty-
+#     move / sticky)                 workspace-is-pruned, A117-arrival-side-rule,
+#                                    A72-sticky-window-untiled
+#   overview (coherence +            A56-coherence-sweep,
+#     drop-is-a-move)                A74-overview-drop-is-a-move
+#   registry / identity              A98-registry-lists-every-app
+#   displays (plan / rescue / replay A112-workarea-change-replans-one-monitor
+#     — rescues and replays are the (the one-monitor replan; rescue/replay
+#     two-screen scenarios)          need two screens, so they stay in the suite)
+#   session modes (pause/lock hide   A13-lock-screen
+#     the border)
+#   highlight (occlusion, fullscreen) A130-occlusion-hides-highlight,
+#                                    A131-fullscreen-hides-highlight
+#   undo (swap, un-float)            A101-undo-restores-instance-and-config
+#   flags / trace / DumpState shape  A103-record-trace-shape
+#
+# Out of scope for a one-configuration smoke (kept in the full suite):
+#   multi-monitor routing/drags/rescue/replay (A105-A111, A122, A124),
+#   the four-monitor matrix (A81), the opt-in long churn run (A125).
+# A cursor-follows-focus scenario would be added here only once the
+# v2/cursor-centre branch lands and the capability probe reports it.
+#
+# --- tiling / split / axis ---
+A01-pair-tiling
+A64-vertical-workspaces
+# --- arrival routing ---
+A02-third-window
+# --- focus ---
+A121-focus-cycle-order
+A57-keyboard-focus-system
+# --- move ---
+A127-swap-is-invertible
+A54-overview-move-onto-pair
+# --- resize + undo ---
+A09-undo
+# --- maximize / unmaximize ladders ---
+A04-maximized-window
+A90-unmaximise-joins-pair-forming-left
+A91-unmaximise-parks-when-no-neighbour-can-pair
+# --- float / above-floats ---
+A11-float-toggle
+A61-above-floats
+# --- minimize / reap ---
+A35-minimize-removes-workspace
+# --- lone-window maximize ---
+A58-lone-window-maximized
+# --- workspaces (create/reorder/move/sticky) ---
+A96-reorder-is-honoured-and-an-empty-workspace-is-pruned
+A117-arrival-side-rule
+A72-sticky-window-untiled
+# --- overview ---
+A56-coherence-sweep
+A74-overview-drop-is-a-move
+# --- registry / identity ---
+A98-registry-lists-every-app
+# --- displays ---
+A112-workarea-change-replans-one-monitor
+# --- session modes ---
+A13-lock-screen
+# --- highlight ---
+A130-occlusion-hides-highlight
+A131-fullscreen-hides-highlight
+# --- undo (swap, un-float) ---
+A101-undo-restores-instance-and-config
+# --- flags / trace / DumpState ---
+A103-record-trace-shape
