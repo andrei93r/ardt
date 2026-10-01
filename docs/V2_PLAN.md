@@ -4,6 +4,14 @@
 come from** `docs/V2_TEST_MATRIX.md` (generated: 137 seeds → about 9 000 cases).
 **This file is the order of work** — the thing to follow.
 
+**Mode (2026-10-01, night).** The extension is being finished autonomously: the user
+tests it **tomorrow**, so stages 2–8 are completed without them. Consequences for the
+target runs: `headless` and the four-screen matrix must be fully green in both directions;
+the live `session` run and the hardware-only checks (physical hotplug, real gestures,
+suspend/logind lock, fractional scaling) are **the user's acceptance run tomorrow** — a
+handover checklist with expected results is part of the final report, and any item that
+cannot be exercised here is a recorded skip rather than a silent gap.
+
 **Maintenance.** Tick the boxes as items land. Add or remove items as the work teaches
 us; a removal gets one line saying why. `scripts/plan-status.py` refreshes every counter
 from the boxes (run it after each edit). A stage is done only when every box under it is
@@ -25,18 +33,17 @@ ticked and its target runs pass.
 | 8 Docs, dead code, perf re-scope | not started | 0/5 | — |
 <!-- /plan-status -->
 
-## Tonight on the laptop (no server yet) (4/7)
+## The autonomous run (2026-10-01 night) (4/7)
 
 - [x] `npm run build` and `npm run lint` clean
 - [x] `npm run test:core` green
 - [x] nested smoke: one nested Shell, one scenario (`A01`)
 - [x] the full agent suite on the nested harness — record passes and skips
-- [ ] Stage 0 failing tests in place (`A80`–`A83`, and `A22`–`A24` un-skipped)
-- [ ] Stage 0 implementation landed
-- [ ] every suite green again, the plan ticked, and a short report written
+- [x] Stage 0 failing tests in place (`A80`–`A83`, and `A22`–`A24` un-skipped)
+- [x] Stage 0 implementation landed
+- [x] every suite green again, the plan ticked, and a short report written
 
-Notes (baseline green 2026-10-01: build, lint, 151 core tests, 71 scenarios, 3 skips, no journal errors). Nested harness only tonight; the live session stays yours. No reloads, no logout,
-and the laptop stays awake while a run is in flight.
+Notes: baseline was build+lint+151 core tests+71 scenarios/3 skips with no journal errors; the nested harness is the gate here, the live session stays the user's, and no reload or logout happens while a run is in flight. Stages 2–8 continue from here.
 
 ## Stage 0 — Grounding and event-confirmed triggers (no behaviour change) (17/17)
 
