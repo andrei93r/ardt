@@ -81,6 +81,12 @@ interface WindowSignal {
 /** Quiet period after the last user frame change before a drop is interpreted. */
 const ADJUST_SETTLE_MS = 150;
 /**
+ * A maximize/unmaximize signal that arrives within this window of a state
+ * change we made (`noteSelfApply`) is our own, not the user's: a signal is
+ * emitted asynchronously, so a boolean flag around the call is not enough.
+ */
+const SELF_APPLY_MS = 200;
+/**
  * A drag whose release never arrived must not disable tiling forever: every
  * path (reconcile, sweep, periodic retile) skips while `dragging` is set. A
  * lost `grab-op-end` — an overview drag, a Shell restart, a grab taken over by
@@ -320,8 +326,46 @@ export class WindowSession {
   private applySwapIntent(tracked: TrackedWindow, sibling: TrackedWindow): void {
     this.captureChange([tracked.id, sibling.id]);
     this.deps.tiling.toggleSwap(tracked.id, sibling.id);
-    this.clearPendingSlots(tracked.id, sibling.id);
+    this.swapPairSides(tracked, sibling);
     this.deps.history.log('swap', { a: tracked.id, b: sibling.id, reason: 'drag' });
+  }
+
+  /**
+   * §13: record a pair swap as explicit sides. The swap flag is a stable
+   * id-order override, but toggling it alone is not invertible: when the pair's
+   * position order already matches the reverse of its id order (a newcomer that
+   * took the left slot), setting it changes nothing and clearing it restores
+   * nothing. Pinning the exchanged sides makes every swap a real exchange, and
+   * explicit slots win over the flag in `computePlans`.
+   */
+  private swapPairSides(a: TrackedWindow, b: TrackedWindow): void {
+    const slotA = this.slotFor(a);
+    const slotB = this.slotFor(b);
+    if (slotA !== null && slotB !== null && slotA !== slotB) {
+      a.pendingSlot = slotB;
+      b.pendingSlot = slotA;
+      return;
+    }
+    // No readable side (a maximized or floating window): reverse the stable id
+    // order instead, which is what the swap flag already expresses.
+    const low = a.id < b.id ? a : b;
+    const high = a.id < b.id ? b : a;
+    low.pendingSlot = 1;
+    high.pendingSlot = 0;
+  }
+
+  /** §13: swap a pair on request (the `SwapPair` test trigger). */
+  swapPair(a: number, b: number): boolean {
+    const ta = this.windows.get(a);
+    const tb = this.windows.get(b);
+    if (ta === undefined || tb === undefined) return false;
+    this.captureChange([a, b]);
+    this.deps.tiling.toggleSwap(a, b);
+    this.swapPairSides(ta, tb);
+    this.signatures.clearAll();
+    this.deps.history.log('swap', { a, b });
+    this.retile(ta.surface.workspaceId, 'swap');
+    return true;
   }
 
   /** §12: a shared inner edge moved; save the resulting ratio. */
@@ -450,6 +494,13 @@ export class WindowSession {
         tracked.selfUnmaximize = false;
       }
       tracked.surface.refresh();
+      // §3/§16: opening maximized is not a user maximize, so it is never
+      // *placed* by it — but it is still an arrival. Route it through the pure
+      // model in the drain: with room it takes the free slot beside its sibling,
+      // and with the workspace already full it gets its own workspace to the
+      // right (exactly like any other newcomer). Returning here used to skip
+      // routing and leave the newcomer stacked in a slot over the pair.
+      tracked.routePending = true;
       this.scheduleReconcile('register-unmaximize');
       return;
     }
@@ -1668,7 +1719,7 @@ export class WindowSession {
       if (horizontal === splitHorizontal) {
         this.captureChange([current.id, sibling.id]);
         this.deps.tiling.toggleSwap(current.id, sibling.id);
-        this.clearPendingSlots(current.id, sibling.id);
+        this.swapPairSides(current, sibling);
         this.signatures.clearAll();
         this.deps.history.log('swap', { a: current.id, b: sibling.id });
         this.retile(current.surface.workspaceId, 'swap');
@@ -2067,14 +2118,6 @@ export class WindowSession {
 
   clearSignatures(): void {
     this.signatures.clearAll();
-  }
-
-  /** A user swap overrides the sides our own placement pinned (§3). */
-  clearPendingSlots(...ids: number[]): void {
-    for (const id of ids) {
-      const tracked = this.windows.get(id);
-      if (tracked !== undefined) tracked.pendingSlot = null;
-    }
   }
 
   destroy(): void {
@@ -2987,6 +3030,12 @@ export class WindowSession {
     // and applies it (the A45 pattern). `selfUnmaximize` is our own tiler's
     // unmaximize and must not drive the ladder.
     if (compat.isMaximized(tracked.win)) {
+      // A maximize we caused — the lone law, a routed arrival, the coherence
+      // sweep — is not a user request. Without this the drain's §4 property
+      // reads our own maximize as the user's and exiles a window that was only
+      // being tiled (S05: a sweep that saw one member of a forming pair while
+      // its sibling animated maximized it, then exiled it to its own workspace).
+      if (Date.now() - this.deps.tiling.lastApplyAtMs < SELF_APPLY_MS) return;
       tracked.maximizeRequested = true;
       this.scheduleReconcile('maximize');
       return;
@@ -3119,7 +3168,13 @@ export class WindowSession {
         const onScreen = (t: TrackedWindow) => t.surface.screenId === screen.index;
         const busy = (t: TrackedWindow) => this.deps.tiling.isAnimating(t.id);
 
-        const tileables = this.tileables(index).filter(onScreen).filter((t) => !busy(t));
+        const tileables = this.tileables(index).filter(onScreen);
+
+        // A placement is in flight: leave the workspace alone until it settles.
+        // Dropping the animating window from the count instead made a pair that
+        // is still forming look like a lone window, which the lone law then
+        // maximized and the §4 property exiled (S05).
+        if (tileables.some(busy)) continue;
 
         // §6: a float pins its workspace and is never pulled back; the sweep
         // leaves a workspace that holds only floats exactly as it is.
