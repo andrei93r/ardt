@@ -1,0 +1,171 @@
+// Generated with AI for personal use.
+// Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+// and can maintain this code.
+
+import { describe, expect, it } from 'vitest';
+
+import {
+  freeSlot, impossibleSplit, minimizeRelocation, routeNewWindow, sideSlot, unmaximizeWindow,
+} from '../../src/core/placement.js';
+import type { State, Win, Ws } from '../../src/core/placement.js';
+
+const win = (id: number, extra: Partial<Win> = {}): Win => ({ id, ...extra });
+const ws = (id: number, slots: [Win | null, Win | null] = [null, null], minimized: Win[] = []): Ws => ({ id, slots, minimized });
+const state = (workspaces: Ws[], viewed = 0): State => ({ workspaces, viewed });
+
+describe('freeSlot', () => {
+  it('reports 0 when only the second slot is taken', () => {
+    expect(freeSlot(ws(0, [null, win(2)]))).toBe(0);
+  });
+  it('reports 1 when the first slot is taken', () => {
+    expect(freeSlot(ws(0, [win(1), null]))).toBe(1);
+  });
+  it('reports null when both slots are taken', () => {
+    expect(freeSlot(ws(0, [win(1), win(2)]))).toBeNull();
+  });
+  it('ignores minimized windows: they hold no slot (§5)', () => {
+    expect(freeSlot(ws(0, [win(1), null], [win(9)]))).toBe(1);
+  });
+});
+
+describe('sideSlot (the arrival side rule, §3)', () => {
+  it('a window from the left takes slot 0', () => {
+    expect(sideSlot('left')).toBe(0);
+  });
+  it('a window from the right takes slot 1', () => {
+    expect(sideSlot('right')).toBe(1);
+  });
+  it('a window from above takes slot 0 (the top)', () => {
+    expect(sideSlot('above')).toBe(0);
+  });
+  it('a window from below takes slot 1 (the bottom)', () => {
+    expect(sideSlot('below')).toBe(1);
+  });
+  it('no direction means slot 1 (the arrival default)', () => {
+    expect(sideSlot(null)).toBe(1);
+  });
+});
+
+describe('routeNewWindow (§3)', () => {
+  const env = { screen: 'dynamic' as const, axis: 'horizontal' as const };
+
+  it('splits a maximized single: the newcomer takes slot 1', () => {
+    const s = state([ws(0, [win(1), null]), ws(1)]);
+    expect(routeNewWindow(s, env, win(2))).toMatchObject({ workspace: 0, slot: 1 });
+  });
+
+  it('takes the free slot when the workspace holds one window', () => {
+    const s = state([ws(0, [null, win(1)]), ws(1)]);
+    expect(routeNewWindow(s, env, win(2))).toMatchObject({ workspace: 0, slot: 0 });
+  });
+
+  it('lands alone on an empty viewed workspace, maximized', () => {
+    const s = state([ws(0), ws(1)]);
+    expect(routeNewWindow(s, env, win(2))).toMatchObject({ workspace: 0, slot: 1, maximize: true });
+  });
+
+  it('creates a workspace immediately right when the viewed one is full', () => {
+    const s = state([ws(0, [win(1), win(2)]), ws(1)]);
+    expect(routeNewWindow(s, env, win(3))).toMatchObject({ workspace: 0, slot: 1, createRight: true, maximize: true });
+  });
+
+  it('never scans neighbours: a free slot to the right does not attract it', () => {
+    const s = state([ws(0, [win(1), win(2)]), ws(1, [win(9), null])]);
+    expect(routeNewWindow(s, env, win(3))).toMatchObject({ createRight: true, maximize: true });
+  });
+
+  it('routes on the window own workspace when it opens off-view (§3, §20)', () => {
+    const s = state([ws(0, [win(1), win(2)]), ws(1)], 1);
+    expect(routeNewWindow(s, env, win(3), null, 0)).toMatchObject({ workspace: 0, createRight: true, maximize: true });
+  });
+
+  it('overflows to a float on a single-workspace screen', () => {
+    const s = state([ws(0, [win(1), win(2)])]);
+    expect(routeNewWindow(s, { screen: 'single', axis: 'horizontal' }, win(3))).toMatchObject({ workspace: 0, float: true });
+  });
+
+  it('fills an existing workspace on a fixed screen, right first', () => {
+    const s = state([ws(0, [win(1), win(2)]), ws(1, [win(9), null]), ws(2)]);
+    expect(routeNewWindow(s, { screen: 'fixed', axis: 'horizontal' }, win(3))).toMatchObject({ workspace: 1, slot: 1 });
+  });
+
+  it('floats on a fixed screen when every workspace is full', () => {
+    const s = state([ws(0, [win(1), win(2)]), ws(1, [win(9), win(10)])]);
+    expect(routeNewWindow(s, { screen: 'fixed', axis: 'horizontal' }, win(3))).toMatchObject({ float: true });
+  });
+
+  it('gives a window that cannot fit a share its own workspace (the escape, §16)', () => {
+    const s = state([ws(0, [win(1), null]), ws(1)]);
+    expect(routeNewWindow(s, env, win(2), null, null, true)).toMatchObject({ workspace: 0, createRight: true, maximize: true });
+  });
+});
+
+describe('unmaximizeWindow (the ladder, §4)', () => {
+  const env = { screen: 'dynamic' as const, axis: 'horizontal' as const };
+
+  it('joins the left workspace when it holds exactly one window, into slot 1', () => {
+    const s = state([ws(0, [win(1), null]), ws(1, [win(2), null])]);
+    expect(unmaximizeWindow(s, env, 1, 2)).toMatchObject({ workspace: 0, slot: 1 });
+  });
+
+  it('joins the right one when the left cannot pair', () => {
+    const s = state([ws(0, [win(1), win(3)]), ws(1, [win(2), null]), ws(2, [win(4), null])]);
+    expect(unmaximizeWindow(s, env, 1, 2)).toMatchObject({ workspace: 2, slot: 1 });
+  });
+
+  it('parks minimized in the left when neither neighbour can pair (both full)', () => {
+    const s = state([ws(0, [win(1), win(3)]), ws(1, [win(2), null]), ws(2, [win(4), win(5)])]);
+    expect(unmaximizeWindow(s, env, 1, 2)).toMatchObject({ workspace: 0, minimize: [2] });
+  });
+
+  it('parks in the left when the right neighbour is empty (an empty target would leave it alone)', () => {
+    const s = state([ws(0, [win(1), win(3)]), ws(1, [win(2), null]), ws(2)]);
+    expect(unmaximizeWindow(s, env, 1, 2)).toMatchObject({ workspace: 0, minimize: [2] });
+  });
+
+  it('parks in the right when there is no left neighbour', () => {
+    const s = state([ws(0, [win(2), null]), ws(1, [win(4), win(5)])]);
+    expect(unmaximizeWindow(s, env, 0, 2)).toMatchObject({ workspace: 1, minimize: [2] });
+  });
+
+  it('stays where it is when no neighbour holds windows', () => {
+    const s = state([ws(0, [win(2), null]), ws(1)]);
+    expect(unmaximizeWindow(s, env, 0, 2)).toMatchObject({ workspace: 0, minimize: [2] });
+  });
+
+  it('joins a neighbour that holds only a minimized window (it counts as one window)', () => {
+    const s = state([ws(0, [null, null], [win(1)]), ws(1, [win(2), null])]);
+    expect(unmaximizeWindow(s, env, 1, 2)).toMatchObject({ workspace: 0, slot: 1 });
+  });
+
+  it('says to unmaximize in place on a single-workspace screen', () => {
+    const s = state([ws(0, [win(1), win(2)])]);
+    expect(unmaximizeWindow(s, { screen: 'single', axis: 'horizontal' }, 0, 2)).toMatchObject({ workspace: 0, inPlace: true });
+  });
+});
+
+describe('minimizeRelocation (the alone-minimized rule, §4)', () => {
+  it('moves it into the left neighbour when that holds windows', () => {
+    const s = state([ws(0, [win(1), null]), ws(1, [null, null], [win(2)])]);
+    expect(minimizeRelocation(s, 1)).toMatchObject({ to: 0 });
+  });
+  it('moves it right when the left holds nothing', () => {
+    const s = state([ws(0, [null, null], [win(2)]), ws(1, [win(3), null])]);
+    expect(minimizeRelocation(s, 0)).toMatchObject({ to: 1 });
+  });
+  it('leaves it alone when no neighbour holds windows', () => {
+    const s = state([ws(0, [null, null], [win(2)])]);
+    expect(minimizeRelocation(s, 0)).toBeNull();
+  });
+});
+
+describe('impossibleSplit (the trigger wins, §10 step 3-4)', () => {
+  it('on a dynamic screen the reactor takes its own workspace', () => {
+    expect(impossibleSplit({ screen: 'dynamic', axis: 'horizontal' }, win(1), win(2)))
+      .toMatchObject({ keep: 1, giveWay: 2, giveWayTo: 'own-workspace' });
+  });
+  it('on a single-workspace screen the reactor is minimized', () => {
+    expect(impossibleSplit({ screen: 'single', axis: 'horizontal' }, win(1), win(2)))
+      .toMatchObject({ keep: 1, giveWay: 2, giveWayTo: 'minimized' });
+  });
+});
