@@ -704,6 +704,10 @@ happens. All default off, deduplicated and rate-limited per event.
     empty rather than chased around; reaping removes empty workspaces that have a
     loaded neighbour to inherit from.
 
+53. **Closing the last tiled window while a float stays on the workspace** (test
+    scenario S24, confirmed): the workspace is kept by the float, the view stays on
+    it and the float does not move. Works because `float-pins-workspace` is on.
+
 ## Deliberate non-goals
 
 
