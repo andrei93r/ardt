@@ -14,7 +14,7 @@ ticked and its target runs pass.
 <!-- plan-status -->
 | Stage | State | Done | Commit |
 | --- | --- | --- | --- |
-| 0 Grounding and event-confirmed triggers | not started | 0/18 | — |
+| 0 Grounding and event-confirmed triggers | in progress | 7/18 | — |
 | 1 Queue mechanism and records | not started | 0/8 | — |
 | 2 The model: slots, routing, maximise, emptiness | not started | 0/18 | — |
 | 3 User-driven interactions | not started | 0/8 | — |
@@ -25,41 +25,41 @@ ticked and its target runs pass.
 | 8 Docs, dead code, perf re-scope | not started | 0/5 | — |
 <!-- /plan-status -->
 
-## Tonight on the laptop (no server yet) (0/7)
+## Tonight on the laptop (no server yet) (4/7)
 
-- [ ] `npm run build` and `npm run lint` clean
-- [ ] `npm run test:core` green
-- [ ] nested smoke: one nested Shell, one scenario (`A01`)
-- [ ] the full agent suite on the nested harness — record passes and skips
+- [x] `npm run build` and `npm run lint` clean
+- [x] `npm run test:core` green
+- [x] nested smoke: one nested Shell, one scenario (`A01`)
+- [x] the full agent suite on the nested harness — record passes and skips
 - [ ] Stage 0 failing tests in place (`A80`–`A83`, and `A22`–`A24` un-skipped)
 - [ ] Stage 0 implementation landed
 - [ ] every suite green again, the plan ticked, and a short report written
 
-Notes: nested harness only tonight; the live session stays yours. No reloads, no logout,
+Notes (baseline green 2026-10-01: build, lint, 151 core tests, 71 scenarios, 3 skips, no journal errors). Nested harness only tonight; the live session stays yours. No reloads, no logout,
 and the laptop stays awake while a run is in flight.
 
-## Stage 0 — Grounding and event-confirmed triggers (no behaviour change) (0/18)
+## Stage 0 — Grounding and event-confirmed triggers (no behaviour change) (7/18)
 
 **Failing tests first**
 
-- [ ] `A80-platform-probe` — fails today: no `ProbePlatform` call exists
+- [x] `A80-platform-probe` — fails today: no `ProbePlatform` call exists
 - [ ] `A81-four-monitors` — fails today on the hard-coded `1281x801`/`monitors[0]`
-- [ ] `A82-event-journal` — fails today: no `DumpEvents`
-- [ ] `A83-injected-drag-is-event-confirmed` — fails today: no injection
+- [x] `A82-event-journal` — fails today: no `DumpEvents`
+- [x] `A83-injected-drag-is-event-confirmed` — fails today: no injection
 - [ ] `A22`/`A23`/`A24` un-skipped by injection (they skip today for lack of a seat)
 
 **Implementation**
 
 - [ ] `docs/platform-notes.md`: public/private/never API table (GNOME 48–50) plus the
       documented exception list (`animateSwitch`, `_swipeTracker`, accept-client-rect)
-- [ ] `ProbePlatform` D-Bus: capability JSON (laters, monitor matrix size, `layout_rows`,
+- [x] `ProbePlatform` D-Bus: capability JSON (laters, monitor matrix size, `layout_rows`,
       virtual input, RemoteDesktop/EIS)
-- [ ] **Event journal**: ring buffer `{seq, source, event, at}` from the two signal
+- [x] **Event journal**: ring buffer `{seq, source, event, at}` from the two signal
       wrappers and the history funnel; one monotonic sequence shared with decisions;
       `DumpEvents(n, filter?)`
-- [ ] **Journal format**: append-only, one file per day, 30-day retention, numbered parts
+- [x] **Journal format**: append-only, one file per day, 30-day retention, numbered parts
       rotated by size, in-memory tail
-- [ ] **Input injection** behind `debug-input` (default off): in-process
+- [x] **Input injection** behind `debug-input` (default off): in-process
       `Clutter.Seat.create_virtual_device()`; a long-lived `RemoteDesktop` client for
       `session-like`
 - [ ] **Trigger hygiene**: `platform/dbus.ts` declares the whole surface; names per the

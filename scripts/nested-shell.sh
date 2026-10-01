@@ -147,6 +147,10 @@ cmd_start() {
       export XDG_CURRENT_DESKTOP=GNOME
       export XDG_SESSION_ID=adrt-agent
       export WAYLAND_DISPLAY="$WAYLAND_DISPLAY_NAME"
+      # Stage 0: the harness always wants real input injection available. The
+      # triggers stay inert unless a test calls them, and a live session never
+      # sets this.
+      export ADRT_INJECT="${ADRT_INJECT:-1}"
       exec gnome-shell '"$devkit_flag"' --wayland --headless --no-x11 \
         --wayland-display="$WAYLAND_DISPLAY_NAME"'"$mon_args"' > "$LOG_FILE" 2>&1
     ' >/dev/null 2>&1 &

@@ -16,6 +16,7 @@ import { Layer } from '../../core/types.js';
 import type { Rect, Screen, Size, Surface } from '../../core/types.js';
 import type { PlatformEvent } from '../../platform/events.js';
 import type { PlatformHost } from '../../platform/host.js';
+import * as compat from './compat.js';
 import { GnomeSurface } from './surface.js';
 import { VersionDetector } from './version.js';
 
@@ -26,6 +27,11 @@ interface Connection {
   id: number;
 }
 
+function frameOf(win: any): Rect {
+  const rect = win.get_frame_rect();
+  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+}
+
 export class GnomeHost implements PlatformHost {
   readonly platform = 'gnome' as const;
   readonly versions = new VersionDetector();
@@ -33,6 +39,8 @@ export class GnomeHost implements PlatformHost {
   private readonly listeners = new Map<string, Set<Listener>>();
   private readonly connections: Connection[] = [];
   private readonly surfaceCache = new Map<number, GnomeSurface>();
+  /** Per-window signal connections for the event journal (§22). */
+  private readonly windowSignals = new Map<number, { win: any; ids: number[] }>();
   private screensCache: Screen[] = [];
   /** `org.gnome.mutter`: whether workspaces exist only on the primary monitor. */
   private mutter: any = null;
@@ -89,8 +97,82 @@ export class GnomeHost implements PlatformHost {
     for (const connection of this.connections.splice(0)) {
       connection.object.disconnect(connection.id);
     }
+    for (const id of [...this.windowSignals.keys()]) this.forgetWindow(id);
     this.surfaceCache.clear();
     this.listeners.clear();
+  }
+
+  /**
+   * Watch one window's own signals so the journal sees what the compositor
+   * does to it, not just what the tiler does. Connected once per window and
+   * disconnected with `unmanaged` (§22: the per-window `on()` helper).
+   */
+  private watchWindow(win: any, id: number): void {
+    if (this.windowSignals.has(id)) return;
+    const ids: number[] = [];
+    const byUser = (): boolean => this.userGrabInProgress();
+    ids.push(win.connect('notify::frame-rect', () => {
+      this.emit({ type: 'surface-frame-changed', id, frame: frameOf(win), byUser: byUser() });
+    }));
+    ids.push(win.connect('notify::monitor', () => {
+      this.emit({ type: 'surface-screen-changed', id, screenId: win.get_monitor() });
+    }));
+    ids.push(win.connect('workspace-changed', () => {
+      this.emit({ type: 'surface-workspace-changed', id, workspaceId: win.get_workspace()?.index() ?? 0, byUser: byUser() });
+    }));
+    ids.push(win.connect('notify::minimized', () => {
+      this.emit({ type: 'surface-flags-changed', id, flags: { minimized: win.minimized === true } });
+    }));
+    ids.push(win.connect('notify::wm-class', () => {
+      this.emit({ type: 'surface-flags-changed', id, flags: {} });
+    }));
+    ids.push(win.connect('unmanaged', () => {
+      this.forgetWindow(id);
+      this.emit({ type: 'surface-closed', id });
+    }));
+    this.windowSignals.set(id, { win, ids });
+  }
+
+  private forgetWindow(id: number): void {
+    const entry = this.windowSignals.get(id);
+    if (entry !== undefined) {
+      for (const signal of entry.ids) {
+        try {
+          entry.win.disconnect(signal);
+        } catch {
+          /* window already gone */
+        }
+      }
+      this.windowSignals.delete(id);
+    }
+    this.surfaceCache.delete(id);
+  }
+
+  /**
+   * Whether the compositor is inside a user grab (a move or a resize the user
+   * is performing). Used to mark journal entries as user-driven; missing API
+   * simply means "not user-driven".
+   */
+  userGrabInProgress(): boolean {
+    // §22: a user move or resize always drags with the button down, and our own
+    // applies never do — that is what distinguishes them (compat.button1Pressed).
+    // The compositor's grab op, where the shell exposes it, is a second vote.
+    try {
+      if (compat.button1Pressed()) return true;
+    } catch {
+      /* no pointer (a headless shell before injection) */
+    }
+    try {
+      const op = global.display.get_grab_op?.();
+      return typeof op === 'number' ? op !== 0 : false;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Whether a user grab can be detected here — the journal's `byUser`. */
+  canDetectUserGrab(): boolean {
+    return typeof compat.button1Pressed === 'function';
   }
 
   on(type: PlatformEvent['type'], cb: Listener): () => void {
@@ -127,6 +209,7 @@ export class GnomeHost implements PlatformHost {
       const version = this.versions.detect(win, win.get_title() ?? '');
       surface = new GnomeSurface(win, version, () => this.flagContext());
       this.surfaceCache.set(id, surface);
+      this.watchWindow(win, id);
     }
     return surface;
   }

@@ -20,3 +20,17 @@ export type PlatformEvent =
   | { type: 'session-mode-changed'; mode: SessionMode };
 
 export type PlatformEventType = PlatformEvent['type'];
+
+/** Every kind, in one place, so the journal can subscribe to all of them. */
+export const PLATFORM_EVENT_TYPES: PlatformEventType[] = [
+  'surface-created',
+  'surface-closed',
+  'surface-frame-changed',
+  'surface-flags-changed',
+  'surface-workspace-changed',
+  'surface-screen-changed',
+  'focus-changed',
+  'workspace-switched',
+  'screens-changed',
+  'session-mode-changed',
+];

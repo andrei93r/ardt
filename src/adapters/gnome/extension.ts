@@ -9,6 +9,7 @@
 
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import Clutter from 'gi://Clutter';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -24,6 +25,7 @@ import { clamp } from '../../core/types.js';
 import type { Rect } from '../../core/types.js';
 import type { GestureKind } from '../../core/gestures.js';
 import type { DbusHandlers } from '../../platform/dbus.js';
+import { PLATFORM_EVENT_TYPES } from '../../platform/events.js';
 import { AdaptationStore, FloatStore, dataDir, readText, writeAtomic } from './adapt.js';
 import * as compat from './compat.js';
 import { GnomeDbus } from './dbus.js';
@@ -32,6 +34,7 @@ import { GestureInput } from './gesture-input.js';
 import { GnomeHost } from './host.js';
 import { History, UndoStack } from './history.js';
 import { GnomeIndicator } from './indicator.js';
+import { EventJournal } from './journal.js';
 import { WindowSession } from './session.js';
 import { GnomeSettings } from './settings.js';
 import { Tiling } from './tiling.js';
@@ -89,6 +92,7 @@ export default class AdrtExtension extends Extension {
   private adaptation!: AdaptationStore;
   private floats!: FloatStore;
   private history!: History;
+  private journal!: EventJournal;
   private undo!: UndoStack;
   private indicator!: GnomeIndicator;
   private animator!: FrameClockAnimator;
@@ -99,6 +103,10 @@ export default class AdrtExtension extends Extension {
   private border!: BorderState;
   private sessionMachine = new SessionMachine();
 
+  private injectionEnabled = false;
+  private injectSeat: any = null;
+  private injectPointer: any = null;
+  private injectKeyboard: any = null;
   private sessionModeId = 0;
   private overviewSignals: number[] = [];
   private swipeSignalIds: number[] = [];
@@ -125,6 +133,10 @@ export default class AdrtExtension extends Extension {
 
   enable(): void {
     const started = GLib.get_monotonic_time();
+    // The journal comes first: everything below it may log a decision.
+    this.journal = new EventJournal(30);
+    this.journal.prune();
+    this.injectionEnabled = GLib.getenv('ADRT_INJECT') === '1';
     // Record which build is loaded: on Wayland a logout is needed to reload, so
     // "is the running module the one I installed?" must be answerable at a glance.
     try {
@@ -145,6 +157,7 @@ export default class AdrtExtension extends Extension {
       this.settings.boolean('history-daily-folders', false),
       this.settings.int('history-max-bytes', 8388608),
     );
+    this.history.setSink((event) => this.journal.decide(event.ev, event as unknown as Record<string, unknown>));
     this.migrate();
     this.adaptation = new AdaptationStore(this.settings.boolean('adaptation-enabled', true));
     this.adaptation.load();
@@ -250,6 +263,7 @@ export default class AdrtExtension extends Extension {
   }
 
   disable(): void {
+    this.journal?.destroy();
     this.history.log('disable', {});
     this.stopMotionWatch();
     if (this.coherenceSource !== null) {
@@ -310,6 +324,12 @@ export default class AdrtExtension extends Extension {
   }
 
   private subscribeHost(): void {
+    // Every platform event goes into the journal, whatever consumes it (§22).
+    for (const type of PLATFORM_EVENT_TYPES) {
+      this.hostUnsubscribers.push(this.host.on(type, (payload) => {
+        this.journal.record('host', type, (payload ?? {}) as Record<string, unknown>);
+      }));
+    }
     this.hostUnsubscribers.push(
       this.host.on('surface-created', (payload) => {
         const surfaceId = (payload as { surface: { id: number } }).surface.id;
@@ -876,11 +896,129 @@ export default class AdrtExtension extends Extension {
     notify('Adrt', 'Adrt tiles windows into pairs per monitor. Press Super+Z to undo a retile.');
   }
 
+  // ------------------------------------------------ platform probe, injection
+
+  /** The capability JSON the harness depends on (§40.4, Stage 0). */
+  private probePlatform(): string {
+    let virtualInput = false;
+    try {
+      const backend = Clutter.get_default_backend();
+      const seat = backend.get_default_seat();
+      virtualInput = typeof seat?.create_virtual_device === 'function';
+    } catch {
+      virtualInput = false;
+    }
+    let remoteDesktop = false;
+    try {
+      const reply = Gio.DBus.session.call_sync(
+        'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus', 'NameHasOwner',
+        new GLib.Variant('(s)', ['org.gnome.Mutter.RemoteDesktop']),
+        new GLib.VariantType('(b)'), Gio.DBusCallFlags.NONE, 200, null);
+      remoteDesktop = (reply.deepUnpack() as [boolean])[0] === true;
+    } catch {
+      remoteDesktop = false;
+    }
+    let gnome = 'unknown';
+    try {
+      const config = (globalThis as any).imports?.misc?.config;
+      if (typeof config?.PACKAGE_VERSION === 'string') gnome = config.PACKAGE_VERSION;
+    } catch {
+      gnome = 'unknown';
+    }
+    return JSON.stringify({
+      format: 'adrt.probe',
+      version: EXTENSION_VERSION,
+      platform: 'gnome',
+      gnome,
+      session: Meta.is_wayland_compositor?.() === true ? 'wayland' : 'x11',
+      monitors: this.host.screens().length,
+      layoutRows: global.workspace_manager.layout_rows,
+      laters: {
+        available: typeof global.compositor?.get_laters === 'function',
+        beforeRedraw: true,
+      },
+      virtualInput,
+      remoteDesktop,
+      injection: this.injectionEnabled,
+      grabOp: this.host.canDetectUserGrab(),
+      devkit: compat.hasDevkit(),
+      paused: this.isPaused(),
+      journal: this.journal.lastSeq,
+    });
+  }
+
+  private ensureInjection(): boolean {
+    if (!this.injectionEnabled) return false;
+    try {
+      if (this.injectSeat === null) this.injectSeat = Clutter.get_default_backend().get_default_seat();
+      if (this.injectPointer === null) {
+        this.injectPointer = this.injectSeat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+      }
+      if (this.injectKeyboard === null) {
+        this.injectKeyboard = this.injectSeat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+      }
+      return this.injectPointer !== null && this.injectKeyboard !== null;
+    } catch (error) {
+      console.warn(`[adrt] input injection unavailable: ${(error as Error).message}`);
+      this.injectionEnabled = false;
+      return false;
+    }
+  }
+
+  private eventTime(): number {
+    try {
+      return Clutter.get_current_event_time() ?? 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private injectPointerMove(x: number, y: number): boolean {
+    if (!this.ensureInjection()) return false;
+    try {
+      this.injectPointer.notify_absolute_motion(this.eventTime(), Math.trunc(x), Math.trunc(y));
+      this.journal.record('inject', 'pointer-move', { x, y });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private injectPointerButton(button: number, pressed: boolean): boolean {
+    if (!this.ensureInjection()) return false;
+    try {
+      const state = pressed ? Clutter.ButtonState.PRESSED : Clutter.ButtonState.RELEASED;
+      this.injectPointer.notify_button(this.eventTime(), button, state);
+      this.journal.record('inject', 'pointer-button', { button, pressed });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private injectKey(keyval: number, pressed: boolean): boolean {
+    if (!this.ensureInjection()) return false;
+    try {
+      const state = pressed ? Clutter.KeyState.PRESSED : Clutter.KeyState.RELEASED;
+      this.injectKeyboard.notify_keyval(this.eventTime(), keyval, state);
+      this.journal.record('inject', 'key', { keyval, pressed });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // --------------------------------------------------------------- D-Bus
 
   private handlers(): Handlers {
     return {
       DumpState: () => this.dumpState(),
+      ProbePlatform: () => this.probePlatform(),
+      DumpEvents: (limit, filter) => JSON.stringify(this.journal.tail(limit, filter)),
+      DumpDecisions: (limit) => JSON.stringify(this.journal.decisionsTail(limit)),
+      InjectPointerMove: (x, y) => this.injectPointerMove(x, y),
+      InjectPointerButton: (button, pressed) => this.injectPointerButton(button, pressed),
+      InjectKey: (keyval, pressed) => this.injectKey(keyval, pressed),
       LookupWindow: (id) => this.lookupWindow(id),
       ListWindows: () => JSON.stringify(this.listWindows()),
       ListMonitors: () => JSON.stringify(this.host.screens().map((screen) => screen.connector)),

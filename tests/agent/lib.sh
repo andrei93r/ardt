@@ -325,6 +325,56 @@ keyboard_injection_ready() {
   ydotool_ready
 }
 
+# ------------------------------------------------------------------ injection
+# Real input through the compositor's own seat (Stage 0). The nested Shell is
+# started with ADRT_INJECT=1 by the harness; without it these are no-ops.
+
+probe_json() {
+  adrt ProbePlatform 2>/dev/null | python3 "$PARSE" 2>/dev/null || true
+}
+
+# probe_supports <key>: the probe JSON has a truthy <key> (nested paths with a
+# dot, e.g. laters.beforeRedraw).
+probe_supports() {
+  probe_json | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+for part in '$1'.split('.'):
+    d = d.get(part, False) if isinstance(d, dict) else False
+sys.exit(0 if d else 1)" 2>/dev/null
+}
+
+journal_tail() {
+  local n="${1:-200}" filter="${2:-}"
+  adrt DumpEvents "$n" "$filter" 2>/dev/null | python3 "$PARSE" 2>/dev/null || true
+}
+
+inject_pointer() {
+  adrt InjectPointerMove "$1" "$2" >/dev/null 2>&1 || true
+}
+
+inject_click() {
+  local x="$1" y="$2"
+  inject_pointer "$x" "$y"; sleep 0.25
+  adrt InjectPointerButton 1 true >/dev/null 2>&1 || true; sleep 0.2
+  adrt InjectPointerButton 1 false >/dev/null 2>&1 || true; sleep 0.2
+}
+
+inject_drag() {
+  local x1="$1" y1="$2" x2="$3" y2="$4" steps="${5:-10}" i x y
+  inject_pointer "$x1" "$y1"; sleep 0.25
+  adrt InjectPointerButton 1 true >/dev/null 2>&1 || true; sleep 0.25
+  for i in $(seq 1 "$steps"); do
+    x=$((x1 + (x2 - x1) * i / steps))
+    y=$((y1 + (y2 - y1) * i / steps))
+    inject_pointer "$x" "$y"
+    sleep 0.06
+  done
+  sleep 0.25
+  adrt InjectPointerButton 1 false >/dev/null 2>&1 || true
+  sleep 0.2
+}
+
 summary() {
   # A scenario that still has windows must have left them tiled coherently:
   # no two tiled windows stacked, each inside its work area. Floating windows

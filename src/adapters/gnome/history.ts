@@ -119,6 +119,8 @@ export class History {
   private maxBytes = DEFAULT_MAX_BYTES;
   /** Diagnostics: events actually written (not the ones dropped while disabled). */
   private written = 0;
+  /** Optional sink for the event journal: every logged decision (§22). */
+  private sink: ((event: HistoryEvent) => void) | null = null;
 
   get logEvents(): number {
     return this.written;
@@ -144,6 +146,10 @@ export class History {
     return this.trace;
   }
 
+  setSink(sink: ((event: HistoryEvent) => void) | null): void {
+    this.sink = sink;
+  }
+
   log(ev: string, fields: Record<string, unknown> = {}): HistoryEvent | null {
     if (!this.enabled) return null;
     const first = fields.trace;
@@ -155,6 +161,7 @@ export class History {
     if (typeof fields.trace === 'number') event.trace = fields.trace;
     this.append(event);
     this.written += 1;
+    this.sink?.(event);
     return event;
   }
 

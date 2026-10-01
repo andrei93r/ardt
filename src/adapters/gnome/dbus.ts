@@ -83,6 +83,22 @@ const INTERFACE_XML = `
     <method name="SimulateSticky"><arg type="u" direction="in"/><arg type="b" direction="in"/><arg type="b" direction="out"/></method>
     <method name="SimulateWorkspaceReorder"><arg type="u" direction="in"/><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
     <method name="SimulateWorkspaceOrientation"><arg type="b" direction="in"/><arg type="b" direction="out"/></method>
+
+    <!-- Stage 0: the capability probe, the event journal and real input. -->
+    <method name="ProbePlatform"><arg type="s" direction="out"/></method>
+    <method name="DumpEvents">
+      <arg type="i" direction="in"/><arg type="s" direction="in"/><arg type="s" direction="out"/>
+    </method>
+    <method name="DumpDecisions"><arg type="i" direction="in"/><arg type="s" direction="out"/></method>
+    <method name="InjectPointerMove">
+      <arg type="i" direction="in"/><arg type="i" direction="in"/><arg type="b" direction="out"/>
+    </method>
+    <method name="InjectPointerButton">
+      <arg type="i" direction="in"/><arg type="b" direction="in"/><arg type="b" direction="out"/>
+    </method>
+    <method name="InjectKey">
+      <arg type="i" direction="in"/><arg type="b" direction="in"/><arg type="b" direction="out"/>
+    </method>
   </interface>
 </node>`;
 

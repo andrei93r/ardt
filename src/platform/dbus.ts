@@ -24,6 +24,14 @@ export interface DbusHandlers {
   SimulateGesture(kind: string, deltaX: number, deltaY: number, touchPoints: number): boolean;
   InjectSignal(type: string, payload: string): boolean;
   SimulateSessionMode(mode: string): boolean;
+
+  /* Stage 0 additions: capability probe, the event journal, real input. */
+  ProbePlatform(): string;
+  DumpEvents(limit: number, filter: string): string;
+  DumpDecisions(limit: number): string;
+  InjectPointerMove(x: number, y: number): boolean;
+  InjectPointerButton(button: number, pressed: boolean): boolean;
+  InjectKey(keyval: number, pressed: boolean): boolean;
 }
 
 export interface DbusBackend {
