@@ -61,10 +61,15 @@
       <summary>Keep windows inside the screen</summary>
       <description>Pull a window back inside its own monitor when its frame exceeds the whole screen surface. Fullscreen and minimized windows are left alone.</description>
     </key>
+    <key name="pause-during-sharing" type="b">
+      <default>false</default>
+      <summary>Pause during screen sharing</summary>
+      <description>Suspend tiling while screen sharing or remote desktop is active, so captured windows are not moved. Off by default.</description>
+    </key>
     <key name="min-size-policy" type="s">
       <default>'respect'</default>
       <summary>Minimum-size policy</summary>
-      <description>One of respect, ignore, stack.</description>
+      <description>How a split handles a window that refuses to shrink: "respect" keeps its minimum, "ignore" overlaps it, "stack" stacks the pair.</description>
     </key>
     <key name="reflow-keeps-edges" type="b">
       <default>true</default>
@@ -74,7 +79,7 @@
     <key name="primary-apps" type="as">
       <default>[]</default>
       <summary>Primary apps</summary>
-      <description>App ids that receive the configured primary ratio.</description>
+      <description>Apps that receive the configured primary share when split with another window.</description>
     </key>
     <key name="primary-app-ratio" type="i">
       <default>50</default>
@@ -111,7 +116,7 @@
     <key name="exception-apps" type="as">
       <default>[]</default>
       <summary>Exception apps</summary>
-      <description>App id globs that are never tiled.</description>
+      <description>Apps that are never tiled. Entries are app ids (globs are also accepted).</description>
     </key>
 
     <!-- Rules (§19.1) -->
@@ -157,22 +162,22 @@
     <key name="indicator-color" type="s">
       <default>'accent'</default>
       <summary>Indicator colour</summary>
-      <description>'accent' or a CSS hex colour.</description>
+      <description>A named colour such as "accent", or a CSS hex colour like #3584e4.</description>
     </key>
     <key name="indicator-opacity" type="i">
       <default>100</default>
       <summary>Indicator opacity</summary>
-      <description>0-100.</description>
+      <description>Percentage from 0 (invisible) to 100 (opaque).</description>
     </key>
     <key name="indicator-width" type="i">
       <default>3</default>
       <summary>Indicator width</summary>
-      <description>Pixels, 1-20.</description>
+      <description>Border width in pixels, 1-20.</description>
     </key>
     <key name="indicator-corner-radius" type="i">
       <default>8</default>
       <summary>Indicator corner radius</summary>
-      <description>Pixels, 0-32.</description>
+      <description>Corner radius in pixels, 0-32.</description>
     </key>
     <key name="indicator-animated-pulse" type="b">
       <default>false</default>
@@ -192,7 +197,7 @@
     <key name="close-animation-duration" type="i">
       <default>150</default>
       <summary>Close animation duration</summary>
-      <description>Milliseconds.</description>
+      <description>Milliseconds for the closing-window ghost to fade.</description>
     </key>
 
     <!-- Problem windows (§9) -->
@@ -292,32 +297,32 @@
     <key name="gesture-3-swipe-action" type="s">
       <default>'switch-workspace'</default>
       <summary>Three-finger horizontal action</summary>
-      <description>See GestureActionType.</description>
+      <description>One of switch-workspace, toggle-overview, show-desktop, swap-pair or none.</description>
     </key>
     <key name="gesture-3-vertical-action" type="s">
       <default>'toggle-overview'</default>
       <summary>Three-finger vertical action</summary>
-      <description>See GestureActionType.</description>
+      <description>One of switch-workspace, toggle-overview, show-desktop or none.</description>
     </key>
     <key name="gesture-4-swipe-action" type="s">
       <default>'switch-workspace'</default>
       <summary>Four-finger horizontal action</summary>
-      <description>See GestureActionType.</description>
+      <description>One of switch-workspace, toggle-overview, show-desktop, swap-pair or none.</description>
     </key>
     <key name="gesture-4-vertical-action" type="s">
       <default>'none'</default>
       <summary>Four-finger vertical action</summary>
-      <description>See GestureActionType.</description>
+      <description>One of switch-workspace, toggle-overview, show-desktop or none.</description>
     </key>
     <key name="gesture-pinch-action" type="s">
       <default>'show-desktop'</default>
       <summary>Pinch action</summary>
-      <description>See GestureActionType.</description>
+      <description>One of show-desktop, toggle-overview or none.</description>
     </key>
     <key name="gesture-sensitivity" type="i">
       <default>50</default>
       <summary>Gesture sensitivity</summary>
-      <description>0-100; higher triggers sooner.</description>
+      <description>Percentage from 0 to 100; higher triggers with less travel.</description>
     </key>
 
     <!-- Keybindings -->
