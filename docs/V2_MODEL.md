@@ -70,7 +70,9 @@ changes never move a window.
   slot when it is free, else the left. The window it joins keeps its side, and so do
   minimized windows returning from the same unmaximize (they take the left). `A | B`
   maximized and then unmaximized comes back as `B | A`; restoring A onto a lone B
-  gives `B | A` too.
+  gives `B | A` too. **A cross-screen arrival is the exception**: the direction it came
+  from is known, so it takes the slot on **that** side — from the left or above, slot
+  0; from the right or below, slot 1 — landing against the edge it just crossed.
 - Routing does not apply to hotplug, which has its own rule (§9).
 
 ## 4. Maximize, unmaximize, fullscreen, minimize
@@ -164,8 +166,9 @@ anywhere except §7's single-workspace-capable pair rule.
 - Dragging a managed window so its perimeter **crosses another managed window** and
   dropping **swaps** the two.
 - **Cross-screen drags** follow the target screen's rules: a free slot takes the
-  window (its pair splits as usual); a window whose perimeter was crossed is swapped
-  with; no room at all → the dropped window floats. A maximized window dragged across
+  window (its pair splits as usual), **on the side it came from** — from the left or
+  above, slot 0; from the right or below, slot 1; a window whose perimeter was crossed
+  is swapped with; no room at all → the dropped window floats. A maximized window dragged across
   screens is un-maximized at the drop (Mutter freezes a maximized window's horizontal
   drag and shakes it loose vertically) and then treated by the same rules.
 - **Overview drops**: onto a maximized single → the pair splits; onto a full pair →
@@ -667,6 +670,12 @@ happens. All default off, deduplicated and rate-limited per event.
     silently. A single-workspace-capable screen has exactly one workspace — there is
     no hidden next one — which is why the move is impossible there while it works
     normally with focus on the workspace-capable screen.
+
+47. **A cross-screen arrival keeps the side it came from** (the user's refinement
+    after S19): a window crossing an edge takes the slot on that side — left or above
+    → slot 0, right or below → slot 1 — instead of the within-workspace slot-1
+    default. The direction is known for a drag and for a directional move; a
+    perimeter crossing still swaps; a full target still floats.
 
 ## Deliberate non-goals
 
