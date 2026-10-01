@@ -16,11 +16,13 @@ Companion: `docs/V2_PLAN.md` (order of work, tests per stage).
   - **fixed-workspace**: several workspaces exist but GNOME cannot create more
     (dynamic off, two or more workspaces).
 
-  **Which state a screen is in is GNOME's decision, never the connector's.** With
-  `workspaces-only-on-primary` on, only the primary has dynamic workspaces and every
-  other screen is single-workspace-capable; with static workspaces every screen is
-  fixed. adrt asks GNOME and never assumes which screen is which, and never infers it
-  from "internal" or "external".
+  **Which state a screen is in is GNOME's decision, never the connector's, and adrt
+  reads it from GNOME** — `dynamic-workspaces`, `num-workspaces`,
+  `workspaces-only-on-primary` and the current primary. With
+  `workspaces-only-on-primary` **off, every screen is workspace-capable**; with it
+  **on**, only the primary is and the others are single-workspace-capable. A
+  **static-number screen** (dynamic off, two or more workspaces) is the fixed case.
+  adrt never infers any of this from "internal" or "external".
 - **Slot** — one of the screen's two tiling halves: `0`/`1` along the screen's split
   axis. Landscape → left/right; portrait, or a vertical workspace layout
   (`layout_rows === -1`) → top/bottom. In this document "left" means slot 0 and
@@ -83,7 +85,9 @@ changes never move a window.
   gives `B | A` too. **A cross-screen arrival is the exception**: the direction it came
   from is known, so it takes the slot on **that** side — from the left or above, slot
   0; from the right or below, slot 1 — landing against the edge it just crossed.
-  If it ends up alone, it maximizes like any lone window.
+  If it ends up alone, it maximizes like any lone window. The same holds for a
+  **workspace move**: a window coming from the workspace on its left takes slot 0,
+  from the one on its right slot 1.
 - Routing does not apply to hotplug, which has its own rule (§9).
 
 ## 4. Maximize, unmaximize, fullscreen, minimize
@@ -240,9 +244,12 @@ Never create, reap or navigate workspaces there.
   managed windows (§4), and **fullscreen behaves the same**: it fills the screen where
   it is and minimizes the other managed windows, which return when it exits (the
   exiting window landing in slot 1).
-- **Fixed-workspace**: routing fills existing workspaces (right, then left); a window
-  with no free slot floats. Maximize behaves as on a workspace-capable screen, except
-  that it may only use existing workspaces; if none is free it maximizes in place.
+- **Fixed-workspace**: routing fills existing workspaces (right, then left), the
+  arriving window taking the slot on the side it came from, and **the view switches to
+  it**; a window with no free slot floats. A **static-number screen** (dynamic off, two
+  or more workspaces) is exactly this case. Maximize behaves as on a
+  workspace-capable screen, except that it may only use existing workspaces; if none is
+  free it maximizes in place.
 
 ## 8. User workspace reordering
 
@@ -795,6 +802,14 @@ never debug-gated (the deduplication and rate limits still apply).
     maximizes in place and minimizes the other managed windows, which return to their
     starting slots on unmaximize. `maximize-minimizes-others` and
     `maximize-new-workspace` are therefore not settings and are dropped.
+
+65. **A fixed-workspace screen routes to a free slot and follows** (round scenario 6):
+    the window goes to the nearest workspace with room (right first, then left), takes
+    the slot on the side it came from (`E | C` arriving from the left), nothing is
+    created, and the view switches to it; if every workspace is full it floats instead.
+    A static-number screen behaves exactly the same. Which screen is workspace-capable
+    is read from GNOME: with `workspaces-only-on-primary` off, every screen can create
+    workspaces.
 
 ## Deliberate non-goals
 
