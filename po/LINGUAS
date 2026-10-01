@@ -1,0 +1,7 @@
+# Languages that ship a po/<code>.po translation, one code per line, e.g.:
+#   de
+#   fr
+#   pt_BR
+#
+# This file is intentionally empty until the first translation lands; the
+# translation domain (`adrt`) and the English source strings are already wired.

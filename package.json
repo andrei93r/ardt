@@ -11,6 +11,8 @@
   "test:core": "vitest run tests/core",
   "test:core:watch": "vitest tests/core",
   "check:core": "bash scripts/check-core-purity.sh",
+  "i18n:update": "bash scripts/update-po.sh",
+  "i18n:check": "bash scripts/check-po.sh",
   "test:agent": "bash scripts/agent-test.sh",
   "test:smoke": "ADRT_SMOKE=1 bash scripts/agent-test.sh",
   "test:smoke:live": "ADRT_SESSION_SMOKE=1 bash scripts/session-test.sh",

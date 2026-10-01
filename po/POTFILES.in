@@ -1,0 +1,4 @@
+# Source files scanned for translatable strings, one path per line, relative to
+# the repository root. Add a file here as soon as it calls `_()`, `ngettext()`
+# or `pgettext()`. The generated template is po/adrt.pot; run `npm run i18n:update`.
+src/adapters/gnome/prefs.ts
