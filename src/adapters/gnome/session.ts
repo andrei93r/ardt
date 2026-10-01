@@ -44,6 +44,7 @@ import { cycleOrder, cycleSequence, pickDirectional } from '../../core/focus.js'
 import type { CycleEntry } from '../../core/focus.js';
 import { Layer, clampRectToArea, rectEquals } from '../../core/types.js';
 import type { Rect, Screen, TilePlan } from '../../core/types.js';
+import { shouldClampWindow } from '../../core/clamp.js';
 import * as compat from './compat.js';
 import type { GnomeHost } from './host.js';
 import type { History } from './history.js';
@@ -597,6 +598,9 @@ export class WindowSession {
     tracked.provisional = resolution.provisional;
     tracked.rawValues = resolution.rawValues;
     tracked.identityResolved = true;
+    // The app class is empty at registration, so the timing profile was frozen
+    // to `default`; re-derive it now that the real identity is known.
+    tracked.refreshProfile();
     if (previous.length > 0 && previous !== resolution.key) {
       this.deps.registry.rekey(previous, resolution.key);
       this.deps.history.log('identity_rekey', { id: tracked.id, from: previous, to: resolution.key, origin: resolution.source });
@@ -3514,7 +3518,20 @@ export class WindowSession {
     if (this.dragging || this.adjustId !== null) return;
     for (const tracked of this.windows.values()) {
       const flags = tracked.surface.flags;
-      if (flags.fullscreen || flags.minimized || tracked.stubborn) {
+      // A window that has not been adopted or routed yet, or that reports a
+      // degenerate frame, is not an off-screen float: clamping it would place a
+      // zero-sized rect at the work-area origin and race the tile apply that is
+      // routing it (the visible jump/tear). See `shouldClampWindow`.
+      if (
+        !shouldClampWindow({
+          ready: tracked.ready,
+          routePending: tracked.routePending,
+          fullscreen: flags.fullscreen,
+          minimized: flags.minimized,
+          stubborn: tracked.stubborn,
+          frame: tracked.surface.frame,
+        })
+      ) {
         tracked.clamped = false;
         continue;
       }
