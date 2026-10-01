@@ -120,6 +120,23 @@ export function sideSlot(from: Direction | null | undefined): 0 | 1 {
 }
 
 /**
+ * §13: the sides a swap pins onto the two windows, given their current sides.
+ * When both are known and differ they simply trade; otherwise (a maximized or
+ * floating partner, or a drag that has moved both rects over one slot) the
+ * stable id order is reversed — the low id takes slot 1, the high id slot 0.
+ * Pure, so the swap the drop applies and the swap the preview draws agree.
+ */
+export function swappedSides(
+  idA: number,
+  slotA: 0 | 1 | null,
+  idB: number,
+  slotB: 0 | 1 | null,
+): [0 | 1, 0 | 1] {
+  if (slotA !== null && slotB !== null && slotA !== slotB) return [slotB, slotA];
+  return idA < idB ? [1, 0] : [0, 1];
+}
+
+/**
  * Where a newly opened (or routed) window goes (§3). `ownWorkspace` is the
  * workspace it opens on; `from` is the direction it arrived from, when known;
  * `doesNotFit` is the escape rule's trigger (§16).

@@ -23,9 +23,11 @@ import { normalizePlan } from '../../core/normalize.js';
 import type { NormalizeWindow } from '../../core/normalize.js';
 import {
   dropPlacement, escapeSize, impossibleSplit, maximizeWindow, refusalLadder, routeNewWindow,
-  unmaximizeWindow, windowCount,
+  swappedSides, unmaximizeWindow, windowCount,
 } from '../../core/placement.js';
 import type { Axis, Env, Placement, ScreenClass, State, Win, Ws } from '../../core/placement.js';
+import { dragOutcome } from '../../core/drag.js';
+import type { DragOutcome } from '../../core/drag.js';
 import { reapPlan } from '../../core/workspaces.js';
 import type { Change, ChangeLog, InstanceConfig, LiveInstance } from '../../core/undo.js';
 import { validateChange } from '../../core/undo.js';
@@ -146,6 +148,8 @@ export class WindowSession {
   private grabEndSignal = 0;
   private dragging = false;
   private dragStartRect: Rect | null = null;
+  /** The window being dragged, so the preview overlay can follow it (§6/§11). */
+  private dragId: number | null = null;
   /** The plane the drag started on, so the drop can tell a same-plane return
    * from an arrival from another workspace or screen (§6). */
   private dragStartWorkspace = 0;
@@ -285,6 +289,7 @@ export class WindowSession {
     if (tracked === undefined) return false;
     if (this.dragging) return true;
     this.dragging = true;
+    this.dragId = id;
     this.dragLastActivityMs = Date.now();
     this.dragStartRect = { ...tracked.surface.frame };
     this.dragStartWorkspace = tracked.surface.workspaceId;
@@ -308,6 +313,7 @@ export class WindowSession {
 
   private abandonDrag(reason: string): void {
     this.dragging = false;
+    this.dragId = null;
     this.dragLastActivityMs = 0;
     this.dragStartRect = null;
     this.deps.onDragChanged(false);
@@ -327,6 +333,7 @@ export class WindowSession {
     if (tracked === undefined) return false;
     const wasDragging = this.dragging;
     this.dragging = false;
+    this.dragId = null;
     this.dragLastActivityMs = 0;
     this.deps.onDragChanged(false);
     if (!wasDragging) return true;
@@ -363,19 +370,9 @@ export class WindowSession {
    * explicit slots win over the flag in `computePlans`.
    */
   private swapPairSides(a: TrackedWindow, b: TrackedWindow): void {
-    const slotA = this.slotFor(a);
-    const slotB = this.slotFor(b);
-    if (slotA !== null && slotB !== null && slotA !== slotB) {
-      a.pendingSlot = slotB;
-      b.pendingSlot = slotA;
-      return;
-    }
-    // No readable side (a maximized or floating window): reverse the stable id
-    // order instead, which is what the swap flag already expresses.
-    const low = a.id < b.id ? a : b;
-    const high = a.id < b.id ? b : a;
-    low.pendingSlot = 1;
-    high.pendingSlot = 0;
+    const [slotA, slotB] = swappedSides(a.id, this.slotFor(a), b.id, this.slotFor(b));
+    a.pendingSlot = slotA;
+    b.pendingSlot = slotB;
   }
 
   /** §13: swap a pair on request (the `SwapPair` test trigger). */
@@ -2899,6 +2896,7 @@ export class WindowSession {
 
   private beginUserAdjust(tracked: TrackedWindow): void {
     this.adjustId = tracked.id;
+    this.dragId = tracked.id;
     // Anchor to the last geometry we planned: `surface.frame` is already the
     // user's new rect by the time this signal arrives.
     this.dragStartRect = { ...(tracked.lastTarget ?? tracked.surface.frame) };
@@ -2923,6 +2921,7 @@ export class WindowSession {
     if (this.adjustId !== tracked.id) return;
     const mode = this.adjustMode(tracked);
     this.adjustId = null;
+    this.dragId = null;
     this.deps.onDragChanged(false);
     this.interpretDrop(tracked, mode);
     this.dragStartRect = null;
@@ -3013,20 +3012,76 @@ export class WindowSession {
       return;
     }
 
-    const crossed = samePlane ? this.crossedWindow(tracked) : null;
-    if (samePlane) {
-      // A same-plane drop that crossed a sibling swaps; one that crossed
-      // nothing simply returns to its tile (there is no float for staying put).
-      if (crossed !== null) this.applySwapIntent(tracked, this.windows.get(crossed)!);
-      return;
-    }
+    // §6/§11: the same decision the preview overlay shows, now applied.
+    const target = this.dragOutcomeFor(tracked, mode);
+    if (target === null || target.kind === 'none') return;
+    this.applyDropResult(tracked, target);
+  }
 
-    // An arrival from another workspace or screen follows the target's rules.
-    const from = this.dropFrom(tracked);
-    const env = this.placementEnv(tracked.surface.screenId);
-    const state = this.buildPlacementState(tracked.id);
-    const result = dropPlacement(state, env, tracked.id, tracked.surface.workspaceId, from, crossed);
-    this.applyDropResult(tracked, result);
+  /**
+   * §6/§11: the live drop target for the preview overlay. The policy is pure
+   * (`core/drag`); this only gathers the model state it needs. `null` when the
+   * gesture is an inner-edge resize, which has no landing rect.
+   */
+  previewTarget(): DragOutcome | null {
+    const id = this.dragId ?? this.adjustId;
+    if (id === null) return null;
+    const tracked = this.windows.get(id);
+    if (tracked === undefined) return null;
+    tracked.refreshFrame();
+    return this.dragOutcomeFor(tracked, this.adjustMode(tracked));
+  }
+
+  /**
+   * §6/§11: the one drag decision, shared by the preview and the drop. A
+   * same-plane crossing swaps; a cross-plane drop follows §6's ladder; both
+   * return the exact landing rect so the two can never disagree.
+   */
+  private dragOutcomeFor(tracked: TrackedWindow, mode: AdjustMode): DragOutcome | null {
+    const screen = this.screenFor(tracked.surface.screenId);
+    if (screen === null) return null;
+    const sibling = this.pairSibling(tracked);
+    const samePlane =
+      tracked.surface.workspaceId === this.dragStartWorkspace && tracked.surface.screenId === this.dragStartScreen;
+    if (sibling !== null && samePlane && mode === 'resize' && !this.overlaps(tracked.surface.frame, sibling.surface.frame)) {
+      return null;
+    }
+    const crossed = samePlane ? this.crossedWindow(tracked) : null;
+    return dragOutcome({
+      state: this.buildPlacementState(tracked.id),
+      env: this.placementEnv(tracked.surface.screenId),
+      id: tracked.id,
+      workspace: tracked.surface.workspaceId,
+      from: this.dropFrom(tracked),
+      crossed,
+      samePlane,
+      screen,
+      config: this.tilerConfig(),
+      dragged: this.dragTilerWindow(tracked),
+      othersByWorkspace: this.previewOthers(tracked),
+      dropped: { ...tracked.surface.frame },
+    });
+  }
+
+  /** A window's tiler description with the side it currently occupies (§13). */
+  private dragTilerWindow(tracked: TrackedWindow): TilerWindow {
+    return { ...this.toTilerWindow(tracked), slot: this.slotFor(tracked) ?? undefined };
+  }
+
+  /** Every other tileable window on the dragged screen, grouped by workspace. */
+  private previewOthers(tracked: TrackedWindow): Map<number, TilerWindow[]> {
+    const map = new Map<number, TilerWindow[]>();
+    const count = global.workspace_manager.get_n_workspaces();
+    for (let workspace = 0; workspace < count; workspace++) {
+      const list: TilerWindow[] = [];
+      for (const other of this.tileables(workspace)) {
+        if (other.id === tracked.id) continue;
+        if (other.surface.screenId !== tracked.surface.screenId) continue;
+        list.push(this.dragTilerWindow(other));
+      }
+      map.set(workspace, list);
+    }
+    return map;
   }
 
   /** The direction a drop arrived from, from the plane it started on (§3/§6). */

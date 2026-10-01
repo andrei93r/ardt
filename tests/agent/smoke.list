@@ -50,6 +50,7 @@
 #   highlight (occlusion, fullscreen) A130-occlusion-hides-highlight,
 #     and under Shell chrome            A131-fullscreen-hides-highlight,
 #                                      A135-highlight-below-notifications
+#   drag drop-assist preview         A141-drag-preview
 #   undo (swap, un-float)            A101-undo-restores-instance-and-config
 #   flags / trace / DumpState shape  A103-record-trace-shape
 #   cursor to the active window      A132-cursor-centre,
@@ -105,6 +106,7 @@ A13-lock-screen
 A130-occlusion-hides-highlight
 A131-fullscreen-hides-highlight
 A135-highlight-below-notifications
+A141-drag-preview
 # --- undo (swap, un-float) ---
 A101-undo-restores-instance-and-config
 # --- flags / trace / DumpState ---
