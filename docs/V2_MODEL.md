@@ -828,6 +828,11 @@ never debug-gated (the deduplication and rate limits still apply).
     exactly as they are (slots, size, focus), and nothing is notified. A normal
     switch is not an event, and that screen simply has nothing to switch.
 
+69. **An overview drop onto the empty workspace** (round scenario 10, confirmed): the
+    window lands there alone so it maximizes, GNOME adds a new empty workspace after
+    it, the window's former workspace keeps its survivor maximized, and the view stays
+    where the drag started.
+
 ## Deliberate non-goals
 
 
