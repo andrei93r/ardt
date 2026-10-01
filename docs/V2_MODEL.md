@@ -279,12 +279,20 @@ flush. The ratios that produced a layout are captured by undo.
 2. if a client refuses the requested split, the **sibling adapts** — the refusing
    window keeps the size it insists on and the sibling takes the remainder, clamped to
    the sibling's own limits;
-3. if the sibling cannot adapt either, the refusing window takes **its own workspace
-   to the right**, sized to itself and clamped between **one sixth of the screen and
-   the full screen**, in the slot-0 position (flush left, full work-area height);
-4. on a single-workspace-capable screen there is no workspace to give it: it keeps its
-   clamped size over the sibling, which remains reachable because focusing it raises
-   it.
+3. if the sibling cannot adapt either, the pair cannot exist. **The window the action
+   is about keeps the workspace** — alone there, so it maximizes — and the **other
+   window takes its own workspace to the right**, sized to itself and clamped between
+   **one sixth of the screen and the full screen**, in the slot-0 position (flush
+   left, full work-area height);
+4. on a single-workspace-capable screen there is no workspace to give: the window the
+   action is about keeps the screen, maximized, and the **other managed windows on
+   that screen are minimized**. They return when it is minimized or closed, and
+   whichever window acts next is the trigger in turn — restoring the minimized one
+   maximizes it and minimizes the other.
+
+In both cases the rule is the same: **the trigger wins**. The window the user's action
+is about keeps the screen; the window that merely reacts gives way — to its own
+workspace when the screen can make one, minimized when it cannot.
 
 **Gaps** are adjustable per side (left, right, top, bottom) and between windows, per
 orientation: new settings beside the existing `gaps-base`/`gaps-portrait`/
@@ -758,6 +766,12 @@ never debug-gated (the deduplication and rate limits still apply).
     client's own minimum grows while it is tiled. **The view does not follow it** -
     the view follows the app the action was about, and that is the arriving window,
     which stayed; the reactor never moves the view.
+
+62. **When a split is impossible the trigger wins** (round scenarios 2-4): the window
+    the action is about keeps the screen — alone, so maximized. The other gives way:
+    its own workspace at its own clamped width on a workspace-capable screen,
+    minimized on a single-workspace screen. On the laptop this means "open B, B
+    maximizes, A is minimized"; restoring A makes it the trigger and reverses the two.
 
 ## Deliberate non-goals
 
