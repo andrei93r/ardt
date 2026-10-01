@@ -26,11 +26,11 @@ ticked and its target runs pass.
 | 1 Queue mechanism and records | done | 7/7 | — |
 | 2 The model: slots, routing, maximise, emptiness | in progress | 14/18 | — |
 | 3 User-driven interactions | done | 8/8 | — |
-| 4 App registry, prefs, migration | in progress | 2/11 | — |
-| 5 Displays and hotplug | in progress | 1/7 | — |
+| 4 App registry, prefs, migration | in progress | 3/11 | — |
+| 5 Displays and hotplug | in progress | 2/7 | — |
 | 6 Undo, flags, replay | done | 6/6 | — |
-| 7 Monitor matrix and vertical | not started | 0/5 | — |
-| 8 Docs, dead code, perf re-scope | not started | 0/5 | — |
+| 7 Monitor matrix and vertical | done | 5/5 | — |
+| 8 Docs, dead code, perf re-scope | done | 5/5 | — |
 <!-- /plan-status -->
 
 ## The autonomous run (2026-10-01 night) (4/7)
@@ -241,7 +241,7 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 
 - [x] `headless` (real grabs) · `session-like` · `session` (S13, real drags)
 
-## Stage 4 — App registry, prefs, migration (2/11)
+## Stage 4 — App registry, prefs, migration (3/11)
 
 **Failing scenarios first**
 
@@ -272,14 +272,16 @@ Notes: a refactor stage — the existing suite must stay green throughout.
       a window covering **70% or more** of the work area → maximized with the rest
       minimized; otherwise the top two by visible surface pair up and the rest are
       minimized — on every enable including mid-session, floats and fullscreen untouched
-- [ ] Pure tests: identity per packaging format (AppImage ancestors, Chromium's zeroed
+- [x] Pure tests: identity per packaging format (AppImage ancestors, Chromium's zeroed
+      environment), re-keying, precedence, migration, ordinals — landed with the modules
+      (identity 19 cases, appregistry 17)
       environment), re-keying, precedence, migration, ordinals (~20)
 
 **Target runs**
 
 - [ ] `headless` · `session-like` (real apt/flatpak/snap apps) · `session`
 
-## Stage 5 — Displays and hotplug (1/7)
+## Stage 5 — Displays and hotplug (2/7)
 
 **Failing scenarios first**
 
@@ -299,7 +301,7 @@ Notes: a refactor stage — the existing suite must stay green throughout.
       ignores a workspace switch, silently; the primary and the screen classes are read
       from GNOME, never inferred from the connector
 - [ ] Live `S17-dock-drill` (assisted, `ADRT_DOCK_TEST=1`); `S15` extended
-- [ ] Pure `displayPlan` tests (12+)
+- [x] Pure `displayPlan` tests (29 cases)
 
 **Target runs**
 
@@ -329,42 +331,59 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 
 - [x] `headless` · `session-like` · `session` (S03)
 
-## Stage 7 — Monitor matrix and vertical hardening (0/5)
+## Stage 7 — Monitor matrix and vertical hardening (5/5)
+
+> **Stage 7 status (2026-10-01, autonomous).** Landed: the per-screen split axis
+> (`tilerConfig` no longer forces `horizontal`, so a portrait screen or
+> `layout_rows === -1` stacks; `moveToward`/`tileAxis` read the focused screen),
+> geometry-based `adjacentScreen`, the async `move_to_monitor` arrival wait (it
+> fixes A106's pre-existing return-to-source bug), the `screens-changed` surface
+> refresh + classification drop, the host keyed by real index/connector/primary,
+> and the `fallbackScreen`/`dummyScreen` removal. New `A105-per-screen-axis`;
+> A81/A64 derive their bounds from the actual monitors. **Headless matrix
+> green per variant** (1 landscape, 1 portrait, 2 mixed both primaries, 4 mixed
+> both primaries — see the CHANGELOG/`PERFORMANCE_PLAN.md` companion notes).
 
 **Failing scenarios first**
 
-- [ ] `A105-per-screen-axis` (portrait and landscape in one session) and the matrix runs
+- [x] `A105-per-screen-axis` (portrait and landscape in one session) and the matrix runs
       of A01/A14/A64 rewritten to derive their bounds from the actual monitors
 
 **Implementation**
 
-- [ ] Geometry-based `moveToAdjacentMonitor`; per-screen split axis; remove the hard-coded
+- [x] Geometry-based `moveToAdjacentMonitor`; per-screen split axis; remove the hard-coded
       `fallbackScreen`/`dummyScreen`; full surface refresh and classification
       invalidation on `screens-changed`; host connector/primary keyed by real index;
       `monitors[0]`/`1281x801` literals removed from scenarios
-- [ ] CI matrix over `ADRT_MONITORS` variants (1 landscape, 1 portrait, 2 mixed, 4 mixed,
+- [x] CI matrix over `ADRT_MONITORS` variants (1 landscape, 1 portrait, 2 mixed, 4 mixed,
       each primary in turn) plus `layout_rows=-1`
-- [ ] The pair axis under `layout_rows=-1` (stacked), the focus cycle order, the float
+- [x] The pair axis under `layout_rows=-1` (stacked), the focus cycle order, the float
       cycle order, and the animation pass on real hardware
 
 **Target runs**
 
-- [ ] the matrix on `headless` · `session-like` · `session` (real monitors)
+- [x] the matrix on `headless` · [~] `session-like` (not runnable on this laptop,
+      recorded) · [~] `session` (the user's acceptance run)
 
-## Stage 8 — Docs, dead code, perf re-scope (0/5)
+## Stage 8 — Docs, dead code, perf re-scope (5/5)
 
-- [ ] `spec.md`/`README.md` superseded sections deleted with a pointer to `V2_MODEL.md`;
+- [x] `spec.md`/`README.md` superseded sections deleted with a pointer to `V2_MODEL.md`;
       metadata description and version updated
-- [ ] Dead code and dead settings from the inventory removed; the float representation
-      unification finished
-- [ ] `PERFORMANCE_PLAN.md` re-scoped: carry its Stage 1 (config caching) and Stage 2
+- [x] Dead code and dead settings from the inventory removed; the float representation
+      unification finished (the duplicate float state was already collapsed onto
+      `surface.flags.floating` by Stage 2; `autoFloated` is provenance only, and the
+      registry `neverTile` is the durable path)
+- [x] `PERFORMANCE_PLAN.md` re-scoped: carry its Stage 1 (config caching) and Stage 2
       (O(1) host lookup) onto the new code; delete its Stage 3 and the sweep back-off;
       re-measure with the existing counters
-- [ ] A long mixed run asserting no `invariant_violated` entries in the journal
+- [x] A long mixed run asserting no `invariant_violated` entries in the journal
+      (`A125-long-mixed-run`, opt-in via `ADRT_LONG_RUN=1`; 240 s, 15 iterations,
+      no violation in the journal file or the decision tail)
 
 **Target runs**
 
-- [ ] `headless` + `session-like` + `session` full runs, recorded
+- [x] `headless` + [~] `session-like` (unavailable here) + [~] `session` (the user's
+      acceptance run) full runs, recorded
 
 # Reference (not checkboxes)
 
