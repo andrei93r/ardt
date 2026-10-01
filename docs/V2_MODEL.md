@@ -712,6 +712,10 @@ happens. All default off, deduplicated and rate-limited per event.
     S25, confirmed): the destination keeps its pair, the moved window floats on top of
     it, its former workspace keeps its survivor maximized, and the view follows.
 
+55. **Undo after a maximize** (test scenario S26, confirmed): the maximized window
+    rejoins its former pair (slot 1), the workspace it had been moved to disappears,
+    and the view follows back. This is the mirror of undoing an unmaximize.
+
 ## Deliberate non-goals
 
 
