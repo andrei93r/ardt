@@ -425,6 +425,10 @@ Two clarifications that follow from this:
   the view follows it.
 - Nudge is a no-op on a lone maximized window (nothing to split) and on a
   single-workspace screen with no free slot.
+- **An impossible request is announced, never silent**: moving a window to the next
+  workspace while its screen has only one raises a plain-language notification, as
+  does an undo with nothing to revert. Notifications follow the catalogue's
+  deduplication and rate limits (§21).
 - View switching (Super+1..9, Super+arrows) stays GNOME's.
 
 ## 18. Animation policy
@@ -493,6 +497,8 @@ happens. All default off, deduplicated and rate-limited per event.
 | *"Screen changed: <connector> <appeared|vanished>"* | §9 |
 | *"Normalised <n> workspaces"* (one summary, not one per workspace) | §20 |
 | *"No room next to it → parking it minimized on the neighbouring workspace"* | §4 |
+| *"Cannot move: this screen has only one workspace"* | §17, the impossible request |
+| *"Nothing to undo"* | §13 |
 
 ## 22. Journal and instrumentation
 
@@ -654,6 +660,13 @@ happens. All default off, deduplicated and rate-limited per event.
     pair maximizes, and the view follows. On exit it rejoins as slot 1, the workspace
     it left is reaped and the view returns. An app's own fullscreen request and the
     shortcut are identical.
+
+46. **Impossible requests are announced** (test scenario S18): moving a window to
+    the next workspace while its screen has only one workspace, and an undo with
+    nothing to revert, both raise a plain-language notification rather than failing
+    silently. A single-workspace-capable screen has exactly one workspace — there is
+    no hidden next one — which is why the move is impossible there while it works
+    normally with focus on the workspace-capable screen.
 
 ## Deliberate non-goals
 
