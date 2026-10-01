@@ -137,3 +137,12 @@ A140-prefs-options
 A142-topology-cases
 # --- fractional scaling: the split boundary is reconciled (no seam/overlap) ---
 A144-fractional-scaling
+# --- screen sharing: off by default, opt-in pause path (§19) ---
+A28-screen-sharing
+A148-sharing-opt-in
+# --- top-bar panel affordance: pause / highlight / preferences (§1) ---
+A147-panel
+# --- workspace-mode settings re-derive at once (§1) ---
+A149-workspace-mode
+# --- error boundary: a caught throw does not take adrt down (§36) ---
+A146-error-boundary

@@ -52,4 +52,20 @@ describe('SessionMachine', () => {
     session.setMode('screen-sharing');
     expect(session.setMode('user').retileOnResume).toBe(false);
   });
+
+  it('folds a manual pause into the one predicate without touching the mode', () => {
+    const session = new SessionMachine();
+    session.setManualPause(true);
+    expect(session.manualPause).toBe(true);
+    expect(session.isPaused).toBe(true);
+    expect(session.state).toEqual({ mode: 'user', paused: true });
+    // A session transition does not clear the manual pause, and clearing the
+    // manual pause does not unpause a locked session.
+    session.setMode('unlock-dialog');
+    expect(session.isPaused).toBe(true);
+    session.setManualPause(false);
+    expect(session.isPaused).toBe(true);
+    session.setMode('user');
+    expect(session.isPaused).toBe(false);
+  });
 });

@@ -206,32 +206,32 @@ export class WindowSession {
     this.scanIntervalMs = this.scanBaseMs();
     this.scheduleScan();
     // §7.6: user reorders shift every window's workspace index.
-    this.reorderSignal = global.workspace_manager.connect('workspaces-reordered', () => this.onWorkspacesReordered());
+    this.reorderSignal = global.workspace_manager.connect('workspaces-reordered', this.guard('workspaces-reordered', () => this.onWorkspacesReordered()));
     // §11.3 / §23.1: never retile or show the border while the user is dragging.
-    this.grabBeginSignal = global.display.connect('grab-op-begin', (_display: any, win: any, op: number) =>
+    this.grabBeginSignal = global.display.connect('grab-op-begin', this.guard('grab-op-begin', (_display: any, win: any, op: number) =>
       this.onGrabBegin(win, op),
-    );
-    this.grabEndSignal = global.display.connect('grab-op-end', (_display: any, win: any, op: number) =>
+    ));
+    this.grabEndSignal = global.display.connect('grab-op-end', this.guard('grab-op-end', (_display: any, win: any, op: number) =>
       this.onGrabEnd(win, op),
-    );
+    ));
     // Anything that can move, restack or re-parent a window triggers a
     // debounced global reconcile pass. `window-entered-monitor` is also what
     // re-queues a pending cross-screen move once `move_to_monitor` lands (A106).
     this.displaySignals.push(
-      global.display.connect('window-entered-monitor', () => this.scheduleReconcile('window-monitor')),
-      global.display.connect('window-left-monitor', () => this.scheduleReconcile('window-monitor')),
-      global.display.connect('notify::focus-window', () => {
+      global.display.connect('window-entered-monitor', this.guard('window-entered-monitor', () => this.scheduleReconcile('window-monitor'))),
+      global.display.connect('window-left-monitor', this.guard('window-left-monitor', () => this.scheduleReconcile('window-monitor'))),
+      global.display.connect('notify::focus-window', this.guard('focus-window', () => {
         // §11/§17: no policy here. Push the lane-1 feedback event; the drain
         // re-derives the live focused window and moves the pointer.
         this.scheduleCursorCentre(false);
         this.scheduleReconcile('focus');
-      }),
+      })),
     );
     this.managerSignals.push(
-      global.workspace_manager.connect('active-workspace-changed', () => this.scheduleReconcile('workspace-active')),
-      global.workspace_manager.connect('workspace-added', () => this.scheduleReconcile('workspace-added')),
-      global.workspace_manager.connect('workspace-removed', () => this.scheduleReconcile('workspace-removed')),
-      global.workspace_manager.connect('notify::n-workspaces', () => this.scheduleReconcile('workspace-count')),
+      global.workspace_manager.connect('active-workspace-changed', this.guard('active-workspace-changed', () => this.scheduleReconcile('workspace-active'))),
+      global.workspace_manager.connect('workspace-added', this.guard('workspace-added', () => this.scheduleReconcile('workspace-added'))),
+      global.workspace_manager.connect('workspace-removed', this.guard('workspace-removed', () => this.scheduleReconcile('workspace-removed'))),
+      global.workspace_manager.connect('notify::n-workspaces', this.guard('n-workspaces', () => this.scheduleReconcile('workspace-count'))),
     );
   }
 
@@ -1346,12 +1346,50 @@ export class WindowSession {
     this.drainingBacklog = this.deps.isPaused();
     try {
       this.drainEvents(events);
+    } catch (error) {
+      // §19/§36: one bad event must not propagate into the compositor's later
+      // callback and take the Shell down; log it and keep the loop alive.
+      this.reportError('drain', error);
     } finally {
       this.drainingBacklog = false;
     }
     const ms = (GLib.get_monotonic_time() - started) / 1000;
     this.drainMsMax = Math.max(this.drainMsMax, ms);
     this.pushSample(this.drainSamples, ms);
+  }
+
+  /**
+   * Guard a signal/actor callback so a throw is logged, never propagated into
+   * the compositor's emission. Cheap: one closure per connection, one try/catch
+   * per event. Programming errors are still visible (`[adrt] ERROR` + history).
+   */
+  private guard<A extends unknown[]>(context: string, cb: (...args: A) => void): (...args: A) => void {
+    return (...args: A): void => {
+      try {
+        cb(...args);
+      } catch (error) {
+        this.reportError(context, error);
+      }
+    };
+  }
+
+  /** Log a caught error (`[adrt] ERROR`-style) and journal it, never rethrow. */
+  private reportError(context: string, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.errorCount += 1;
+    console.error(`[adrt] ERROR ${context}: ${message}`);
+    try {
+      this.deps.history.log('error', { context, error: message });
+    } catch {
+      /* a logging failure must never escape the boundary */
+    }
+  }
+
+  /** Errors caught by the drain/signal boundary (DumpState diagnostics). */
+  private errorCount = 0;
+
+  get errorBoundaryCount(): number {
+    return this.errorCount;
   }
 
   private drainEvents(events: ReturnType<EventQueue['drain']>): void {
@@ -2821,7 +2859,7 @@ export class WindowSession {
     const win = tracked.win;
     const handlers: WindowSignal[] = [];
     const on = (signal: string, cb: (...args: any[]) => void) => {
-      handlers.push({ id: win.connect(signal, cb) });
+      handlers.push({ id: win.connect(signal, this.guard(`window:${signal}`, cb)) });
     };
 
     on('notify::title', () => this.onFlagSignal(tracked, true));
@@ -3508,6 +3546,7 @@ export class WindowSession {
     applyMsP95: number;
     applySamples: number;
     clampsApplied: number;
+    errors: number;
   } {
     const round = (value: number): number => Math.round(value * 1000) / 1000;
     return {
@@ -3527,6 +3566,7 @@ export class WindowSession {
       applyMsP95: round(percentile(this.applySamples, 0.95)),
       applySamples: this.applySamples.length,
       clampsApplied: this.clampsApplied,
+      errors: this.errorCount,
     };
   }
 
