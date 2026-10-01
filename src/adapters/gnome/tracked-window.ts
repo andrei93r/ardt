@@ -24,7 +24,13 @@ export class TrackedWindow {
   readonly id: number;
   readonly win: any;
   readonly surface: GnomeSurface;
-  readonly profile: Profile;
+  /**
+   * §10 timing profile. Re-derived once the app identity is known: a Wayland
+   * window registers with an empty `appId`, so the constructor would otherwise
+   * freeze the app into `default` before `google-chrome`/`com.microsoft.VSCode`
+   * can be recognised (see `refreshProfile`).
+   */
+  profile: Profile;
   /**
    * §12: the registry key resolved at the first frame, and how it was resolved.
    * Empty until `resolveIdentity` has run; `appKey` falls back to `wm_class`.
@@ -127,6 +133,15 @@ export class TrackedWindow {
   /** §12: the registry / adaptation key: the resolved identity, else `wm_class`. */
   get appKey(): string {
     return this.identityKey.length > 0 ? this.identityKey : this.surface.appId;
+  }
+
+  /**
+   * Re-resolve the timing profile from the current identity. Called when the
+   * identity is first resolved and on every re-key, so the delay/retry/animate
+   * policy follows the real app instead of the empty class at registration.
+   */
+  refreshProfile(): void {
+    this.profile = profileFor(this.appKey);
   }
 
   /**
