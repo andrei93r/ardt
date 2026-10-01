@@ -18,6 +18,11 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SESSION_DIR="$ROOT/tests/session"
 FILTER="${ADRT_SESSION_SCENARIOS:-}"
+# A curated live smoke: ADRT_SESSION_SMOKE=1 runs only tests/session/smoke.list,
+# the same idea as the nested ADRT_SMOKE. A listed scenario with no file aborts
+# the run rather than silently dropping it.
+SMOKE="${ADRT_SESSION_SMOKE:-0}"
+SMOKE_LIST="${ADRT_SESSION_SMOKE_LIST:-$SESSION_DIR/smoke.list}"
 
 if ! gdbus call --session --dest org.adrt.Adrt --object-path /org/adrt/Adrt \
   --method org.adrt.Adrt.DumpState >/dev/null 2>&1; then
@@ -67,9 +72,35 @@ failures=0
 skips=0
 
 shopt -s nullglob
+declare -A SMOKE_SET=()
+if [ "$SMOKE" = "1" ]; then
+  if [ ! -f "$SMOKE_LIST" ]; then
+    echo "session-test: ADRT_SESSION_SMOKE=1 but the smoke list is missing: $SMOKE_LIST" >&2
+    exit 2
+  fi
+  smoke_missing=0
+  while read -r sid; do
+    sid="${sid%%#*}"
+    sid="$(printf '%s' "$sid" | awk 'NF { print $1 }')"
+    [ -n "$sid" ] || continue
+    SMOKE_SET["$sid"]=1
+    if [ ! -f "$SESSION_DIR/$sid.sh" ]; then
+      echo "session-test: smoke.list names '$sid' but $SESSION_DIR/$sid.sh does not exist" >&2
+      smoke_missing=$((smoke_missing + 1))
+    fi
+  done < "$SMOKE_LIST"
+  if [ "$smoke_missing" -ne 0 ]; then
+    echo "session-test: refusing to run live smoke: $smoke_missing smoke.list entr(ies) have no scenario file" >&2
+    exit 2
+  fi
+  echo "session-test: live smoke mode — ${#SMOKE_SET[@]} scenarios from $(basename "$SMOKE_LIST")"
+  echo
+fi
 for script in "$SESSION_DIR"/S*.sh; do
   name="$(basename "$script" .sh)"
-  if [ -n "$FILTER" ] && ! echo "$name" | grep -qE "$FILTER"; then continue; fi
+  if [ "$SMOKE" = "1" ]; then
+    [ -n "${SMOKE_SET[$name]:-}" ] || continue
+  elif [ -n "$FILTER" ] && ! echo "$name" | grep -qE "$FILTER"; then continue; fi
   echo "=== $name ==="
   output="$(bash "$script" 2>&1)"
   rc=$?

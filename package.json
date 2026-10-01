@@ -13,6 +13,7 @@
   "check:core": "bash scripts/check-core-purity.sh",
   "test:agent": "bash scripts/agent-test.sh",
   "test:smoke": "ADRT_SMOKE=1 bash scripts/agent-test.sh",
+  "test:smoke:live": "ADRT_SESSION_SMOKE=1 bash scripts/session-test.sh",
   "test:all": "npm run lint && npm run build && npm run test:core && npm run test:agent",
   "install:local": "bash scripts/install.sh",
   "uninstall:local": "bash scripts/uninstall.sh",

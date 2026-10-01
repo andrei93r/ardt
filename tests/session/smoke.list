@@ -1,0 +1,56 @@
+# smoke.list — the curated ADRT_SESSION_SMOKE=1 live scenario set.
+#
+# Runs against the REAL GNOME Shell, so it is deliberately small: the features a
+# change is most likely to break, and the ones whose behaviour only the live
+# session proves (real clients, real z-order, real pointer). Every scenario still
+# opens and closes only its own windows and restores the workspace it started on.
+# The full live suite (`scripts/session-test.sh`, all S*.sh) stays the gate.
+#
+# Format: one scenario id per line, with or without a trailing `.sh`; blank lines
+# and `#` comments are ignored. An entry whose file does not exist is a hard
+# failure of the run, named on stderr — the list can never silently drop one.
+#
+# Feature -> scenario map (see tests/MANUAL.md and docs/V2_MODEL.md):
+#
+#   extension health / journal clean       S01-extension-health
+#   pair tiling + third-window routing     S02-pair-and-third
+#   resize + undo + swap                   S03-resize-undo-swap
+#   maximize / unmaximize model            S04-maximize-model
+#   minimize / close / workspace reap      S05-minimize-close-reap
+#   float + lone-window maximize           S06-float-and-lone
+#   border suppression on a switch         S07-border-switch
+#   app-open maximize routing              S10-app-maximized
+#   above-floats / z-order                 S19-above-floats
+#   focus cycle                            S20-focus-cycle
+#   highlight hidden on fullscreen         S21-fullscreen-no-highlight
+#   cursor to the active window centre     S22-cursor-centre
+#
+# Not in the smoke (kept in the full live suite, or skipped here):
+#   S08 keybindings (needs ydotool), S09 periodic retile (backstop, nested A66),
+#   S13 overview workspace move (nested A74/A56), S15/S17 need hardware (two
+#   monitors / docking), S18 is a recorded test gap, S11/S12/S14 are retired.
+
+# --- health ---
+S01-extension-health
+# --- tiling / routing ---
+S02-pair-and-third
+# --- resize / undo / swap (fixed live) ---
+S03-resize-undo-swap
+# --- maximize / unmaximize ---
+S04-maximize-model
+# --- minimize / reap (fixed live) ---
+S05-minimize-close-reap
+# --- float / lone maximize ---
+S06-float-and-lone
+# --- border suppression (fixed live) ---
+S07-border-switch
+# --- app-open maximize (fixed live) ---
+S10-app-maximized
+# --- z-order / above floats ---
+S19-above-floats
+# --- focus cycle ---
+S20-focus-cycle
+# --- highlight on a fullscreen window ---
+S21-fullscreen-no-highlight
+# --- cursor to the active window ---
+S22-cursor-centre
