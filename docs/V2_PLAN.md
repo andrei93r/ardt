@@ -306,7 +306,7 @@ Implementation:
 - [ ] The **toast policy** (§21): a request that changes nothing toasts with its reason;
       a direction with nothing stays silent.
 - [ ] `core/workspaces.ts`: `workspaceOps(state, env) → { create, reap }` with the
-      single-trailing-spare invariant per screen.
+      single trailing spare (global, GNOME's own) and emptying as a property.
 - [ ] Adapter: routing/reaping only from the lane-2 drain; windows on a
       non-workspace screen are **not** given a workspace index.
 - [ ] Delete: the `>2` extra branch, `floatOverPair`-as-eviction, `unmaximizeStaleLone`,
@@ -501,3 +501,9 @@ Target runs: matrix on `headless` · `session-like` · `session` (real monitors)
 - **Reorder prohibition dropped**: user reordering is honoured with no correction, no
   tagging and no toast (model §8); reaping is a property, so an empty workspace is
   pruned wherever it sits and the spare is never removed.
+- **Behaviour is the model's**, not this file's: the 89 decisions in `docs/V2_MODEL.md`
+  §23 settle everything the round raised — the trigger wins a split that cannot exist, a
+  free slot wins over a perimeter crossing, a request that changes nothing toasts (a
+  direction with nothing stays silent), the focus cycle covers managed windows then
+  floats left to right, a float is only ever made explicitly, disabling leaves every
+  window as it is, and enable-time normalisation uses the 70% threshold.
