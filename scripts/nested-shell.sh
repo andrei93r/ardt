@@ -17,15 +17,17 @@ BUS_FILE="$STATE/bus"
 PID_FILE="$STATE/shell.pid"
 LOG_FILE="$STATE/shell.log"
 WAYLAND_DISPLAY_NAME="${ADRT_WAYLAND_DISPLAY:-wayland-adrt-$(basename "$STATE")}"
-# The runtime dir holds our Wayland socket and lockfile. Resolve it the same way
-# `nested_env` does so an unclean kill (CI timeout, container restart) can be
-# cleaned up: a stale `$WAYLAND_DISPLAY.lock` makes the next start fail with
+# The runtime dir holds our Wayland socket and lockfile. It is *private to this
+# state directory*, never the caller's XDG_RUNTIME_DIR: two nested runs that
+# shared it would use the same socket name, and `cleanup_display_files` on the
+# second start would delete the first run's live socket — which surfaces as
+# flaky D-Bus, not as a collision. Keeping it beside the state also means an
+# unclean kill (CI timeout, container restart) can be cleaned up: a stale
+# `$WAYLAND_DISPLAY.lock` would otherwise make the next start fail with
 # "Failed to create_socket".
-RUNTIME_DIR="${XDG_RUNTIME_DIR:-$STATE/runtime}"
-if [ ! -d "$RUNTIME_DIR" ]; then
-  mkdir -p "$RUNTIME_DIR"
-  chmod 700 "$RUNTIME_DIR"
-fi
+RUNTIME_DIR="$STATE/runtime"
+mkdir -p "$RUNTIME_DIR"
+chmod 700 "$RUNTIME_DIR"
 
 # Remove *our own* socket/lock files, never another compositor's.
 cleanup_display_files() {
@@ -42,13 +44,12 @@ nested_env() {
   export XDG_CURRENT_DESKTOP=GNOME
   export XDG_SESSION_ID=adrt-agent
   export SHELL_DEBUG="${SHELL_DEBUG:-0}"
-  # A headless server has no user session, so XDG_RUNTIME_DIR may be unset or
-  # missing; Mutter requires it to exist with mode 0700.
-  if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ ! -d "${XDG_RUNTIME_DIR:-}" ]; then
-    export XDG_RUNTIME_DIR="$STATE/runtime"
-    mkdir -p "$XDG_RUNTIME_DIR"
-    chmod 700 "$XDG_RUNTIME_DIR"
-  fi
+  # Mutter creates its Wayland socket in XDG_RUNTIME_DIR. Every nested Shell gets
+  # a private one (mode 0700) so concurrent runs can never share or delete each
+  # other's socket, and the user's real runtime dir is left untouched.
+  export XDG_RUNTIME_DIR="$STATE/runtime"
+  mkdir -p "$XDG_RUNTIME_DIR"
+  chmod 700 "$XDG_RUNTIME_DIR"
   # Servers have no GPU: the native headless backend uses a surfaceless EGL
   # context served by llvmpipe, so software GL must be selected explicitly.
   if [ "${ADRT_SOFTWARE_GL:-0}" = "1" ]; then
@@ -79,8 +80,11 @@ shell_name_owned() {
 # ---------------------------------------------------------------- lifecycle
 
 cmd_build() {
+  # ADRT_DIST is a per-run snapshot of `dist/` (agent-test.sh); installing from
+  # it keeps concurrent runs from reading the shared tree while another rebuilds.
+  local dist="${ADRT_DIST:-$ROOT/dist}"
   if [ "${ADRT_SKIP_BUILD:-0}" = "1" ]; then
-    [ -f "$ROOT/dist/extension.js" ] || ( cd "$ROOT" && npm run build )
+    [ -f "$dist/extension.js" ] || ( cd "$ROOT" && npm run build )
     return 0
   fi
   ( cd "$ROOT" && npm run build )
@@ -88,9 +92,10 @@ cmd_build() {
 
 cmd_install() {
   cmd_build
+  local dist="${ADRT_DIST:-$ROOT/dist}"
   mkdir -p "$EXT_DIR/schemas"
   rm -rf "${EXT_DIR:?}/core" "${EXT_DIR:?}/platform" "${EXT_DIR:?}/adapters"
-  cp -r "$ROOT/dist/." "$EXT_DIR/"
+  cp -r "$dist/." "$EXT_DIR/"
   cp "$ROOT/packages/gnome/metadata.json" "$EXT_DIR/metadata.json"
   cp "$ROOT/packages/gnome/stylesheet.css" "$EXT_DIR/stylesheet.css"
   cp "$ROOT/packages/gnome/schemas/$SCHEMA.gschema.xml" "$EXT_DIR/schemas/"
@@ -142,6 +147,7 @@ cmd_start() {
       export XDG_CONFIG_HOME="'"$STATE"'/config"
       export XDG_CACHE_HOME="'"$STATE"'/cache"
       export XDG_STATE_HOME="'"$STATE"'/state"
+      export XDG_RUNTIME_DIR="'"$STATE"'/runtime"
       export GSETTINGS_BACKEND=keyfile
       export XDG_SESSION_TYPE=wayland
       export XDG_CURRENT_DESKTOP=GNOME

@@ -25,6 +25,92 @@ DEFAULT_WORKERS=$(( ($(nproc 2>/dev/null || echo 4) * 50) / 100 ))
 WORKERS="${ADRT_WORKERS:-$DEFAULT_WORKERS}"
 [ "$WORKERS" -lt 1 ] && WORKERS=1
 
+# --------------------------------------------------------- concurrent runs
+# Runs are isolated per BASE_STATE for state, and nested-shell.sh keeps each
+# Shell's Wayland socket in its own state dir. What is still shared is the CPU:
+# the scenarios assert geometry within a settle, so two heavy runs on one box
+# starve each other and report false failures. Every coordinator advertises its
+# worker count in a registry and takes only what is left of a total budget, so
+# concurrent runs share the machine instead of fighting over it; a run that
+# would get nothing waits for the others to finish. A dead owner's entry is
+# pruned and whatever nested Shells it left behind are stopped.
+NPROC="$(nproc 2>/dev/null || echo 4)"
+REGISTRY="${ADRT_RUN_REGISTRY:-${XDG_RUNTIME_DIR:-/tmp}/adrt-nested-runs}"
+# Leave room for the live session: never more than 12 nested Shells in total.
+BUDGET="${ADRT_MAX_NESTED_WORKERS:-$(( NPROC > 14 ? 12 : NPROC - 2 ))}"
+[ "$BUDGET" -lt 2 ] && BUDGET=2
+RUN_NS="$(printf '%s' "$(basename "$BASE_STATE")" | tr -c 'A-Za-z0-9_-' '-' | cut -c1-24)"
+WAYLAND_NS="wayland-adrt-${RUN_NS}"
+RUN_ID="$$-${RUN_NS}"
+HAVE_FLOCK=0
+command -v flock >/dev/null 2>&1 && HAVE_FLOCK=1
+# Builds write the shared `dist/`; two runs in one checkout must not build at
+# once, and a run must not read `dist/` while another rebuilds it. The build is
+# serialised and its result snapshotted per run, and the workers install from
+# that snapshot instead of the live `dist/`.
+BUILD_LOCK="$REGISTRY/.build.lock"
+
+registry_prune() {
+  mkdir -p "$REGISTRY"
+  local f pid w base d
+  for f in "$REGISTRY"/*; do
+    [ -e "$f" ] || continue
+    read -r pid w base < "$f" 2>/dev/null || { rm -f "$f"; continue; }
+    if [ -z "${pid:-}" ] || ! kill -0 "$pid" 2>/dev/null; then
+      if [ -n "${base:-}" ] && [ -d "$base" ]; then
+        for d in "$base"/worker-*; do
+          [ -d "$d" ] || continue
+          ADRT_STATE_DIR="$d" bash "$NESTED" stop >/dev/null 2>&1 || true
+        done
+      fi
+      rm -f "$f"
+    fi
+  done
+}
+
+registry_live() {
+  registry_prune
+  local f pid w sum=0
+  for f in "$REGISTRY"/*; do
+    [ -e "$f" ] || continue
+    read -r pid w base < "$f" 2>/dev/null || continue
+    case "$w" in ''|*[!0-9]*) w=0 ;; esac
+    sum=$((sum + w))
+  done
+  printf '%s' "$sum"
+}
+
+# Take a slot, waiting while the budget is fully in use. `flock` stops two
+# coordinators reading a free budget at the same instant and both taking it.
+adopt_slot() {
+  local waited=0 limit="${ADRT_RUN_WAIT_S:-1800}" live allowed have_flock=0
+  command -v flock >/dev/null 2>&1 && have_flock=1
+  mkdir -p "$REGISTRY"
+  while :; do
+    if [ "$have_flock" = 1 ]; then exec 9>"$REGISTRY/.lock"; flock 9; fi
+    live="$(registry_live)"
+    allowed=$(( BUDGET - live ))
+    if [ "$allowed" -ge 1 ]; then
+      [ "$WORKERS" -gt "$allowed" ] && WORKERS="$allowed"
+      printf '%s %s %s\n' "$$" "$WORKERS" "$BASE_STATE" > "$REGISTRY/$RUN_ID"
+      [ "$have_flock" = 1 ] && { flock -u 9; exec 9>&-; }
+      if [ "$live" -gt 0 ]; then
+        echo "agent-test: $live nested worker(s) already running; taking $WORKERS of a $BUDGET budget"
+      fi
+      return 0
+    fi
+    if [ "$have_flock" = 1 ]; then flock -u 9; exec 9>&-; fi
+    if [ "$waited" -ge "$limit" ]; then
+      echo "agent-test: the nested-worker budget ($BUDGET) is still in use after ${waited}s" >&2
+      echo "agent-test: wait for the other run, or set ADRT_ALLOW_CONCURRENT=1 to overlap anyway" >&2
+      return 1
+    fi
+    [ "$waited" -eq 0 ] && echo "agent-test: waiting for nested-worker budget ($BUDGET); another run is active"
+    sleep 2
+    waited=$((waited + 2))
+  done
+}
+
 scenario_files() {
   local script
   for script in "$AGENT_DIR"/A[0-9][0-9]*.sh; do
@@ -97,7 +183,12 @@ rm -f "$BASE_STATE"/worker-*.out "$BASE_STATE"/worker-*.results.txt 2>/dev/null 
 echo "== preflight (lint, build, core tests) =="
 ( cd "$ROOT" && npm run lint ) > "$BASE_STATE/lint.out" 2>&1 &
 LINT_PID=$!
-( cd "$ROOT" && npm run build ) > "$BASE_STATE/build.out" 2>&1 &
+mkdir -p "$REGISTRY"
+if [ "$HAVE_FLOCK" = 1 ]; then
+  ( cd "$ROOT" && flock "$BUILD_LOCK" npm run build ) > "$BASE_STATE/build.out" 2>&1 &
+else
+  ( cd "$ROOT" && npm run build ) > "$BASE_STATE/build.out" 2>&1 &
+fi
 BUILD_PID=$!
 ( cd "$ROOT" && npm run test:core ) > "$BASE_STATE/core.out" 2>&1 &
 CORE_PID=$!
@@ -116,12 +207,26 @@ if [ "$BUILD_RC" -ne 0 ]; then
   exit 1
 fi
 
+# Install from a private snapshot: another run may rebuild the shared `dist/`
+# while our workers are copying it, which would otherwise hand them a half-written
+# tree.
+rm -rf "$BASE_STATE/dist"
+cp -r "$ROOT/dist" "$BASE_STATE/dist"
+export ADRT_DIST="$BASE_STATE/dist"
+
 mapfile -t ALL < <(scenario_files)
 if [ "${#ALL[@]}" -eq 0 ]; then
   echo "agent-test: no scenarios matched '${FILTER}'" >&2
   exit 1
 fi
 [ "$WORKERS" -gt "${#ALL[@]}" ] && WORKERS=${#ALL[@]}
+if [ "${ADRT_ALLOW_CONCURRENT:-0}" = "1" ]; then
+  echo "agent-test: ADRT_ALLOW_CONCURRENT=1 — overlapping other nested runs on purpose"
+else
+  adopt_slot || exit 3
+  trap 'rm -f "$REGISTRY/$RUN_ID"' EXIT
+  [ "$WORKERS" -gt "${#ALL[@]}" ] && WORKERS=${#ALL[@]}
+fi
 echo
 bash "$ROOT/scripts/notify.sh" "Adrt — tests starting" "${#ALL[@]} scenarios, $WORKERS nested Shells" utilities-system-monitor normal 1 4000
 echo "== running ${#ALL[@]} scenarios across $WORKERS nested Shells ($(( WORKERS * 100 / ( $(nproc 2>/dev/null || echo 4) ) ))% of cores) =="
@@ -137,7 +242,7 @@ for ((i = 0; i < WORKERS; i++)); do
   LISTS[$i]="$shard"
   ADRT_WORKER=1 ADRT_WORKER_INDEX="$i" \
     ADRT_STATE_DIR="$BASE_STATE/worker-$i" \
-    ADRT_WAYLAND_DISPLAY="wayland-adrt-$i" \
+    ADRT_WAYLAND_DISPLAY="${WAYLAND_NS}-$i" \
     ADRT_SCENARIO_LIST="$shard" \
     bash "$0" > "$BASE_STATE/worker-$i.out" 2>&1 &
   PIDS[$i]=$!
