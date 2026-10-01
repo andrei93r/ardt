@@ -48,5 +48,5 @@ if r["width"] < area["width"] - 2 or r["height"] < area["height"] - 2:
 print("fills the work area")
 ' 20
 
-ensure_clean
+session_cleanup
 summary

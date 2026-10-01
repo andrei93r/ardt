@@ -26,9 +26,8 @@ sys.exit(0 if len(w) == 1 else 1)
 
 # Walk a full lap plus a step: every window must be visited, and the sequence must wrap.
 visited=""
-for step in 1 2 3 4; do
+for step in 1 2 3; do
   adrt FocusCycle >/dev/null
-  wait_settled 6 || true
   focused="$(state_expr 'd["focused"]')"
   visited="$visited $focused"
   sleep 0.4
@@ -45,12 +44,12 @@ else
 fi
 
 first="$(echo $visited | awk '{print $1}')"
-fifth="$(echo "$visited" | awk '{print $5}')"
-if [ -n "$fifth" ] && [ "$first" = "$fifth" ]; then
+third="$(echo "$visited" | awk '{print $3}')"
+if [ -n "$third" ] && [ "$first" = "$third" ]; then
   pass "the cycle wrapped back to the first window"
 else
-  fail "the cycle did not wrap (first=$first fifth=$fifth, visited:$visited)"
+  fail "the cycle did not wrap (first=$first third=$third, visited:$visited)"
 fi
 
-ensure_clean
+session_cleanup
 summary

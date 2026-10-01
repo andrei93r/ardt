@@ -39,5 +39,5 @@ if not n["maximized"]:
 print("newcomer maximized, refusing client minimized")
 ' 25
 
-ensure_clean
+session_cleanup
 summary

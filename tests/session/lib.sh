@@ -251,6 +251,13 @@ summary() {
   assert_tiling_coherent
   session_cleanup
   echo
-  echo "checks=$checks failures=$failures"
+    bash "$NOTIFY" "Adrt — test verdict: $([ "$failures" -eq 0 ] && echo PASS || echo FAIL)" "$(basename "${0:-scenario}" .sh) — checks=$checks failures=$failures" "$([ "$failures" -eq 0 ] && echo dialog-information || echo dialog-error)" "$([ "$failures" -eq 0 ] && echo normal || echo critical)"
+echo "checks=$checks failures=$failures"
   [ "$failures" -eq 0 ]
 }
+
+# ------------------------------------------------------------------- progress
+# The user asked for a toast per test: one when it starts, naming it, and one with
+# the verdict when it ends. `$0` is the scenario that sourced this library.
+NOTIFY="$ROOT_DIR/scripts/notify.sh"
+[ -f "$NOTIFY" ] && bash "$NOTIFY" "Adrt — test started" "$(basename "${0:-scenario}" .sh)" utilities-system-monitor

@@ -4,6 +4,9 @@
 # notification daemon must never fail a test run.
 #   notify.sh "title" "body" [icon] [urgency]
 set -uo pipefail
+# Always the real desktop: a nested test shell has its own bus, so address the
+# user's session bus explicitly instead of inheriting the nested one.
+export DBUS_SESSION_BUS_ADDRESS="${ADRT_LIVE_BUS:-unix:path=${XDG_RUNTIME_DIR:-/run/user/1000}/bus}"
 title="${1:-Adrt}"; body="${2:-}"; icon="${3:-utilities-terminal}"; urgency="${4:-normal}"
 if command -v notify-send >/dev/null 2>&1; then
   notify-send --app-name=Adrt --icon="$icon" --urgency="$urgency" "$title" "$body" >/dev/null 2>&1
