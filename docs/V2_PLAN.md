@@ -149,11 +149,15 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 > scenarios retired with the replacement named. Full suite: **92 scenarios, 0 failures, 6
 > recorded skips** (A40/A50/A53/A59 retired, A81 needs four screens, A106 needs two), plus
 > a real GNOME 50 bug fixed on the way (`get_min_size`/`get_max_size` return a leading
-> boolean — every client minimum had been read wrong). Still open in this stage: routing is
-> invoked from the deferred `onReady` timeout rather than literally from the lane-2 drain;
-> the refusal ladder's "sibling adapts" step still rides the tiler's clamp (A52); the
-> cross-screen arrival side rule is covered by A117 only for workspaces. Stages 3–8 are in
-> progress in parallel work packages; the plan ticks them as they land.
+> boolean — every client minimum had been read wrong). **Closed after this note was written**
+> (branch `v2/adapter-leftovers`, merged as `1a5034a`): routing is decided **in the lane-2
+> drain** (a pending window holds no slot until the drain places it); the refusal ladder's
+> sibling-adapt step is wired (`refusalLadder`/`impossibleSplit` — the sibling takes the
+> remainder, and only when it cannot does the reactor give way); a cross-**screen** arrival
+> takes the side it came from at the monitor signal (A124, two-screen, skips on one screen
+> with a reason); the focus cycle **snapshots its lap**, so the stacking rule for perfect
+> overlaps survives a raise; and the cross-screen move arrives on the monitor signal
+> instead of a 40-step retry counter. `A34` was confirmed passing 3× and needed no change.
 
 **Failing scenarios first**
 
