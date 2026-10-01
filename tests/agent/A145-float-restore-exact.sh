@@ -11,7 +11,7 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 screens="$(screen_count)"
 if [ "$screens" -ne 2 ]; then
-  skip "A143-float-restore-exact: needs exactly 2 screens (this harness has $screens)"
+  skip "A145-float-restore-exact: needs exactly 2 screens (this harness has $screens)"
   exit 0
 fi
 

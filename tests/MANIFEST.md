@@ -79,7 +79,7 @@ Totals: 137 agent scenarios, 23 session scenarios.
 | `A142-topology-cases` | headless | any monitor count | topology $sig present, this case needs $expect; topology $sig present, this case needs a canonical 1-4 screen topology | ActivateWindow, MinimizeWindow |
 | `A143-reconnect-restores-float` | headless | — | A143 needs two monitors to exercise a float reconnect; A143-reconnect-restores-float: needs exactly 2 screens (this harness has $screens) | ActivateWindow, GetDisplayMemory, SimulateScreens, ToggleFloat |
 | `A144-fractional-scaling` | headless | — | A143-fractional-scaling: needs a single screen (SimulateScreens replaces the list) | SimulateScreens |
-| `A145-float-restore-exact` | headless | — | A143 needs two monitors to exercise a float rescue; A143-float-restore-exact: needs exactly 2 screens (this harness has $screens) | MoveWindow, SimulateScreens, ToggleFloat |
+| `A145-float-restore-exact` | headless | — | A143 needs two monitors to exercise a float rescue; A145-float-restore-exact: needs exactly 2 screens (this harness has $screens) | MoveWindow, SimulateScreens, ToggleFloat |
 | `A15-adaptation` | headless | — | — | ForgetApp |
 | `A16-config-export` | headless | — | — |  |
 | `A17-config-import` | headless | — | — | ImportConfig |
