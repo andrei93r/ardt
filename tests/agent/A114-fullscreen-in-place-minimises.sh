@@ -19,6 +19,12 @@ ids=($(list_ids))
 A="${ids[0]}"
 B="${ids[1]}"
 
+adrt ActivateWindow "$B" >/dev/null
+wait_python 10 '
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if d["focused"] == int("'"$B"'") else 1)' || true
+
 adrt ToggleFullscreen "$B" >/dev/null
 
 poll "fullscreen stays in place and minimizes the other window" '
@@ -37,6 +43,12 @@ if d["workspaces"] != 1:
 print("fullscreen in place on ws", b[0]["workspace"])
 ' 20
 
+poll "the fullscreen window is not highlighted" '
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if not d["border"]["visible"] and "fullscreen" in d["indicator"]["suppressed"] else 1)
+' 12
+
 adrt ToggleFullscreen "$B" >/dev/null
 
 poll "leaving fullscreen restores the pair" '
@@ -49,6 +61,12 @@ if d["workspaces"] != 1:
     print("workspaces", d["workspaces"]); sys.exit(1)
 print("restored pair", [(w["id"], w["slot"]) for w in ws])
 ' 25
+
+poll "the highlight returns after fullscreen" '
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if d["border"]["visible"] and "fullscreen" not in d["indicator"]["suppressed"] else 1)
+' 12
 
 ensure_clean
 summary
