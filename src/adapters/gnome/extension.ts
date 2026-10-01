@@ -1560,6 +1560,7 @@ export default class AdrtExtension extends Extension {
         reason: this.session.classify(tracked).reason,
         profile: tracked.profile.name,
         stubborn: tracked.stubborn,
+        clamped: tracked.clamped,
         min: tracked.minSize,
         max: tracked.maxSize,
       };

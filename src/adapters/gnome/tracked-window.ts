@@ -54,6 +54,11 @@ export class TrackedWindow {
   refusals = 0;
   stubborn = false;
   cooldownUntilMs = 0;
+  /**
+   * True when the last clamp-to-screen pass moved this window back inside its
+   * monitor's full geometry (a diagnostic; DumpState reports it).
+   */
+  clamped = false;
   /** True when Adrt floated this window itself (a no-room placement) rather
    * than the user asking for it. */
   autoFloated = false;

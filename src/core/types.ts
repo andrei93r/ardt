@@ -143,6 +143,36 @@ export function clamp(value: number, min: number, max: number): number {
   return value;
 }
 
+/**
+ * Keep a rectangle inside an area: the pure geometry behind "windows stay on
+ * the screen".
+ *
+ * Returns `rect` unchanged (the same object, so the hot path allocates nothing)
+ * when it already lies fully inside `area` — inside is inclusive, so a window
+ * touching every edge is not moved. Otherwise the rectangle is first shrunk to
+ * the area when it is larger than it, then moved the smallest distance that
+ * puts it fully inside. The result has integer coordinates and never a negative
+ * width or height; an empty area yields an empty rectangle at the area origin.
+ */
+export function clampRectToArea(rect: Rect, area: Rect): Rect {
+  const inside =
+    rect.width >= 0 &&
+    rect.height >= 0 &&
+    rect.x >= area.x &&
+    rect.y >= area.y &&
+    rect.x + rect.width <= area.x + area.width &&
+    rect.y + rect.height <= area.y + area.height;
+  if (inside) return rect;
+  const width = Math.max(0, Math.min(rect.width, area.width));
+  const height = Math.max(0, Math.min(rect.height, area.height));
+  return {
+    x: Math.round(clamp(rect.x, area.x, area.x + area.width - width)),
+    y: Math.round(clamp(rect.y, area.y, area.y + area.height - height)),
+    width: Math.round(width),
+    height: Math.round(height),
+  };
+}
+
 /** Snap a logical-pixel value to the monitor scale grid (§25). */
 export function snap(value: number, scale: number): number {
   if (scale <= 1) return value;

@@ -51,6 +51,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
     group.add(this.entryRow(settings, 'exception-apps', 'Exception apps', 'Comma-separated globs.'));
     group.add(this.switchRow(settings, 'adaptation-enabled', 'Adapt to problem windows'));
     group.add(this.switchRow(settings, 'float-persistence', 'Remember floats per app'));
+    group.add(this.switchRow(settings, 'clamp-windows-to-screen', 'Keep windows inside the screen'));
     group.add(this.switchRow(settings, 'cursor-follows-focus', 'Move the pointer to each focused window'));
     page.add(group);
 

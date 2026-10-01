@@ -39,7 +39,7 @@ import { computePlans, effectiveGap, ratioKey, screenArea } from '../../core/til
 import type { FocusDirection } from '../../core/focus.js';
 import { cycleOrder, cycleSequence, pickDirectional } from '../../core/focus.js';
 import type { CycleEntry } from '../../core/focus.js';
-import { Layer } from '../../core/types.js';
+import { Layer, clampRectToArea, rectEquals } from '../../core/types.js';
 import type { Rect, Screen, TilePlan } from '../../core/types.js';
 import * as compat from './compat.js';
 import type { GnomeHost } from './host.js';
@@ -164,6 +164,8 @@ export class WindowSession {
   private sweepFrameReads = 0;
   private sweepMsTotal = 0;
   private sweepMsMax = 0;
+  /** Frames the clamp-to-screen pass pulled back inside a monitor. */
+  private clampsApplied = 0;
   /**
    * §6/§17: the fixed order of the focus-cycle lap in progress, and the last
    * window it focused. A lap is built once (from the live stacking order) and
@@ -1418,6 +1420,10 @@ export class WindowSession {
     for (const tracked of this.windows.values()) {
       if (!seen.has(tracked.surface.workspaceId)) this.retile(tracked.surface.workspaceId, reason, true, rememberUndo);
     }
+    // Keep every window inside its own monitor's full geometry (the whole
+    // surface, not the work area) — a property of the pass, not a reaction to
+    // the move that put it out of bounds.
+    this.clampWindowsToScreen();
     this.deps.onModelEvent?.('layout', { reason });
     this.deps.onStateChanged();
   }
@@ -3208,6 +3214,47 @@ export class WindowSession {
   }
 
   /**
+   * Keep every tracked window inside its own monitor's **full geometry** (the
+   * whole screen surface, not the work area). A property re-derived by the
+   * lane-2 drain and the periodic coherence sweep, never a one-shot reaction to
+   * a move, so a window dragged out of bounds is clamped on the next pass after
+   * the drag ends and dragging still feels free.
+   *
+   * Fullscreen windows (they own the screen) and minimized windows (Mutter
+   * manages their frame) are skipped. A tiled/maximized window is already inside
+   * the work area, so in practice the clamp only ever fires for a manual float.
+   * It is idempotent — a window already inside is untouched — and it reuses the
+   * tiler's bounded retry/refusal path for a window that refuses the geometry,
+   * so it can never loop or fight a stubborn client.
+   */
+  private clampWindowsToScreen(): void {
+    if (!this.deps.settings.boolean('clamp-windows-to-screen', true)) return;
+    // No clamping mid-drag: the user owns the geometry until the gesture ends.
+    if (this.dragging || this.adjustId !== null) return;
+    for (const tracked of this.windows.values()) {
+      const flags = tracked.surface.flags;
+      if (flags.fullscreen || flags.minimized || tracked.stubborn) {
+        tracked.clamped = false;
+        continue;
+      }
+      const screen = this.screenFor(tracked.surface.screenId);
+      if (screen === null) continue;
+      tracked.refreshFrame();
+      const current = tracked.surface.frame;
+      const clamped = clampRectToArea(current, screen.geometry);
+      if (rectEquals(current, clamped)) {
+        tracked.clamped = false;
+        continue;
+      }
+      tracked.clamped = true;
+      this.clampsApplied += 1;
+      this.deps.history.log('clamp_to_screen', { id: tracked.id, from: current, to: clamped });
+      this.deps.tiling.noteSelfApply();
+      this.deps.tiling.applyFrame(tracked, clamped, screen, false, 'clamp-to-screen', 0);
+    }
+  }
+
+  /**
    * §35: periodic coherence guarantee. A normal (non-floating, non-modal)
    * window on a workspace with a sibling must be tiled. If one was left untiled
    * — a refused apply, a missed signal, a `stubborn` record — push the plan
@@ -3222,6 +3269,9 @@ export class WindowSession {
       return;
     }
     if (this.dragging || this.adjustId !== null) return;
+    // The backstop for a clamp the lane-2 drain missed: an off-screen window is
+    // pulled back here even if no frame signal scheduled a reconcile.
+    this.clampWindowsToScreen();
     this.coherenceRuns += 1;
     const sweepStartedUs = GLib.get_monotonic_time();
     const count = global.workspace_manager.get_n_workspaces();
@@ -3334,6 +3384,7 @@ export class WindowSession {
     applyMsP50: number;
     applyMsP95: number;
     applySamples: number;
+    clampsApplied: number;
   } {
     const round = (value: number): number => Math.round(value * 1000) / 1000;
     return {
@@ -3352,6 +3403,7 @@ export class WindowSession {
       applyMsP50: round(percentile(this.applySamples, 0.5)),
       applyMsP95: round(percentile(this.applySamples, 0.95)),
       applySamples: this.applySamples.length,
+      clampsApplied: this.clampsApplied,
     };
   }
 
