@@ -773,6 +773,10 @@ never debug-gated (the deduplication and rate limits still apply).
     minimized on a single-workspace screen. On the laptop this means "open B, B
     maximizes, A is minimized"; restoring A makes it the trigger and reverses the two.
 
+63. **The trade is symmetric** (round scenario 4, confirmed): restoring the minimized
+    window makes it the trigger, so it takes the screen maximized and the other is
+    minimized, as many times as they trade.
+
 ## Deliberate non-goals
 
 
