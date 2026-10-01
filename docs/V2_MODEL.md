@@ -692,6 +692,10 @@ happens. All default off, deduplicated and rate-limited per event.
 50. **Maximizing a float** (test scenario S22): the float maximizes in place, on top of
     the tiling, and stays a float. adrt neither un-floats it nor gives it a workspace.
 
+51. **A resizing client keeps its minimum** (test scenario S23): dragging the inner
+    edge past a client's minimum stops at that minimum and the sibling takes the rest;
+    nothing is created, nothing floats, and the refusing window is not moved.
+
 ## Deliberate non-goals
 
 
