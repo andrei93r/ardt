@@ -21,10 +21,8 @@
 #   the four-monitor matrix                          A81-four-monitors
 #   every configured screen (1 to 4), any arrangement, keeps its own axis and
 #   contains its windows, gated by topology signature          #   the same, gated by an exact declared signature so it can be driven
-#   combination-by-combination by scripts/topology-matrix.sh   A142-topology-cases
 
 A105-per-screen-axis
-A142-topology-cases
 A106-no-cross-monitor-exile
 A107-cross-monitor-drag-takes-the-free-slot-or-swaps
 A108-maximised-drag-still-maximised-at-drop
