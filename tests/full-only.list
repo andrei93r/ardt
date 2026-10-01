@@ -1,0 +1,130 @@
+# full-only.list — scenarios deliberately kept out of every smoke list.
+#
+# The smoke (tests/*/smoke.list + smoke-multi.list) is a curated, fast "is this
+# build sane" subset: roughly one representative per feature area. Everything
+# else stays in the full suite, which is still the release gate. This file is
+# what makes that deliberate rather than accidental: scripts/check-test-coverage.py
+# fails when a scenario file is neither in a smoke list nor named here, so a new
+# scenario can never drift in without a decision (smoke entry, or a reason here).
+#
+# Format: `# reason: <text>` starts a group; every scenario id below it shares
+# that reason until the next `reason:` line. Blank lines and `#` comments are
+# ignored. An id must name an existing tests/agent/A*.sh or tests/session/S*.sh.
+#
+# See tests/coverage.map for the feature -> scenario -> smoke map.
+
+# reason: full-suite regression coverage — the curated smoke keeps one
+#   representative per feature area for speed; this scenario stays in the
+#   release gate.
+A08-pair-swap
+A32-swap-drag
+A05-unmaximize
+A15-adaptation
+A10-nudge-split
+A36-close-ghost
+A29-frame-timing
+A51-prune-safety
+A03-lone-maximize
+A06-focus-follows
+A16-config-export
+A17-config-import
+A20-gesture-pinch
+A26-shell-restart
+A30-memory-bounds
+A31-swap-keyboard
+A33-reconcile-all
+A82-event-journal
+A123-session-modes
+A14-monitor-change
+A27-session-unlock
+A28-screen-sharing
+A07-inner-edge-drag
+A25-settings-change
+A37-overview-border
+A38-indicator-style
+A48-periodic-retile
+A12-workspace-switch
+A21-gesture-disabled
+A99-neverTile-floats
+A73-lost-drag-release
+A75-overview-patterns
+A76-workspace-runaway
+A19-gesture-3-vertical
+A77-clamped-drop-swaps
+A84-burst-single-drain
+A87-nothing-is-evicted
+A34-app-maximized-pairs
+A63-client-text-bounded
+A39-keybinding-conflicts
+A65-logging-and-rotation
+A66-performance-counters
+A85-right-slot-and-split
+A60-stuck-switch-watchdog
+A93-empty-workspace-reaped
+A129-opened-maximized-pairs
+A52-adaptation-no-bogus-min
+A118-nothing-happened-toasts
+A126-third-maximized-arrival
+A95-restore-onto-full-floats
+A55-overview-move-pair-member
+A86-create-right-and-maximise
+A88-maximise-owns-a-workspace
+A119-float-key-leaves-in-place
+A120-dialog-centred-and-raised
+A128-switch-suppression-clears
+A45-maximize-right-return-left
+A102-undo-toasts-when-impossible
+A104-queue-depth-returns-to-zero
+A42-dialog-does-not-disturb-pair
+A115-look-empty-workspace-is-free
+A41-same-app-second-window-splits
+A100-placements-survive-recreation
+A114-fullscreen-in-place-minimises
+A94-overview-drop-onto-full-floats
+A92-single-workspace-split-then-float
+A97-drop-onto-single-maximised-splits
+A46-finish-focus-nearest-left-or-right
+A62-minimize-onto-pair-stays-minimized
+A89-maximise-in-place-minimises-others
+A43-close-last-window-removes-workspace
+A47-border-hides-during-workspace-switch
+S09-periodic-retile
+S13-overview-workspace-move
+
+# reason: retired in v2 — the scenario asserts the replaced v1 model and skips
+#   with its own explanation; kept only so the retirement is visible.
+A40-unmaximize-float-over-pair
+A44-focus-direction-fallback
+A50-unmaximize-returns-left-floating
+A53-no-floating-leftover
+A59-auto-float-pulled-back
+S11-unmaximize-float-over-pair
+S12-focus-fallback
+S14-tiling-model
+
+# reason: opt-in long churn run — only runs with ADRT_LONG_RUN=1, by design.
+A125-long-mixed-run
+
+# reason: superseded by A142-topology-cases, which drives the same rule per
+#   topology signature.
+A137-screen-topology
+
+# reason: needs injected input or the platform probe; the nested harness sets
+#   ADRT_INJECT, but these are not a representative user-facing smoke.
+A22-keybinding-undo
+A23-keybinding-focus
+A24-keybinding-float
+A80-platform-probe
+A83-injected-drag-is-event-confirmed
+
+# reason: describes exactly one screen; the default smoke is already a
+#   single-screen run, and the matrix runs cover the other counts, so it stays
+#   in the full gate rather than duplicating the smoke's one configuration.
+A113-trigger-wins-and-trades
+A116-escape-clamped-own-workspace
+
+# reason: needs hardware the nested harness cannot provide (ydotool / a physical
+#   dock), or is a recorded test gap.
+S08-keybindings
+S17-dock-drill
+S18-trigger-wins
