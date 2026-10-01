@@ -38,8 +38,8 @@ def scan(path):
 
 
 def main():
-    agent = sorted(f for f in os.listdir(f"{ROOT}/tests/agent") if re.match(r"A\d\d-.*\.sh$", f))
-    session = sorted(f for f in os.listdir(f"{ROOT}/tests/session") if re.match(r"S\d\d-.*\.sh$", f))
+    agent = sorted(f for f in os.listdir(f"{ROOT}/tests/agent") if re.match(r"A\d+-.*\.sh$", f))
+    session = sorted(f for f in os.listdir(f"{ROOT}/tests/session") if re.match(r"S\d+-.*\.sh$", f))
     rows = []
     for group, files, folder, target in (
         ("agent (nested Shell)", agent, "agent", "headless"),

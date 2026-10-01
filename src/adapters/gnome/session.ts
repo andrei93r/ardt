@@ -15,8 +15,12 @@ import { wm } from 'resource:///org/gnome/shell/ui/main.js';
 import type { HeuristicContext } from '../../core/classify.js';
 import { classifyAdjust } from '../../core/adjust.js';
 import type { AdjustMode } from '../../core/adjust.js';
-import { RateBudget } from '../../core/budget.js';
 import { EventQueue } from '../../core/queue.js';
+import {
+  escapeSize, maximizeWindow, routeNewWindow, unmaximizeWindow, windowCount,
+} from '../../core/placement.js';
+import type { Axis, Env, Placement, ScreenClass, State, Win, Ws } from '../../core/placement.js';
+import { reapPlan } from '../../core/workspaces.js';
 
 /** §10: how long a maintenance pass waits for the surface to settle. */
 const MAINTENANCE_SETTLE_MS = 200;
@@ -51,6 +55,8 @@ export interface SessionDeps {
   onDragChanged(dragging: boolean): void;
   /** The window is being moved to another workspace: hide the border now. */
   onWindowMoving(): void;
+  /** Raise a decision notification (§21); the extension owns the gate. */
+  onNotice?(key: string, subject: string): void;
   /** Whether any window is mid-animation (the drain waits for it rather than
    * applying a frame onto a moving surface). */
   isAnimating?: () => boolean;
@@ -69,18 +75,6 @@ const ADJUST_SETTLE_MS = 150;
  * another actor — would otherwise freeze the layout until the next real drag.
  */
 const DRAG_STALE_MS = 2500;
-/**
- * How long a window that was just sent to its own workspace is left alone.
- * Exiling the *same* window over and over is always a bug (a workspace reorder
- * re-entering the policy), and it is what once produced 86 workspaces in a
- * second; after one exile the window waits this long before it can be exiled
- * again, so the cycle cannot close.
- */
-const EXILE_COOLDOWN_MS = 3000;
-/** Containment: the most workspaces Adrt will create in a rolling window. */
-const SPAWN_BUDGET = 12;
-const SPAWN_WINDOW_MS = 10_000;
-
 export class WindowSession {
   readonly windows = new Map<number, TrackedWindow>();
   private readonly signals = new Map<number, WindowSignal[]>();
@@ -99,8 +93,6 @@ export class WindowSession {
   private drains = 0;
   private drainMsMax = 0;
   private readonly timeoutSources = new Set<number>();
-  /** Workspaces this extension created; empty ones are removed again (§16). */
-  private readonly dynamicWorkspaces = new Set<number>();
   private reorderSignal = 0;
   private displaySignals: number[] = [];
   private managerSignals: number[] = [];
@@ -110,17 +102,12 @@ export class WindowSession {
   private dragStartRect: Rect | null = null;
   /** When the dragged window last changed geometry (stale-drag watchdog). */
   private dragLastActivityMs = 0;
-  /**
-   * Depth of a workspace mutation we are performing. Mutter's
-   * `append_new_workspace`/`reorder_workspace`/`remove_workspace` emit
-   * `workspaces-reordered` synchronously, which used to re-enter the exile
-   * policy from inside itself.
-   */
-  private workspaceOpDepth = 0;
-  /** Containment for workspace creation (see SPAWN_BUDGET). */
-  private readonly spawnBudget = new RateBudget(SPAWN_BUDGET, SPAWN_WINDOW_MS);
   /** True while a compositor state makes tiling pointless (the overview). */
   private suspended = false;
+  /** `org.gnome.mutter`, the authority on the screen classes (§1). */
+  private mutterSettings: any = null;
+  /** The static workspace count (`org.gnome.desktop.wm.preferences`). */
+  private wmPreferencesSettings: any = null;
   private adjustId: number | null = null;
   private adjustSource: number | null = null;
   /** While set, plan-mismatch re-applies are suppressed (e.g. right after Undo). */
@@ -165,7 +152,7 @@ export class WindowSession {
       global.display.connect('notify::focus-window', () => this.scheduleReconcile('focus')),
     );
     this.managerSignals.push(
-      global.workspace_manager.connect('active-workspace-changed', () => this.retileEverywhere('workspace-active')),
+      global.workspace_manager.connect('active-workspace-changed', () => this.scheduleReconcile('workspace-active')),
       global.workspace_manager.connect('workspace-added', () => this.scheduleReconcile('workspace-added')),
       global.workspace_manager.connect('workspace-removed', () => this.scheduleReconcile('workspace-removed')),
       global.workspace_manager.connect('notify::n-workspaces', () => this.scheduleReconcile('workspace-count')),
@@ -297,6 +284,7 @@ export class WindowSession {
     const other = sibling.surface.frame;
     if (!this.landsOn(rect, other)) return;
     this.deps.tiling.toggleSwap(tracked.id, sibling.id);
+    this.clearPendingSlots(tracked.id, sibling.id);
     this.deps.history.log('swap', { a: tracked.id, b: sibling.id, reason: 'drag' });
   }
 
@@ -415,30 +403,245 @@ export class WindowSession {
     }
 
     const workspaceId = tracked.surface.workspaceId;
-    const siblings = this.tileables(workspaceId).filter((t) => t.id !== tracked.id);
-    // A workspace holds at most one pair. A third tileable always gets its own
-    // workspace, however it opened — including an app that opens maximized.
-    if (siblings.length >= 2) {
-      if (!this.moveToNewWorkspace(tracked, false)) this.floatOverPair(tracked);
-      return;
-    }
+    const siblings = this.tileables(workspaceId).filter(
+      (t) => t.id !== tracked.id && t.surface.screenId === tracked.surface.screenId,
+    );
     if (compat.isFullyMaximized(tracked.win) && siblings.length > 0) {
-      // An app that opens maximized (Nautilus, Files, …) is tiled with the
-      // siblings instead of being exiled. A user-initiated maximize still gets
-      // its own workspace via `onMaximizeSignal`.
+      // §16: an app that opens maximized (Nautilus, Files, …) is not a user
+      // maximize: it is unmaximized and tiled with its sibling. A user-requested
+      // maximize still gets its own workspace through `onMaximizeSignal`.
       this.deps.tiling.noteSelfApply();
-      this.deps.host.unmaximize(tracked.id);
+      tracked.selfUnmaximize = true;
+      try {
+        this.deps.host.unmaximize(tracked.id);
+      } finally {
+        tracked.selfUnmaximize = false;
+      }
       tracked.surface.refresh();
-      this.evaluateLoneMaximize(workspaceId);
       this.scheduleReconcile('register-unmaximize');
       return;
     }
-    if (!compat.isMaximized(tracked.win) && siblings.length >= 2) {
-      if (!this.moveToNewWorkspace(tracked, false)) this.floatOverPair(tracked);
+    // §3: the routing decision comes from the pure model; the adapter applies it.
+    this.routeWindow(tracked);
+  }
+
+  // ------------------------------------------------------------- v2 model
+
+  /** The split axis of a screen: portrait or vertical workspaces stack (§1). */
+  private axisFor(screenId: number): Axis {
+    const rows = global.workspace_manager.layout_rows;
+    if (rows === -1) return 'vertical';
+    if (rows > 0) return 'horizontal';
+    const screen = this.screenFor(screenId);
+    return screen === null || screen.geometry.width >= screen.geometry.height ? 'horizontal' : 'vertical';
+  }
+
+  /**
+   * §1: which class a screen is in, read from GNOME — never from internal vs
+   * external. Dynamic workspaces off with one workspace is single-workspace;
+   * off with two or more is fixed; on, every screen can host workspaces unless
+   * `workspaces-only-on-primary` restricts them to the primary.
+   */
+  screenClass(screenId: number): ScreenClass {
+    let dynamic = true;
+    let numWorkspaces = 1;
+    let onlyPrimary = true;
+    try {
+      if (this.mutterSettings === null) this.mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
+      dynamic = this.mutterSettings.get_boolean('dynamic-workspaces');
+      onlyPrimary = this.mutterSettings.get_boolean('workspaces-only-on-primary');
+      // The static workspace count lives in the wm preferences, not mutter.
+      if (this.wmPreferencesSettings === null) {
+        this.wmPreferencesSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.preferences' });
+      }
+      numWorkspaces = this.wmPreferencesSettings.get_int('num-workspaces');
+    } catch {
+      /* keep the defaults: GNOME's dynamic-workspace behaviour */
+    }
+    if (!dynamic) return numWorkspaces > 1 ? 'fixed' : 'single';
+    const screen = this.screenFor(screenId);
+    if (onlyPrimary && screen?.isPrimary !== true) return 'single';
+    return 'dynamic';
+  }
+
+  private placementEnv(screenId: number): Env {
+    return { screen: this.screenClass(screenId), axis: this.axisFor(screenId) };
+  }
+
+  /** §3: per workspace, the two visible slot occupants plus hidden windows. */
+  private buildPlacementState(excludeId: number | null = null): State {
+    const manager = global.workspace_manager;
+    const count = manager.get_n_workspaces();
+    const workspaces: Ws[] = [];
+    for (let index = 0; index < count; index++) workspaces.push({ id: index, slots: [null, null], minimized: [], floats: [] });
+    for (const tracked of [...this.windows.values()].sort((a, b) => a.id - b.id)) {
+      if (tracked.id === excludeId) continue;
+      const ws = workspaces[tracked.surface.workspaceId];
+      if (ws === undefined) continue;
+      const rec: Win = {
+        id: tracked.id,
+        minimized: tracked.surface.flags.minimized,
+        floating: tracked.surface.flags.floating || !this.classify(tracked).tileable,
+        maximized: tracked.surface.flags.maximized,
+        fullscreen: tracked.surface.flags.fullscreen,
+      };
+      if (rec.minimized === true) { ws.minimized.push(rec); continue; }
+      if (rec.floating === true) { ws.floats ??= []; ws.floats.push(rec); continue; }
+      if (ws.slots[0] === null) ws.slots[0] = rec;
+      else if (ws.slots[1] === null) ws.slots[1] = rec;
+      else { ws.floats ??= []; ws.floats.push(rec); }
+    }
+    return { workspaces, viewed: manager.get_active_workspace_index() };
+  }
+
+  /** §16: a managed window that obviously cannot fit its share. */
+  private doesNotFit(tracked: TrackedWindow, env: Env): boolean {
+    // When the user has asked us to ignore minimum sizes, nothing is too big to
+    // share; the escape is only for a client that insists on its size.
+    if (this.deps.settings.string('min-size-policy', 'respect') !== 'respect') return false;
+    const screen = this.screenFor(tracked.surface.screenId);
+    if (screen === null) return false;
+    // Size hints can arrive after the first frame; re-read them while they are
+    // still unknown so a client that insists on a large minimum is recognised.
+    if (tracked.minSize.width === 0 || tracked.minSize.height === 0) tracked.refreshSizeHints();
+    const tilerWindow = this.toTilerWindow(tracked);
+    const min = tilerWindow.min;
+    const max = tilerWindow.max;
+    if (min.width > 0 && min.height > 0 && max.width > 0 && max.height > 0 &&
+        min.width >= max.width - 1 && min.height >= max.height - 1) {
+      return true; // fixed size: min == max
+    }
+    const area = screenArea(screen);
+    const half = (env.axis === 'vertical' ? area.height : area.width) / 2;
+    const span = env.axis === 'vertical' ? min.height : min.width;
+    return half > 0 && span > half;
+  }
+
+  /** §3: route a newly opened window through the pure model, then apply it. */
+  private routeWindow(tracked: TrackedWindow): void {
+    const own = tracked.surface.workspaceId;
+    const env = this.placementEnv(tracked.surface.screenId);
+    const state = this.buildPlacementState(tracked.id);
+    if (this.doesNotFit(tracked, env)) {
+      // §16: the escape rule — its own workspace, sized to itself.
+      this.escapeTracked(tracked);
       return;
     }
-    this.evaluateLoneMaximize(workspaceId);
-    this.scheduleRetile(workspaceId, 'register');
+    const rec: Win = {
+      id: tracked.id,
+      minimized: false,
+      floating: false,
+      maximized: tracked.surface.flags.maximized,
+      fullscreen: tracked.surface.flags.fullscreen,
+    };
+    const placement = routeNewWindow(state, env, rec, null, own, false);
+    this.applyPlacement(tracked, placement, own === state.viewed, 'route');
+  }
+
+  /**
+   * Apply a placement decision to Mutter. The view follows only the app the
+   * action is about, and only when the caller says so (§3).
+   */
+  private applyPlacement(tracked: TrackedWindow, placement: Placement, follow: boolean, reason: string): void {
+    const id = tracked.id;
+    let workspaceId = placement.workspace;
+    if (placement.createRight === true) {
+      const created = this.createWorkspaceRight(placement.workspace);
+      if (created !== null) workspaceId = created;
+    }
+    const previous = tracked.surface.workspaceId;
+    if (workspaceId !== previous) {
+      this.moveWindowToWorkspace(tracked, workspaceId);
+      this.deps.history.log('ws_switch_empty', { id, from: previous, to: workspaceId, reason });
+    }
+    if (placement.float === true) {
+      this.floatWindow(tracked);
+      if (follow && workspaceId !== previous) this.instantSwitch(() => this.activateWorkspace(workspaceId));
+      return;
+    }
+    if (placement.minimize !== undefined) {
+      for (const mid of placement.minimize) {
+        this.deps.tiling.noteSelfApply();
+        this.deps.host.minimize(mid);
+      }
+    }
+    if (placement.maximize === true) {
+      if (placement.inPlace === true) {
+        this.maximizeInPlace(tracked);
+      } else {
+        this.deps.tiling.noteSelfApply();
+        this.deps.host.maximize(id);
+      }
+    } else if (placement.slot !== undefined) {
+      // A pair is forming: the slot the change chose is honoured (§3/§4), and a
+      // maximized occupant must unmaximize to share.
+      this.pinSlots(workspaceId, tracked, placement.slot);
+      this.unmaximizeOccupants(workspaceId, id);
+    }
+    if (follow && workspaceId !== previous) {
+      this.instantSwitch(() => this.activateWorkspace(workspaceId));
+    }
+    this.signatures.clearAll();
+    this.scheduleReconcile(`${reason}-settle`);
+  }
+
+  /** §4: maximize in place, minimizing the other managed windows on this monitor. */
+  private maximizeInPlace(tracked: TrackedWindow): void {
+    this.deps.tiling.noteSelfApply();
+    // Clear the others first, so nothing is left on top of the trigger.
+    for (const other of this.tileables(tracked.surface.workspaceId)) {
+      if (other.id === tracked.id) continue;
+      if (other.surface.screenId !== tracked.surface.screenId) continue;
+      this.deps.host.minimize(other.id);
+    }
+    this.deps.host.maximize(tracked.id);
+  }
+
+  /**
+   * §3/§4: pin the pair's slots so the tiler honours the side the change chose
+   * (a routed arrival's slot, an unmaximize joining slot 1). The other visible
+   * window takes the opposite side; stale pins on the workspace are cleared.
+   */
+  private pinSlots(workspaceId: number, tracked: TrackedWindow, slot: 0 | 1): void {
+    for (const other of this.windows.values()) {
+      if (other.surface.workspaceId !== workspaceId) continue;
+      if (other.surface.screenId !== tracked.surface.screenId) continue;
+      other.pendingSlot = null;
+    }
+    tracked.pendingSlot = slot;
+    const partner = this.tileables(workspaceId).find(
+      (t) => t.id !== tracked.id && t.surface.screenId === tracked.surface.screenId,
+    );
+    if (partner !== undefined) partner.pendingSlot = slot === 1 ? 0 : 1;
+  }
+
+  /** §3/§5: unmaximize a maximized window that must share its workspace. */
+  private unmaximizeOccupants(workspaceId: number, exceptId: number): void {
+    for (const other of this.tileables(workspaceId)) {
+      if (other.id === exceptId) continue;
+      if (!compat.isMaximized(other.win)) continue;
+      this.deps.tiling.noteSelfApply();
+      // This is our own unmaximize to let the pair form: mark it so the
+      // resulting signal does not run the user unmaximize ladder (A45).
+      other.selfUnmaximize = true;
+      try {
+        this.deps.host.unmaximize(other.id);
+      } finally {
+        other.selfUnmaximize = false;
+      }
+    }
+  }
+
+  /** §4: minimize or close the maximizer brings the others back. */
+  private restoreMinimizedOn(workspaceId: number, screenId: number): void {
+    for (const tracked of this.windows.values()) {
+      if (tracked.surface.workspaceId !== workspaceId) continue;
+      if (tracked.surface.screenId !== screenId) continue;
+      if (!tracked.surface.flags.minimized) continue;
+      if (!this.classify(tracked).tileable) continue;
+      this.deps.tiling.noteSelfApply();
+      this.deps.host.unminimize(tracked.id);
+    }
   }
 
   unregister(id: number): void {
@@ -583,6 +786,28 @@ export class WindowSession {
    * entries, so they can never mask the entry a user action pushed. */
   reconcileAll(reason: string, rememberUndo = false): void {
     if (this.deps.isPaused() || this.suspended || this.dragging || this.adjustId !== null) return;
+    // §4/§16: fullscreen and user-unmaximize transitions are re-derived here,
+    // never acted on inside the Mutter signal handler that reported them.
+    for (const tracked of [...this.windows.values()]) {
+      if (tracked.surface.flags.fullscreen !== tracked.fullscreenApplied) {
+        tracked.fullscreenApplied = tracked.surface.flags.fullscreen;
+        this.fullscreenTracked(tracked, tracked.fullscreenApplied);
+      }
+      if (tracked.unmaximizeRequested) {
+        tracked.unmaximizeRequested = false;
+        this.unmaximizeTracked(tracked);
+      }
+      if (tracked.userMovedTo !== null) {
+        const to = tracked.userMovedTo;
+        tracked.userMovedTo = null;
+        const others = this.tileables(to).filter(
+          (t) => t.id !== tracked.id && t.surface.screenId === tracked.surface.screenId,
+        );
+        // §6/§34: a user move onto a full workspace floats the window there;
+        // the destination keeps its pair and nobody is evicted.
+        if (others.length >= 2) this.floatWindow(tracked);
+      }
+    }
     const count = global.workspace_manager.get_n_workspaces();
     const seen = new Set<number>();
     for (let index = 0; index < count; index++) {
@@ -608,8 +833,7 @@ export class WindowSession {
       this.deps.history.log('ws_removed', { reason: 'reorder' });
     }
     // Debounced, never synchronous: this handler runs inside Mutter's signal
-    // emission, and retiling here used to re-enter the exile policy from inside
-    // the workspace mutation that caused the reorder (see `workspaceOpDepth`).
+    // emission, so the drain does the work.
     this.scheduleReconcile('workspace-reorder');
   }
   /** Re-derive every tracked window's workspace index from Mutter. */
@@ -632,17 +856,16 @@ export class WindowSession {
     // pair on one monitor an "extra" — or a lone window — on another.
     for (const screen of this.deps.host.screens()) {
       const onScreen = (t: TrackedWindow): boolean => t.surface.screenId === screen.index;
-      const tileables = this.tileables(workspaceId).filter(onScreen);
+      const tileables = this.tileables(workspaceId).filter(onScreen).filter((t) => !t.surface.flags.fullscreen);
       if (tileables.length === 0) continue;
       // §4 maximize, as a property: a window the user maximized that still
-      // shares its workspace is moved to a workspace of its own to the right,
-      // and the view follows. Re-asserting it here means a signal that was
-      // missed or raced can not leave the window sharing the pair.
+      // shares its workspace is given its own workspace to the right, and the
+      // view follows. Re-asserting it here means a signal that was missed or
+      // raced can not leave the window sharing the pair.
       if (tileables.length > 1) {
         const requested = tileables.find((t) => t.maximizeRequested && compat.isMaximized(t.win));
-        if (requested !== undefined && this.moveToNewWorkspace(requested, true)) {
-          this.signatures.clearAll();
-          this.scheduleRetile(workspaceId, 'maximize-property');
+        if (requested !== undefined) {
+          this.maximizeTracked(requested);
           continue;
         }
       } else if (tileables[0].maximizeRequested) {
@@ -650,39 +873,43 @@ export class WindowSession {
         // maximize property no longer needs to be enforced for it.
         tileables[0].maximizeRequested = false;
       }
-      // §7.2: a window maximized on its own was left maximized when a sibling
-      // arrived on this monitor; unmaximize it and tile the pair.
-      if (this.unmaximizeStaleLone(tileables)) {
-        this.scheduleRetile(workspaceId, 'lone-unmaximize');
-        continue;
+      // §10 step 3/§16: a client that insists on a minimum wider than its share
+      // cannot be split. It takes its own workspace (or keeps the single screen,
+      // §10 step 4); the window it was paired with keeps the screen.
+      if (tileables.length > 1) {
+        const refusing = tileables.find((t) => this.doesNotFit(t, this.placementEnv(t.surface.screenId)));
+        if (refusing !== undefined) {
+          this.escapeTracked(refusing);
+          this.scheduleRetile(workspaceId, 'escape-refusal');
+          continue;
+        }
       }
-      // §6 (v2): the auto-float pull-back is gone. A float is only ever made
-      // explicitly (the float key, `neverTile`, or a placement with no room) and
-      // it pins its workspace; a lone visible window is simply maximized.
-      // A monitor that somehow holds more than a pair must never leave an extra
-      // stacked. How it got here decides what happens to it: a window the user
-      // dragged in (the overview) floats over the pair, while one that simply
-      // opened here goes to its own workspace (§7.1).
-      if (tileables.length > 2) {
-        const extra = tileables[tileables.length - 1];
-        const exiled = !this.userMoveProtected(extra) && this.moveToNewWorkspace(extra, false);
-        // Exiling can be refused (cooling down, re-entrant, or the creation
-        // budget is spent): float over the pair rather than leave it stacked.
-        if (!exiled) this.floatOverPair(extra);
-        this.signatures.clearAll();
-        this.scheduleRetile(workspaceId, exiled ? 'spawn-ws' : 'float-extra');
-        continue;
-      }
-      // §7.2 takes precedence over §6: a lone window stays maximized, not tiled.
+      // §4: a lone visible managed window is always maximized.
       if (this.shouldLoneMaximize(tileables, this.nonTransient(workspaceId).filter(onScreen))) {
         const only = tileables[0];
-        if (!compat.isMaximized(only.win)) this.deps.host.maximize(only.id);
+        if (!compat.isMaximized(only.win)) {
+          this.deps.tiling.noteSelfApply();
+          this.deps.host.maximize(only.id);
+        }
         continue;
       }
-      // A maximized tileable is mid-policy: it either lives on its own
-      // workspace or is about to move there. Tiling it now would unmaximize it
-      // behind the policy's back (§7.3), so leave it to the policy.
-      if (tileables.some((t) => compat.isMaximized(t.win))) continue;
+      // §5: two visible managed windows are a pair, so a maximized window that
+      // still shares its workspace (a user maximize the property branch above
+      // did not move, or two windows that raced into being) must unmaximize.
+      const maximized = tileables.filter((t) => compat.isMaximized(t.win));
+      if (maximized.length > 0) {
+        for (const stale of maximized) {
+          this.deps.tiling.noteSelfApply();
+          stale.selfUnmaximize = true;
+          try {
+            this.deps.host.unmaximize(stale.id);
+          } finally {
+            stale.selfUnmaximize = false;
+          }
+        }
+        this.scheduleRetile(workspaceId, 'unmaximize-stale');
+        continue;
+      }
       const startedUs = GLib.get_monotonic_time();
       this.plansComputed += 1;
       const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, this.tilerConfig());
@@ -748,15 +975,30 @@ export class WindowSession {
     for (const tracked of this.windows.values()) {
       if (tracked.surface.workspaceId !== workspaceId) continue;
       if (tracked.surface.flags.minimized) continue;
+      // A window that has not finished opening is not yet part of a pair: its
+      // routing (and the side it takes) has not been decided. Tiling it early
+      // is the race that let a pair form swapped (§3, §20 adoption).
+      if (!tracked.ready) continue;
+      // §16: an escaped window owns its workspace at its own size; it is not
+      // tiled and the lone law does not maximize it.
+      if (tracked.escaped) continue;
       if (this.classify(tracked).tileable) out.push(tracked);
     }
     return out.sort((a, b) => a.id - b.id);
   }
 
-  /** Centre a window over the tiled pair it cannot join (§7.3). */
-  private floatOverPair(tracked: TrackedWindow): void {
+  /**
+   * §6: float a window adrt places itself — the explicit no-room cases and the
+   * escape's single-workspace fallback. The placement is offset and kept inside
+   * the work area so it is never exactly on top of what is beneath it.
+   */
+  private floatWindow(tracked: TrackedWindow): void {
     tracked.autoFloated = true;
+    tracked.pendingSlot = null;
     tracked.surface.setFloating(true);
+    // The cached classification still says tileable; drop it so the next pass
+    // treats the window as the float it now is.
+    tracked.invalidateClassification();
     this.deps.tiling.noteSelfApply();
     this.deps.host.applyLayer(tracked.id, Layer.FLOATING, 0);
     // Never touch a minimized window's geometry: Mutter un-minimizes it as a
@@ -781,20 +1023,6 @@ export class WindowSession {
     );
   }
 
-  /** Windows Adrt floated itself (float-over-pair, unmaximize-return), i.e.
-   * floating windows the user did not ask to keep floating. */
-  private autoFloated(workspaceId: number): TrackedWindow[] {
-    const out: TrackedWindow[] = [];
-    for (const tracked of this.windows.values()) {
-      if (tracked.surface.workspaceId !== workspaceId) continue;
-      if (tracked.surface.flags.minimized) continue;
-      if (!tracked.surface.flags.floating) continue;
-      if (!tracked.autoFloated) continue;
-      out.push(tracked);
-    }
-    return out;
-  }
-
   nonTransient(workspaceId: number): TrackedWindow[] {
     return this.tileables(workspaceId).filter((t) => !t.surface.flags.transient);
   }
@@ -806,21 +1034,6 @@ export class WindowSession {
     // would stay at half size (A61).
     const managed = nonTransient.filter((t) => this.classify(t).tileable && !t.surface.flags.minimized);
     return managed.length === 1;
-  }
-
-  /**
-   * §7.2: with two or more tileable windows on a workspace, a maximized one
-   * must be unmaximized so the pair can tile. This covers apps that open
-   * maximized (Files) and windows left maximized side by side.
-   */
-  private unmaximizeStaleLone(tileables: readonly TrackedWindow[]): boolean {
-    if (tileables.length < 2) return false;
-    const maximized = tileables.filter((t) => compat.isMaximized(t.win));
-    if (maximized.length === 0) return false;
-    this.deps.tiling.noteSelfApply();
-    for (const tracked of maximized) this.deps.host.unmaximize(tracked.id);
-    this.deps.history.log('tile', { reason: 'lone-unmaximize', workspaceId: tileables[0].surface.workspaceId, count: maximized.length });
-    return true;
   }
 
   focus(id: number | null): void {
@@ -858,6 +1071,7 @@ export class WindowSession {
       const splitHorizontal = this.workspaceSplitHorizontal();
       if (horizontal === splitHorizontal) {
         this.deps.tiling.toggleSwap(current.id, sibling.id);
+        this.clearPendingSlots(current.id, sibling.id);
         this.signatures.clearAll();
         this.deps.history.log('swap', { a: current.id, b: sibling.id });
         this.retile(current.surface.workspaceId, 'swap');
@@ -885,7 +1099,11 @@ export class WindowSession {
   /** §15 Undo: restore the last snapshot, activating its workspace first. */
   undo(): boolean {
     const entry = this.deps.undo.pop();
-    if (entry === null) return false;
+    if (entry === null) {
+      // §13: an undo with nothing to revert is announced, never silent.
+      this.deps.onNotice?.('nothing-to-undo', 'undo');
+      return false;
+    }
     // §15: restore the split ratios too, so the plan and the restored rects
     // agree and no later reconcile re-tiles over the undo.
     if (entry.ratios !== undefined) this.deps.tiling.restoreRatios(entry.ratios);
@@ -1009,6 +1227,66 @@ export class WindowSession {
     return true;
   }
 
+  /**
+   * §17: the keyboard workspace move is the only keyboard way a window changes
+   * workspace. A move onto a full workspace floats there; `follow-moved-window`
+   * decides whether the view follows. A screen with only one workspace has no
+   * target, so the request is announced rather than silently ignored.
+   */
+  moveFocusedToWorkspace(index: number): boolean {
+    const current = this.focused();
+    if (current === null) return false;
+    const manager = global.workspace_manager;
+    const count = manager.get_n_workspaces();
+    if (count <= 1) {
+      this.deps.onNotice?.('cannot-move-workspace', 'one-workspace');
+      return false;
+    }
+    if (index < 0 || index >= count || index === current.surface.workspaceId) return false;
+    this.suppress.add(current.id);
+    this.deps.tiling.noteSelfApply();
+    this.deps.onWindowMoving();
+    const from = current.surface.workspaceId;
+    this.deps.host.applyWorkspace(current.id, index);
+    this.suppress.delete(current.id);
+    current.surface.workspaceId = index;
+    current.lastWorkspaceIdx = index;
+    current.escaped = false;
+    current.pendingSlot = null;
+    this.deps.history.log('ws_switch_empty', { id: current.id, from, to: index, byUser: true });
+    const others = this.tileables(index).filter(
+      (t) => t.id !== current.id && t.surface.screenId === current.surface.screenId,
+    );
+    if (others.length >= 2) this.floatWindow(current);
+    else if (others.length === 1) this.pinSlots(index, current, index > from ? 0 : 1);
+    if (this.deps.settings.boolean('follow-moved-window', true)) {
+      this.instantSwitch(() => this.activateWorkspace(index));
+    }
+    this.signatures.clearAll();
+    this.scheduleReconcile('move-workspace-key');
+    return true;
+  }
+
+  moveFocusedToAdjacentWorkspace(direction: 'next' | 'prev'): boolean {
+    const current = this.focused();
+    if (current === null) return false;
+    const step = direction === 'next' ? 1 : -1;
+    return this.moveFocusedToWorkspace(current.surface.workspaceId + step);
+  }
+
+  /** §17: nudge the focused pair's shared edge; a no-op request toasts. */
+  nudgeFocused(direction: string, step: number): boolean {
+    const focused = this.focused();
+    if (focused === null) return false;
+    if (!this.deps.tiling.nudgeSplit(focused.id, direction, step)) {
+      this.deps.onNotice?.('nothing-to-nudge', String(focused.id));
+      return false;
+    }
+    this.signatures.clearAll();
+    this.scheduleReconcile('nudge');
+    return true;
+  }
+
   activateWorkspace(index: number): void {
     const workspace = global.workspace_manager.get_workspace_by_index(index);
     if (workspace !== null) workspace.activate(global.get_current_time());
@@ -1020,6 +1298,14 @@ export class WindowSession {
 
   clearSignatures(): void {
     this.signatures.clearAll();
+  }
+
+  /** A user swap overrides the sides our own placement pinned (§3). */
+  clearPendingSlots(...ids: number[]): void {
+    for (const id of ids) {
+      const tracked = this.windows.get(id);
+      if (tracked !== undefined) tracked.pendingSlot = null;
+    }
   }
 
   destroy(): void {
@@ -1082,6 +1368,7 @@ export class WindowSession {
       max: tracked.maxSize,
       screenId: surface.screenId,
       workspaceId: surface.workspaceId,
+      slot: tracked.pendingSlot ?? undefined,
     };
   }
 
@@ -1116,205 +1403,170 @@ export class WindowSession {
     }
   }
 
-  /**
-   * §7.1 / §7.3: move a window to a new workspace placed **immediately to the
-   * right** of its current one, then follow it there.
-   */
-  private moveToNewWorkspace(tracked: TrackedWindow, rememberPrevious: boolean): boolean {
-    const now = Date.now();
-    if (this.userMoveProtected(tracked)) return false;
-    // Never re-enter. Mutter emits `workspaces-reordered` synchronously from the
-    // calls below, and the handler retiles — which used to call straight back
-    // into this method and exile the same window again, ~1 ms per iteration,
-    // until the workspace list had exploded.
-    if (this.workspaceOpDepth > 0) return false;
-    // The same window twice in a row is a cycle, not a policy.
-    if (now - tracked.exiledAtMs < EXILE_COOLDOWN_MS) {
-      this.deps.history.log('ws_spawn_blocked', { id: tracked.id, reason: 'cooldown', since_ms: now - tracked.exiledAtMs });
-      return false;
-    }
+  /** Create a workspace immediately right of `after`, pushing the spare right. */
+  private createWorkspaceRight(after: number): number | null {
     const manager = global.workspace_manager;
-    const previous = tracked.surface.workspaceId;
-    const target = previous + 1;
-
-    let index: number;
-    const existing = target < manager.get_n_workspaces() ? manager.get_workspace_by_index(target) : null;
-    if (existing !== null && this.workspaceIsEmpty(existing)) {
-      // An empty workspace already sits to the right: use it (no reorder, which
-      // would disturb window state).
-      index = target;
-    } else {
-      // Containment: creating workspaces is a handful-per-burst operation, so a
-      // bug anywhere above must not be able to turn it into an unbounded loop.
-      const cap = Math.max(8, this.windows.size + 4);
-      if (manager.get_n_workspaces() >= cap || !this.spawnBudget.take(now)) {
-        this.deps.history.log('ws_spawn_blocked', {
-          id: tracked.id,
-          reason: manager.get_n_workspaces() >= cap ? 'cap' : 'budget',
-          workspaces: manager.get_n_workspaces(),
-          cap,
-          windows: this.windows.size,
-        });
-        return false;
-      }
-      this.workspaceOpDepth += 1;
-      try {
-        const appended = manager.get_n_workspaces();
-        manager.append_new_workspace(false, global.get_current_time());
-        const created = manager.get_workspace_by_index(appended);
-        if (created !== null && target < appended) manager.reorder_workspace(created, target);
-        index = Math.min(target, manager.get_n_workspaces() - 1);
-      } finally {
-        this.workspaceOpDepth -= 1;
-      }
+    const target = after + 1;
+    if (target < manager.get_n_workspaces()) {
+      const existing = manager.get_workspace_by_index(target);
+      if (existing !== null && this.workspaceIsEmpty(existing)) return target;
     }
+    const appended = manager.get_n_workspaces();
+    manager.append_new_workspace(false, global.get_current_time());
+    const created = manager.get_workspace_by_index(appended);
+    if (created !== null && target < appended) manager.reorder_workspace(created, target);
+    return Math.min(target, manager.get_n_workspaces() - 1);
+  }
 
-    tracked.exiledAtMs = now;
-    this.dynamicWorkspaces.add(index);
-    this.maybeNameWorkspace(index);
+  /** Move one tracked window to a workspace, suppressing the resulting signals. */
+  private moveWindowToWorkspace(tracked: TrackedWindow, index: number): void {
     this.suppress.add(tracked.id);
     this.deps.tiling.noteSelfApply();
-    // Hide the highlight straight away: the window is about to leave this
-    // workspace, and our own move would otherwise be ignored by the position
-    // watcher, leaving the border drawn at the old spot for a frame or two.
     this.deps.onWindowMoving();
-    // Drop any in-flight frame animation for this window: a resize animation
-    // still running while Mutter animates the workspace switch draws the window
-    // twice (its clone lags behind the real actor).
     this.deps.tiling.cancel(tracked.id);
     this.deps.host.applyWorkspace(tracked.id, index);
     this.suppress.delete(tracked.id);
     tracked.surface.workspaceId = index;
     tracked.lastWorkspaceIdx = index;
-    if (rememberPrevious) tracked.previousWorkspaceIdx = previous;
-    this.deps.history.log('spawn_ws', { id: tracked.id, workspaceId: index, previous });
-    // Follow the window to the workspace it was just given, with no switch
-    // clones (see `instantSwitch`). (Delaying this so
-    // the window lands first was tried, but Mutter drops the maximise while the
-    // window sits on a workspace the view has not reached, so the follow is
-    // immediate; the border is hidden by `onWindowMoving` instead.)
-    this.instantSwitch(() => this.activateWorkspace(index));
     this.signatures.clearAll();
-    // The reorder signal was suppressed while we were inside the workspace op,
-    // so ask for the pass ourselves: both the origin and the destination
-    // workspace need a plan.
-    this.scheduleReconcile('move-workspace');
-    return true;
   }
 
   private workspaceIsEmpty(workspace: any): boolean {
     return workspace.list_windows().filter((win: any) => this.windows.has(win.get_id())).length === 0;
   }
 
-
-  /** §7.6 `workspace-auto-name`: name a spawned workspace. */
-  private maybeNameWorkspace(index: number): void {
-    if (!this.deps.settings.boolean('workspace-auto-name', false)) return;
-    try {
-      const preferences = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.preferences' });
-      const names: string[] = preferences.get_strv('workspace-names');
-      while (names.length <= index) names.push('');
-      names[index] = `Adrt ${index + 1}`;
-      preferences.set_strv('workspace-names', names);
-    } catch (e) {
-      console.error(`[adrt] could not name workspace: ${(e as Error).message}`);
-    }
-  }
-
-  /** §19.1: the user moved this window; leave it where they put it. */
-  private userMoveProtected(tracked: TrackedWindow): boolean {
-    if (!this.deps.settings.boolean('respect-user-workspace-move', true)) return false;
-    const graceSec = Math.max(0, this.deps.settings.int('workspace-move-grace-seconds', 3));
-    return Date.now() - tracked.userMovedAtMs < graceSec * 1000;
-  }
-
-  /** §7.3: user unmaximized a window that had been sent to its own workspace. */
-  private returnFromMaximize(tracked: TrackedWindow): void {
-    // The user unmaximized: the §4 maximize property no longer applies.
-    tracked.maximizeRequested = false;
-    const manager = global.workspace_manager;
-    let previous = tracked.previousWorkspaceIdx;
-    // A stale index (workspaces were reaped since the maximize) must not strand
-    // the window: fall back to the nearest workspace that still holds windows.
-    if (previous !== null && (previous < 0 || previous >= manager.get_n_workspaces() || previous === tracked.surface.workspaceId)) {
-      const here = tracked.surface.workspaceId;
-      let target = this.nearestWorkspaceWithWindows(here, -1);
-      if (target < 0) target = this.nearestExistingWorkspace(here, -1);
-      previous = target >= 0 ? target : null;
-    }
-    if (previous === null) {
-      const tileables = this.tileables(tracked.surface.workspaceId);
-      if (tileables.length <= 1 && !compat.isMaximized(tracked.win)) {
-        this.deps.tiling.noteSelfApply();
-        this.deps.host.maximize(tracked.id);
-      }
+  /** §4: maximize — its own workspace to the right, or in place on `single`. */
+  private maximizeTracked(tracked: TrackedWindow): void {
+    tracked.maximizeRequested = true;
+    // §16: a window that does not fit its slot gets its own workspace instead.
+    if (this.doesNotFit(tracked, this.placementEnv(tracked.surface.screenId))) {
+      this.escapeTracked(tracked);
       return;
     }
-    this.suppress.add(tracked.id);
-    this.deps.tiling.noteSelfApply();
-    this.deps.onWindowMoving();
-    this.deps.tiling.cancel(tracked.id);
-    this.deps.host.applyWorkspace(tracked.id, previous);
-    this.suppress.delete(tracked.id);
-    const current = tracked.surface.workspaceId;
-    tracked.surface.workspaceId = previous;
-    tracked.previousWorkspaceIdx = null;
-    // The view follows the window back, with no switch clones and no slide that
-    // could overshoot: the window's own resize is applied instantly below.
-    this.instantSwitch(() => this.activateWorkspace(previous));
-    // §7.3: a workspace that already holds a pair makes the newcomer float.
-    // The incoming window is excluded: only two *others* make it a pair.
-    if (this.tileables(previous).filter((t) => t.id !== tracked.id).length >= 2) {
-      this.floatOverPair(tracked);
-    }
-    this.deps.history.log('ws_removed', { id: tracked.id, from: current, to: previous, reason: 'unmaximize' });
-    this.signatures.clearAll();
-    this.schedulePrune();
-    // Snap the landing once the move has landed: animating a maximized rect
-    // down to a tile while the workspace changes is what reads as an overshoot.
-    this.addTimeout(120, () => this.retile(previous, 'unmaximize-return', false, false));
+    const own = tracked.surface.workspaceId;
+    const env = this.placementEnv(tracked.surface.screenId);
+    const state = this.buildPlacementState();
+    this.applyPlacement(tracked, maximizeWindow(state, env, own), own === state.viewed, 'maximize');
   }
 
-  /** §7.4 minimize follows to the previous workspace. */
+  /** §4: the unmaximize ladder, from the pure model (no origin memory). */
+  private unmaximizeTracked(tracked: TrackedWindow): void {
+    tracked.maximizeRequested = false;
+    const own = tracked.surface.workspaceId;
+    const env = this.placementEnv(tracked.surface.screenId);
+    const state = this.buildPlacementState();
+    const placement = unmaximizeWindow(state, env, own, tracked.id);
+    // §4: there is no un-maximized lone window. When the ladder leaves the
+    // window where it is (no neighbour holds windows), it is alone and the lone
+    // law re-maximizes it rather than parking it minimized.
+    if (placement.workspace === own && placement.minimize?.includes(tracked.id) === true) {
+      this.deps.tiling.noteSelfApply();
+      this.deps.host.maximize(tracked.id);
+      this.scheduleReconcile('unmaximize-lone');
+      return;
+    }
+    const follow = own === state.viewed || placement.workspace !== own;
+    this.applyPlacement(tracked, placement, follow, 'unmaximize');
+    if (env.screen === 'single') this.restoreMinimizedOn(placement.workspace, tracked.surface.screenId);
+    this.schedulePrune();
+  }
+
+  /** §4/§16: fullscreen behaves as maximize; leaving it as unmaximize. */
+  private fullscreenTracked(tracked: TrackedWindow, fullscreen: boolean): void {
+    if (fullscreen) {
+      const own = tracked.surface.workspaceId;
+      const env = this.placementEnv(tracked.surface.screenId);
+      const state = this.buildPlacementState();
+      this.applyPlacement(tracked, maximizeWindow(state, env, own), own === state.viewed, 'fullscreen');
+      return;
+    }
+    this.unmaximizeTracked(tracked);
+  }
+
+  /**
+   * §16/§10 step 3: the escape. A managed window that cannot fit its share is
+   * given its own workspace to the right, sized to itself and clamped to
+   * [1/6, full screen]; the window it was paired with keeps the screen.
+   */
+  private escapeTracked(tracked: TrackedWindow): void {
+    const env = this.placementEnv(tracked.surface.screenId);
+    const screen = this.screenFor(tracked.surface.screenId);
+    if (screen === null) return;
+    const area = screenArea(screen);
+    const size = escapeSize(
+      env.axis === 'vertical' ? area.height : area.width,
+      env.axis === 'vertical' ? tracked.surface.frame.height : tracked.surface.frame.width,
+    );
+    const rect: Rect = env.axis === 'vertical'
+      ? { x: area.x, y: area.y, width: area.width, height: size }
+      : { x: area.x, y: area.y, width: size, height: area.height };
+
+    if (env.screen === 'single') {
+      // §10 step 4: no workspace to give. The trigger keeps the screen,
+      // maximized, and the other managed windows on the monitor minimize.
+      this.maximizeInPlace(tracked);
+      return;
+    }
+    if (env.screen === 'fixed') {
+      // §7: no new workspace; keep the clamped size where it is.
+      this.deps.tiling.applyFrame(tracked, rect, screen, false, 'escape-clamped', 0);
+      return;
+    }
+    const own = tracked.surface.workspaceId;
+    const state = this.buildPlacementState();
+    const created = this.createWorkspaceRight(own);
+    if (created === null) {
+      this.deps.tiling.applyFrame(tracked, rect, screen, false, 'escape-clamped', 0);
+      return;
+    }
+    this.moveWindowToWorkspace(tracked, created);
+    // A float is not our escape: a managed window that does not fit keeps its
+    // clamped size, flush at slot 0 and full work-area height (§16).
+    tracked.autoFloated = false;
+    tracked.escaped = true;
+    this.deps.tiling.applyFrame(tracked, rect, screen, false, 'escape', 0);
+    if (own === state.viewed) this.instantSwitch(() => this.activateWorkspace(created));
+    this.deps.history.log('spawn_ws', { id: tracked.id, workspaceId: created, reason: 'escape' });
+    this.signatures.clearAll();
+    this.scheduleReconcile('escape');
+  }
+
+  /**
+   * §4/§5: minimize releases the slot; the pure reaper relocates a workspace
+   * left holding only minimized windows. A window restored onto a full
+   * workspace floats (§6).
+   */
   private onMinimized(tracked: TrackedWindow): void {
+    this.deps.tiling.cancel(tracked.id);
     if (!tracked.surface.flags.minimized) {
-      // A window Adrt floated (over a pair) gets its float rect back; it is not
-      // a tile, so it must not be re-tiled.
+      // A window adrt floated itself gets its float rect back; it is not a tile.
       if (tracked.autoFloated) {
         tracked.surface.refresh();
-        this.floatOverPair(tracked);
+        this.floatWindow(tracked);
         this.deps.onStateChanged();
+        return;
+      }
+      const others = this.tileables(tracked.surface.workspaceId).filter(
+        (t) => t.id !== tracked.id && t.surface.screenId === tracked.surface.screenId,
+      );
+      // §10 step 4: restoring makes this window the trigger. If a peer refuses
+      // to share (it does not fit its half), the trigger keeps the screen
+      // maximized and the peer gives way, and the two trade on each restore.
+      const refuses = others.some((o) => this.doesNotFit(o, this.placementEnv(o.surface.screenId)));
+      if (refuses) {
+        this.maximizeInPlace(tracked);
+        return;
+      }
+      // §6: restoring onto a workspace whose two slots are taken floats.
+      if (others.length >= 2) {
+        this.floatWindow(tracked);
         return;
       }
       this.scheduleRetile(tracked.surface.workspaceId, 'unminimize');
       return;
     }
-    if (this.userMoveProtected(tracked)) return;
-    // Any frame animation still running would fight the minimize animation.
-    this.deps.tiling.cancel(tracked.id);
-    const workspaceId = tracked.surface.workspaceId;
-    const tileables = this.tileables(workspaceId);
-    if (tileables.length === 0 && workspaceId > 0) {
-      const left = workspaceId - 1;
-      this.suppress.add(tracked.id);
-      this.deps.tiling.noteSelfApply();
-      this.deps.host.applyWorkspace(tracked.id, left);
-      this.suppress.delete(tracked.id);
-      tracked.surface.workspaceId = left;
-      this.deps.history.log('new_ws', { id: tracked.id, workspaceId: left, reason: 'minimize' });
-      // If the workspace it slides into already holds a pair, it comes back as
-      // a window floating on top of the pair instead of a third tile.
-      if (this.tileables(left).length >= 2) {
-        this.floatOverPair(tracked);
-        this.deps.history.log('ws_switch_empty', { id: tracked.id, to: left, reason: 'minimize-float' });
-      }
-      // Follow the window. The empty workspace it left is pruned safely later.
-      this.instantSwitch(() => this.activateWorkspace(left));
-      this.schedulePrune();
-      // Snap the landing on the workspace it slides into, once the move landed.
-      this.addTimeout(120, () => this.retile(left, 'minimize-return', false, false));
-    }
-    this.scheduleRetile(workspaceId, 'minimize');
+    this.scheduleRetile(tracked.surface.workspaceId, 'minimize');
+    this.schedulePrune();
   }
 
   /**
@@ -1351,59 +1603,61 @@ export class WindowSession {
   }
 
   /**
-   * §16: reap the workspaces Adrt itself created (third-window and
-   * maximize-right policies) once they are empty and the user is not on them,
-   * keeping at least one workspace. Workspaces the user or the session created
-   * are left alone, and a workspace holding any window at all is kept — reaping
-   * a workspace out from under a window is what made one "disappear".
+   * §5: reaping is a property. At every drain any empty workspace other than
+   * GNOME's trailing spare is removed, wherever it sits; a workspace holding
+   * only minimized windows relocates its occupant first (left, else right, else
+   * it stays, the one legal look-empty workspace); a float pins its workspace.
    */
-  private pruneEmptyWorkspaces(): void {
+  private reapEmptyWorkspaces(): void {
+    if (this.deps.isPaused() || this.suspended) return;
     const manager = global.workspace_manager;
     if (manager.get_n_workspaces() <= 1) return;
-    let active = manager.get_active_workspace_index();
-    let changed = false;
-    const candidates = [...this.dynamicWorkspaces].sort((a, b) => b - a);
-    for (const index of candidates) {
+    const state = this.buildPlacementState();
+    const plan = reapPlan(state);
+    if (plan.reap.length === 0 && plan.relocate.length === 0) return;
+    for (const move of plan.relocate) {
+      const tracked = this.windows.get(move.id);
+      if (tracked === undefined) continue;
+      this.moveWindowToWorkspace(tracked, move.to);
+      this.deps.history.log('new_ws', { id: move.id, workspaceId: move.to, reason: 'minimized-relocation' });
+    }
+    const reapSet = new Set(plan.reap);
+    if (reapSet.has(manager.get_active_workspace_index())) {
+      const target = this.nearestIndexHoldingWindows(state, manager.get_active_workspace_index(), reapSet);
+      if (target >= 0) this.activateWorkspace(target);
+    }
+    for (const index of [...plan.reap].sort((a, b) => b - a)) {
       if (manager.get_n_workspaces() <= 1) break;
-      if (index >= manager.get_n_workspaces()) {
-        this.dynamicWorkspaces.delete(index);
-        continue;
-      }
-      if (index === active) continue;
       const workspace = manager.get_workspace_by_index(index);
-      if (workspace === null) {
-        this.dynamicWorkspaces.delete(index);
-        continue;
-      }
-      // Keep it if it holds any window, tracked or not.
+      if (workspace === null) continue;
+      // Never reap a workspace that still holds any window, tracked or not.
       if (workspace.list_windows().length > 0) continue;
+      if (manager.get_active_workspace_index() === index) continue;
+      manager.remove_workspace(workspace, global.get_current_time());
+      this.deps.history.log('ws_removed', { workspaceId: index, reason: 'reaped' });
+    }
+    this.realignWorkspaces();
+    this.signatures.clearAll();
+  }
 
-      this.dynamicWorkspaces.delete(index);
-      const shifted = new Set<number>();
-      for (const i of this.dynamicWorkspaces) shifted.add(i > index ? i - 1 : i);
-      this.dynamicWorkspaces.clear();
-      for (const i of shifted) this.dynamicWorkspaces.add(i);
-      // Removing a workspace emits signals of its own; keep it inside the same
-      // no-reentry window as the other workspace mutations.
-      this.workspaceOpDepth += 1;
-      try {
-        manager.remove_workspace(workspace, global.get_current_time());
-      } finally {
-        this.workspaceOpDepth -= 1;
-      }
-      if (index < active) active -= 1;
-      changed = true;
-      this.deps.history.log('ws_removed', { workspaceId: index, reason: 'pruned' });
+  /** Nearest non-reaped workspace that holds windows, left first (§5). */
+  private nearestIndexHoldingWindows(state: State, from: number, exclude: Set<number>): number {
+    for (let index = from - 1; index >= 0; index--) {
+      if (!exclude.has(index) && windowCount(state.workspaces[index]) > 0) return index;
     }
-    if (changed) {
-      this.realignWorkspaces();
-      this.signatures.clearAll();
+    for (let index = from + 1; index < state.workspaces.length; index++) {
+      if (!exclude.has(index) && windowCount(state.workspaces[index]) > 0) return index;
     }
+    for (let index = from - 1; index >= 0; index--) {
+      if (!exclude.has(index)) return index;
+    }
+    return -1;
   }
 
   /** Reap empty workspaces shortly after an action, once state has settled. */
   private schedulePrune(): void {
-    this.addTimeout(300, () => this.pruneEmptyWorkspaces());
+    this.addTimeout(300, () => this.reapEmptyWorkspaces());
+    this.addTimeout(900, () => this.reapEmptyWorkspaces());
   }
 
   /** §7.5 close: leave an empty workspace, then reap it (§16). */
@@ -1429,16 +1683,12 @@ export class WindowSession {
       }
     }
     this.schedulePrune();
-    // The workspace switch is asynchronous; by the time the first prune runs
-    // the emptied workspace can still be the active one, so it is skipped.
-    // Prune again once the switch has certainly landed.
-    this.addTimeout(900, () => this.pruneEmptyWorkspaces());
   }
 
-  /** §16: reap empty workspaces now. Used by the periodic safety pass so a
+  /** §5: reap empty workspaces now. Used by the periodic safety pass so a
    * workspace that was just emptied does not linger until the scan backs off. */
   pruneEmptyNow(): void {
-    this.pruneEmptyWorkspaces();
+    this.reapEmptyWorkspaces();
   }
 
   /** Nearest workspace in `step` direction that holds one of our windows. */
@@ -1502,7 +1752,11 @@ export class WindowSession {
     on('notify::skip-taskbar', () => this.onFlagSignal(tracked, true));
     on('notify::transient-for', () => this.onFlagSignal(tracked, true));
     on('notify::above', () => this.onFlagSignal(tracked, true));
-    on('notify::fullscreen', () => this.onFlagSignal(tracked, true));
+    on('notify::fullscreen', () => {
+      // §11: no policy in a signal handler; the drain reconciles the transition.
+      tracked.surface.refresh();
+      this.scheduleReconcile('fullscreen');
+    });
     on('notify::window-type', () => this.onFlagSignal(tracked, true));
     on('notify::minimized', () => {
       tracked.surface.refresh();
@@ -1718,47 +1972,21 @@ export class WindowSession {
     if (!tracked.ready) return;
     if (this.suppress.has(tracked.id)) return;
     tracked.surface.refresh();
-    const maximized = compat.isMaximized(tracked.win);
-    if (maximized) {
-      const siblings = this.tileables(tracked.surface.workspaceId).filter((t) => t.id !== tracked.id);
-      if (siblings.length > 0) {
-        // §4: the user maximized a window that shares its workspace. Remember
-        // the intent so the drain can re-assert it, then move it now.
-        tracked.maximizeRequested = true;
-        // Keep the window's size (it is already maximized) and slide it onto
-        // its own workspace to the right; it arrives maximized. Resizing it
-        // first would make the transition visibly jump.
-        if (!this.moveToNewWorkspace(tracked, true)) this.signatures.clearAll();
-      } else {
-        this.signatures.clearAll();
-      }
+    // §11: a Mutter signal records the intent; the drain re-derives the state
+    // and applies it (the A45 pattern). `selfUnmaximize` is our own tiler's
+    // unmaximize and must not drive the ladder.
+    if (compat.isMaximized(tracked.win)) {
+      tracked.maximizeRequested = true;
+      this.scheduleReconcile('maximize');
       return;
     }
-    // Not maximized: any earlier maximize intent is spent. (The drain's lone
-    // law re-maximizes a window that is alone on its workspace, so a tiler
-    // unmaximize during a stale frame apply does not need the intent.)
-    tracked.maximizeRequested = false;
     if (tracked.selfUnmaximize) {
-      // The tiler unmaximized this window itself to apply a tile frame. That is
-      // not a user unmaximize: ignore it and let the lone-maximize property /
-      // the next drain decide where the window belongs.
       this.scheduleReconcile('self-unmaximize');
       return;
     }
-    if (tracked.previousWorkspaceIdx !== null) {
-      this.returnFromMaximize(tracked);
-      return;
-    }
-    // Not sent right by the maximize policy (e.g. a lone window that was
-    // maximized on its own workspace). If the workspace to the *left* already
-    // holds a pair, "finish" by returning there — floating on top, not tiled.
-    const left = tracked.surface.workspaceId - 1;
-    if (left >= 0 && this.tileables(left).length >= 2) {
-      tracked.previousWorkspaceIdx = left;
-      this.returnFromMaximize(tracked);
-      return;
-    }
-    this.scheduleRetile(tracked.surface.workspaceId, 'unmaximize');
+    tracked.maximizeRequested = false;
+    tracked.unmaximizeRequested = true;
+    this.scheduleReconcile('unmaximize');
   }
 
   private onWorkspaceSignal(tracked: TrackedWindow): void {
@@ -1775,26 +2003,26 @@ export class WindowSession {
     if (index === from) return;
     tracked.surface.workspaceId = index;
     tracked.lastWorkspaceIdx = index;
+    // A user move takes the window back into the ordinary tiling.
+    tracked.escaped = false;
+    tracked.pendingSlot = null;
     // §19.1: remember the user's move so policies leave the window alone.
     tracked.userMovedAtMs = Date.now();
     this.deps.history.log('ws_switch_empty', { id: tracked.id, from, to: index, byUser: true });
     this.signatures.clearAll();
-    // A move between workspaces can leave either side untiled (and a workspace
-    // whose tileable is still maximized is skipped by a plain retile), so
-    // recalculate every workspace, not just the two involved.
-    this.retileEverywhere('workspace-changed');
-  }
-
-  /** Recalculate every workspace, retrying shortly if a drag is in flight —
-   * the move and the grab-end can arrive in either order. */
-  private retileEverywhere(reason: string): void {
-    if (this.dragging || this.adjustId !== null) {
-      this.addTimeout(200, () => {
-        if (!this.dragging && this.adjustId === null) this.reconcileAll(reason, false);
-      });
-      return;
+    // §3: a workspace move keeps the side it came from — a window from the
+    // workspace on its left takes slot 0, from the right slot 1.
+    const others = this.tileables(index).filter(
+      (t) => t.id !== tracked.id && t.surface.screenId === tracked.surface.screenId,
+    );
+    if (others.length === 1) {
+      tracked.pendingSlot = index > from ? 0 : 1;
+      others[0].pendingSlot = tracked.pendingSlot === 0 ? 1 : 0;
     }
-    this.reconcileAll(reason, false);
+    // §11: no policy in a signal handler. The arrival (a no-room float when the
+    // destination is full) is applied from the drain.
+    tracked.userMovedTo = index;
+    this.scheduleReconcile('workspace-changed');
   }
 
   private scheduleScan(): void {
@@ -1838,7 +2066,7 @@ export class WindowSession {
     }
     this.deps.adaptation.prune();
     this.deps.adaptation.save();
-    this.pruneEmptyWorkspaces();
+    this.reapEmptyWorkspaces();
     this.retileAll('scan');
     this.lastReconcileMs = (GLib.get_monotonic_time() - startedUs) / 1000;
     this.scanPerfCounter += 1;
@@ -1880,24 +2108,11 @@ export class WindowSession {
 
         const tileables = this.tileables(index).filter(onScreen).filter((t) => !busy(t));
 
-        // Nothing tiled here: an *automatic* float left alone has to come back
-        // into the tiling (a window the user floated themselves is kept).
-        if (tileables.length === 0) {
-          const floats = this.autoFloated(index).filter(onScreen).filter((t) => !busy(t));
-          for (const floater of floats) {
-            floater.surface.setFloating(false);
-            this.deps.host.applyLayer(floater.id, Layer.TILED, 0);
-          }
-          if (floats.length > 0) {
-            this.signatures.clearAll();
-            this.coherenceFixes += 1;
-            this.deps.history.log('tile', { reason: 'coherence-unfloat', id: floats[0].id, workspaceId: index });
-            this.scheduleRetile(index, 'coherence-unfloat');
-          }
-          continue;
-        }
+        // §6: a float pins its workspace and is never pulled back; the sweep
+        // leaves a workspace that holds only floats exactly as it is.
+        if (tileables.length === 0) continue;
 
-        // A lone window is maximized (§7.2): there is no such thing as a single
+        // A lone window is maximized (§4): there is no such thing as a single
         // window left untiled. Retry at most every 3 s per window so a window
         // that genuinely refuses cannot be hammered every sweep.
         if (tileables.length === 1) {
@@ -1914,14 +2129,10 @@ export class WindowSession {
           continue;
         }
 
-        // More than a pair is incoherent by itself: `retile` resolves it by
-        // floating the newest extra (the plan would otherwise ignore it).
-        if (tileables.length > 2) {
-          this.signatures.clearAll();
-          this.coherenceFixes += 1;
-          this.retile(index, 'coherence');
-          continue;
-        }
+        // A pair is the most a workspace holds in v2; extra visible windows are
+        // a routing bug, not something to evict — leave them alone and let the
+        // next reconcile resolve them.
+        if (tileables.length > 2) continue;
 
         this.plansComputed += 1;
         const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, this.tilerConfig());

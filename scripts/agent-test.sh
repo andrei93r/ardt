@@ -27,7 +27,7 @@ WORKERS="${ADRT_WORKERS:-$DEFAULT_WORKERS}"
 
 scenario_files() {
   local script
-  for script in "$AGENT_DIR"/A[0-9][0-9]-*.sh; do
+  for script in "$AGENT_DIR"/A[0-9][0-9]*.sh; do
     [ -e "$script" ] || continue
     if [ -n "$FILTER" ] && ! basename "$script" | grep -qE "$FILTER"; then
       continue

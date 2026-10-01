@@ -245,7 +245,19 @@ ensure_clean() {
   adrt SimulateWorkspaceOrientation false >/dev/null 2>&1 || true
   # Nor a relaxed min-size policy.
   set_setting min-size-policy respect >/dev/null 2>&1 || true
+  # Nor a screen class set by a single/fixed-workspace scenario (§1).
+  set_system_setting org.gnome.mutter dynamic-workspaces true >/dev/null 2>&1 || true
+  set_system_setting org.gnome.mutter workspaces-only-on-primary true >/dev/null 2>&1 || true
+  set_system_setting org.gnome.desktop.wm.preferences num-workspaces 4 >/dev/null 2>&1 || true
   sleep 0.5
+}
+
+# Set the number of static workspaces (dynamic workspaces off) for a scenario.
+set_static_workspaces() {
+  local count="$1"
+  set_system_setting org.gnome.mutter dynamic-workspaces false
+  set_system_setting org.gnome.desktop.wm.preferences num-workspaces "$count"
+  sleep 1
 }
 
 open_pair() {

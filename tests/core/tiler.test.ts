@@ -284,4 +284,16 @@ describe('computePlans — vertical workspaces', () => {
     const rectFor = (id: number) => plan.placements.find((p) => p.surfaceId === id)!.rect;
     expect(rectFor(1).x).toBeLessThan(rectFor(2).x);
   });
+
+  it('honours an explicit slot over the geometric guess (§3/§4)', () => {
+    // Both windows report a left-side rect; the explicit slots decide the side.
+    const left = rect(0, 0, 800, 600);
+    const plan = computePlans(
+      [window({ id: 1, rect: left, slot: 1 }), window({ id: 2, appId: 'b', rect: left, slot: 0 })],
+      landscape,
+      config(),
+    );
+    const rectFor = (id: number) => plan.placements.find((p) => p.surfaceId === id)!.rect;
+    expect(rectFor(2).x).toBeLessThan(rectFor(1).x);
+  });
 });

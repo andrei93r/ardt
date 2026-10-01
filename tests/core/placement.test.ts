@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  freeSlot, impossibleSplit, minimizeRelocation, routeNewWindow, sideSlot, unmaximizeWindow,
+  escapeSize, freeSlot, impossibleSplit, minimizeRelocation, routeNewWindow, sideSlot, unmaximizeWindow,
 } from '../../src/core/placement.js';
 import type { State, Win, Ws } from '../../src/core/placement.js';
 
@@ -64,6 +64,11 @@ describe('routeNewWindow (§3)', () => {
     expect(routeNewWindow(s, env, win(2))).toMatchObject({ workspace: 0, slot: 1, maximize: true });
   });
 
+  it('maximizes a newcomer on a workspace that only looks empty (§5)', () => {
+    const s = state([ws(0, [null, null], [win(9)]), ws(1)]);
+    expect(routeNewWindow(s, env, win(2))).toMatchObject({ workspace: 0, maximize: true });
+  });
+
   it('creates a workspace immediately right when the viewed one is full', () => {
     const s = state([ws(0, [win(1), win(2)]), ws(1)]);
     expect(routeNewWindow(s, env, win(3))).toMatchObject({ workspace: 0, slot: 1, createRight: true, maximize: true });
@@ -96,7 +101,13 @@ describe('routeNewWindow (§3)', () => {
 
   it('gives a window that cannot fit a share its own workspace (the escape, §16)', () => {
     const s = state([ws(0, [win(1), null]), ws(1)]);
-    expect(routeNewWindow(s, env, win(2), null, null, true)).toMatchObject({ workspace: 0, createRight: true, maximize: true });
+    expect(routeNewWindow(s, env, win(2), null, null, true)).toMatchObject({ workspace: 0, slot: 0, createRight: true });
+  });
+
+  it('lets the trigger keep a single-workspace screen and minimizes the rest (§10 step 4)', () => {
+    const s = state([ws(0, [win(1), win(2)])]);
+    expect(routeNewWindow(s, { screen: 'single', axis: 'horizontal' }, win(3), null, null, true))
+      .toMatchObject({ workspace: 0, inPlace: true, maximize: true, minimize: [1, 2] });
   });
 });
 
@@ -156,6 +167,18 @@ describe('minimizeRelocation (the alone-minimized rule, §4)', () => {
   it('leaves it alone when no neighbour holds windows', () => {
     const s = state([ws(0, [null, null], [win(2)])]);
     expect(minimizeRelocation(s, 0)).toBeNull();
+  });
+});
+
+describe('escapeSize (the escape clamp, §10 step 3)', () => {
+  it('keeps a window wider than a sixth at its own size', () => {
+    expect(escapeSize(1200, 700)).toBe(700);
+  });
+  it('clamps a tiny window up to one sixth of the screen', () => {
+    expect(escapeSize(1200, 80)).toBe(200);
+  });
+  it('clamps a huge window down to the full screen', () => {
+    expect(escapeSize(1200, 2000)).toBe(1200);
   });
 });
 

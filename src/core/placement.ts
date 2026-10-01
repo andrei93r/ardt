@@ -94,6 +94,19 @@ export function arrivalSlot(ws: Ws, from: Direction | null = null): 0 | 1 | null
   return ws.slots[1] === null ? 1 : 0;
 }
 
+/** How many windows are visible in a workspace's two slots (§5). */
+export function visibleCount(ws: Ws): number {
+  return (ws.slots[0] === null ? 0 : 1) + (ws.slots[1] === null ? 0 : 1);
+}
+
+/** The visible window ids of a workspace, in slot order. */
+export function visibleIds(ws: Ws): number[] {
+  const ids: number[] = [];
+  if (ws.slots[0] !== null) ids.push(ws.slots[0].id);
+  if (ws.slots[1] !== null) ids.push(ws.slots[1].id);
+  return ids;
+}
+
 /** How many windows a workspace holds, counting minimized and floating ones. */
 export function windowCount(ws: Ws): number {
   let count = (ws.slots[0] === null ? 0 : 1) + (ws.slots[1] === null ? 0 : 1) + ws.minimized.length;
@@ -125,9 +138,14 @@ export function routeNewWindow(
   if (ws === undefined) return { workspace: target, slot: 1, maximize: true, note: 'no-workspace' };
 
   if (env.screen === 'single') {
+    // §10 step 4 / §16: no workspace to give, so the trigger keeps the screen
+    // maximized and the windows already there are minimized.
+    if (doesNotFit) {
+      return { workspace: target, slot: 1, inPlace: true, maximize: true, minimize: visibleIds(ws), note: 'trigger-wins' };
+    }
     const free = arrivalSlot(ws, from);
-    if (free !== null && !doesNotFit) return { workspace: target, slot: free, maximize: windowCount(ws) === 0 };
-    return { workspace: target, slot: free ?? 1, float: true, note: 'no-room-floats' };
+    if (free !== null) return { workspace: target, slot: free, maximize: visibleCount(ws) === 0 };
+    return { workspace: target, slot: 1, float: true, note: 'no-room-floats' };
   }
   if (env.screen === 'fixed') {
     const free = arrivalSlot(ws, from);
@@ -140,12 +158,14 @@ export function routeNewWindow(
   // A workspace-capable screen: the right slot, else split a maximized single,
   // else a new workspace immediately right.
   if (doesNotFit) {
-    return { workspace: target, slot: 1, createRight: true, maximize: true, note: 'did-not-fit' };
+    // §16: its own workspace, sized to itself (the adapter clamps it).
+    return { workspace: target, slot: 0, createRight: true, note: 'did-not-fit' };
   }
   const free = arrivalSlot(ws, from);
   if (free !== null) {
-    if (windowCount(ws) === 0) {
-      // Empty: alone, so maximized.
+    if (visibleCount(ws) === 0) {
+      // Alone among the visible windows (a workspace that only *looks* empty,
+      // §5): it maximizes. Minimized windows keep their place.
       return { workspace: target, slot: free, maximize: true };
     }
     return { workspace: target, slot: free, note: 'right-slot' };
@@ -235,4 +255,13 @@ export function refusalLadder(
   const sibling = Math.min(Math.max(screen - keepSize, siblingMinimum), screen);
   if (keepSize + sibling <= screen) return { sibling, escaped: false };
   return { sibling: screen, escaped: true };
+}
+
+/**
+ * §10 step 3 / §16: the width (along the split axis) a window gets on its own
+ * escape workspace — its own size, clamped between one sixth of the screen and
+ * the whole screen. The escaping window keeps the slot-0 position.
+ */
+export function escapeSize(screen: number, requested: number): number {
+  return Math.min(Math.max(requested, Math.round(screen / 6)), screen);
 }

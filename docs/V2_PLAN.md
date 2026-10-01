@@ -24,7 +24,7 @@ ticked and its target runs pass.
 | --- | --- | --- | --- |
 | 0 Grounding and event-confirmed triggers | done | 17/17 | — |
 | 1 Queue mechanism and records | done | 7/7 | — |
-| 2 The model: slots, routing, maximise, emptiness | in progress | 3/18 | — |
+| 2 The model: slots, routing, maximise, emptiness | in progress | 14/18 | — |
 | 3 User-driven interactions | not started | 0/8 | — |
 | 4 App registry, prefs, migration | not started | 0/11 | — |
 | 5 Displays and hotplug | not started | 0/7 | — |
@@ -135,23 +135,25 @@ Notes: a refactor stage — the existing suite must stay green throughout.
       A81 needing four screens. The harness now defaults to half the cores, because this
       laptop also runs a live session and the timing-sensitive scenarios starve at full load
 
-## Stage 2 — The model: slots, routing, maximise, emptiness (3/18)
+## Stage 2 — The model: slots, routing, maximise, emptiness (14/18)
 
-> **Handover note (2026-10-01 night).** The pure model is landed and green (43 new unit
-> tests): routing with the arrival side rule and the escape, the maximise/unmaximise
-> ladders, the trigger-wins rule, the refusal ladder, and reaping as a property with the
-> alone-minimized relocation. The classification port is done in the direction that
-> changes behaviour: **always-on-top floats** (reversing A61) and the **auto-float
-> pull-back is deleted**, with `A61-above-floats` as the new scenario and `A50`, `A53`
-> and `A59` retired with the v2 replacements named. The adapter still routes through the
-> old `moveToNewWorkspace`/`floatOverPair` pair of helpers and does not yet call
-> `routeNewWindow`/`reapPlan` in its own paths, the unmaximise ladder is still the v1
-> one, and the remaining deletion list (the `>2` branch, `unmaximizeStaleLone`,
-> `returnFromMaximize`, `previousWorkspaceIdx`, the minimise-slide, the old prune rules,
-> `EXILE_COOLDOWN_MS`, the budget, `workspaceOpDepth`, the three settings) is still in
-> place. **Stages 3–8 are not started.** The known load flake is `A66`'s
-> "a resize is counted as a plan applied" (it passes at one worker; the v1 resize path
-> it watches is replaced by the v2 sizing work). (0/18)
+> **Stage 2 status (2026-10-01 night, autonomous).** Landed and verified: the pure model
+> (`core/placement.ts`, `core/workspaces.ts`, 43 cases) **and its adapter wiring** — routing
+> through `routeNewWindow` with the arrival side rule and the escape, reaping through
+> `reapPlan`, the maximise/unmaximise/fullscreen rules from the drain, the single-workspace
+> flow, the v1 machinery deleted (`>2` branch, `floatOverPair`-as-eviction,
+> `unmaximizeStaleLone`, `returnFromMaximize`, `previousWorkspaceIdx`, the minimise-slide,
+> the old prune rules, `EXILE_COOLDOWN_MS`, the spawn budget + `core/budget.ts`,
+> `workspaceOpDepth`), the three dead settings removed, the keybinding surface and its
+> gschema keys added, and 16 new scenarios (A85–A93, A106, A113–A118) with four v1
+> scenarios retired with the replacement named. Full suite: **92 scenarios, 0 failures, 6
+> recorded skips** (A40/A50/A53/A59 retired, A81 needs four screens, A106 needs two), plus
+> a real GNOME 50 bug fixed on the way (`get_min_size`/`get_max_size` return a leading
+> boolean — every client minimum had been read wrong). Still open in this stage: routing is
+> invoked from the deferred `onReady` timeout rather than literally from the lane-2 drain;
+> the refusal ladder's "sibling adapts" step still rides the tiler's clamp (A52); the
+> cross-screen arrival side rule is covered by A117 only for workspaces. Stages 3–8 are in
+> progress in parallel work packages; the plan ticks them as they land.
 
 **Failing scenarios first**
 
@@ -172,34 +174,34 @@ Notes: a refactor stage — the existing suite must stay green throughout.
 - [x] `core/placement.ts`: `routeNewWindow(state, rec, env) → { workspace, slot }`;
       `canHostWorkspaces(env)` read from GNOME (dynamic / one / static — never from
       internal vs external)
-- [ ] The **arrival rules** (§3): slot 1 by default; the slot on the side it came from
+- [x] The **arrival rules** (§3): slot 1 by default; the slot on the side it came from
       for a screen or workspace move; a lone arrival still maximizes
-- [ ] The **view policy** (§3): the view follows the app the action is about, only on the
+- [x] The **view policy** (§3): the view follows the app the action is about, only on the
       viewed workspace; a reactor never moves it
-- [ ] The **toast policy** (§21): a request that changes nothing toasts with its reason;
+- [x] The **toast policy** (§21): a request that changes nothing toasts with its reason;
       a direction with nothing stays silent
-- [ ] **Adoption** (§20): existing windows adopted without being moved until the first
+- [x] **Adoption** (§20): existing windows adopted without being moved until the first
       drain, which waits for `startup-complete`
 - [x] `core/workspaces.ts`: `workspaceOps(state, env) → { create, reap }` with the single
       trailing spare (global, GNOME's own) and emptying as a property
-- [ ] Adapter: routing and reaping only from the lane-2 drain; windows on a screen
+- [x] Adapter: routing and reaping only from the lane-2 drain; windows on a screen
       without workspaces are **not** given a workspace index
-- [ ] Delete: the `>2` extra branch, `floatOverPair`-as-eviction, `unmaximizeStaleLone`,
+- [x] Delete: the `>2` extra branch, `floatOverPair`-as-eviction, `unmaximizeStaleLone`,
       `returnFromMaximize`, `previousWorkspaceIdx`, the minimise-slide, the old
       `pruneEmptyWorkspaces` rules, `EXILE_COOLDOWN_MS`, the spawn budget +
       `core/budget.ts`, `workspaceOpDepth`
-- [ ] Maximise (§4), unmaximise (§4), single-workspace flow (§7) and float rules (§6);
+- [x] Maximise (§4), unmaximise (§4), single-workspace flow (§7) and float rules (§6);
       remove `workspace-auto-name`, `workspace-move-grace-seconds`,
       `respect-user-workspace-move`
-- [ ] Keybindings (§17) and the gschema they need: the workspace-move shortcuts, the float
+- [x] Keybindings (§17) and the gschema they need: the workspace-move shortcuts, the float
       key, nudge on both axes, `follow-moved-window`
-- [ ] **The escape rule**: a managed window that does not fit its slot gets its own
+- [x] **The escape rule**: a managed window that does not fit its slot gets its own
       workspace to the right, clamped to [1/6, full screen]; the trigger keeps the screen
-- [ ] **Classification ported**: always-on-top floats (reversing A61), dialogs and
+- [x] **Classification ported**: always-on-top floats (reversing A61), dialogs and
       transients float/centre/raise, an app mapping itself maximized is unmaximized and
       tiled, fullscreen is the "does not fit" case
 - [x] `core/placement.test.ts` + `core/workspaces.test.ts` (43 cases)
-- [ ] The scenario set rewritten or retired (table in the CHANGELOG) with spec/README
+- [x] The scenario set rewritten or retired (table in the CHANGELOG) with spec/README
       §7/§9/§16/§35/§21 in the same commits
 
 **Target runs**

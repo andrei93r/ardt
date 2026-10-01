@@ -171,9 +171,21 @@ export class Tiling {
   applyPlan(plan: TilePlan, screen: Screen, reason: string, animate: boolean, rememberUndo = true): boolean {
     if (this.destroyed || this.deps.isPaused()) return false;
 
+    // §11 determinism: a plan is computed one drain and applied on a later
+    // frame, so a window can have become a float, escaped, minimized or
+    // fullscreen in between. Re-derive that here and drop it from the plan
+    // rather than dragging it back over the state the window now has.
+    const placements = plan.placements.filter((placement) => {
+      const tracked = this.deps.windows().get(placement.surfaceId);
+      if (tracked === undefined) return false;
+      if (tracked.escaped) return false;
+      const flags = tracked.surface.flags;
+      return !flags.floating && !flags.minimized && !flags.fullscreen;
+    });
+
     const before: { id: number; rect: Rect }[] = [];
     let moved = false;
-    for (const placement of plan.placements) {
+    for (const placement of placements) {
       const tracked = this.deps.windows().get(placement.surfaceId);
       if (tracked === undefined) continue;
       tracked.refreshFrame();
@@ -186,7 +198,7 @@ export class Tiling {
 
     this.appliedPlans += 1;
 
-    const workspaceId = plan.placements.length > 0 ? this.deps.windows().get(plan.placements[0].surfaceId)?.surface.workspaceId ?? 0 : 0;
+    const workspaceId = placements.length > 0 ? this.deps.windows().get(placements[0].surfaceId)?.surface.workspaceId ?? 0 : 0;
     // §15: capture the ratios the "before" rects came from, so undo restores a
     // self-consistent layout. A safety-net pass (scan / periodic retile) is not
     // a user action and must not push a masking entry over the real one.
@@ -196,7 +208,7 @@ export class Tiling {
       this.deps.undo.push(workspaceId, before, moved, ratios);
     }
 
-    for (const placement of plan.placements) {
+    for (const placement of placements) {
       const tracked = this.deps.windows().get(placement.surfaceId);
       if (tracked === undefined) continue;
       this.applyFrame(tracked, placement.rect, screen, animate, reason, 0);

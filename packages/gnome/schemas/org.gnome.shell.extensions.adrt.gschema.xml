@@ -51,20 +51,10 @@
       <summary>Undo stack size</summary>
       <description>Number of retiles remembered for undo.</description>
     </key>
-    <key name="workspace-auto-name" type="b">
-      <default>false</default>
-      <summary>Name spawned workspaces</summary>
-      <description>Name workspaces created by the third-window policy.</description>
-    </key>
-    <key name="respect-user-workspace-move" type="b">
+    <key name="follow-moved-window" type="b">
       <default>true</default>
-      <summary>Respect user workspace moves</summary>
-      <description>Do not fight a user dragging a window between workspaces.</description>
-    </key>
-    <key name="workspace-move-grace-seconds" type="i">
-      <default>3</default>
-      <summary>Workspace move grace</summary>
-      <description>Seconds to leave a user-moved window alone.</description>
+      <summary>Follow a moved window</summary>
+      <description>When a window is moved to another workspace with the keyboard, switch the view to it.</description>
     </key>
     <key name="log-workspace-reorder" type="b">
       <default>false</default>
@@ -312,6 +302,16 @@
       <summary>Nudge split right</summary>
       <description>Move the shared edge right.</description>
     </key>
+    <key name="kb-nudge-up" type="as">
+      <default>['&lt;Super&gt;&lt;Control&gt;k']</default>
+      <summary>Nudge split up</summary>
+      <description>Move the shared edge up.</description>
+    </key>
+    <key name="kb-nudge-down" type="as">
+      <default>['&lt;Super&gt;&lt;Control&gt;j']</default>
+      <summary>Nudge split down</summary>
+      <description>Move the shared edge down.</description>
+    </key>
     <key name="kb-move-left" type="as">
       <default>['&lt;Super&gt;&lt;Shift&gt;h']</default>
       <summary>Move tile left</summary>
@@ -341,6 +341,61 @@
       <default>['&lt;Super&gt;&lt;Alt&gt;q']</default>
       <summary>Quit window</summary>
       <description>Close the focused window.</description>
+    </key>
+    <key name="kb-move-workspace-next" type="as">
+      <default>['&lt;Super&gt;&lt;Control&gt;Page_Down']</default>
+      <summary>Move window to next workspace</summary>
+      <description>Send the focused window to the workspace on its right.</description>
+    </key>
+    <key name="kb-move-workspace-prev" type="as">
+      <default>['&lt;Super&gt;&lt;Control&gt;Page_Up']</default>
+      <summary>Move window to previous workspace</summary>
+      <description>Send the focused window to the workspace on its left.</description>
+    </key>
+    <key name="kb-move-workspace-1" type="as">
+      <default>[]</default>
+      <summary>Move window to workspace 1</summary>
+      <description>Send the focused window to workspace 1.</description>
+    </key>
+    <key name="kb-move-workspace-2" type="as">
+      <default>[]</default>
+      <summary>Move window to workspace 2</summary>
+      <description>Send the focused window to workspace 2.</description>
+    </key>
+    <key name="kb-move-workspace-3" type="as">
+      <default>[]</default>
+      <summary>Move window to workspace 3</summary>
+      <description>Send the focused window to workspace 3.</description>
+    </key>
+    <key name="kb-move-workspace-4" type="as">
+      <default>[]</default>
+      <summary>Move window to workspace 4</summary>
+      <description>Send the focused window to workspace 4.</description>
+    </key>
+    <key name="kb-move-workspace-5" type="as">
+      <default>[]</default>
+      <summary>Move window to workspace 5</summary>
+      <description>Send the focused window to workspace 5.</description>
+    </key>
+    <key name="kb-move-workspace-6" type="as">
+      <default>[]</default>
+      <summary>Move window to workspace 6</summary>
+      <description>Send the focused window to workspace 6.</description>
+    </key>
+    <key name="kb-move-workspace-7" type="as">
+      <default>[]</default>
+      <summary>Move window to workspace 7</summary>
+      <description>Send the focused window to workspace 7.</description>
+    </key>
+    <key name="kb-move-workspace-8" type="as">
+      <default>[]</default>
+      <summary>Move window to workspace 8</summary>
+      <description>Send the focused window to workspace 8.</description>
+    </key>
+    <key name="kb-move-workspace-9" type="as">
+      <default>[]</default>
+      <summary>Move window to workspace 9</summary>
+      <description>Send the focused window to workspace 9.</description>
     </key>
 
     <!-- Internal state -->

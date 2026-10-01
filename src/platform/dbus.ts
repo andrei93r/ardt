@@ -12,6 +12,7 @@ export interface DbusHandlers {
   SetSplitRatio(workspace: number, monitor: string, axis: string, ratio: number): boolean;
   Undo(): boolean;
   NudgeSplit(direction: string, step: number): boolean;
+  MoveFocusedToWorkspace(index: number): boolean;
   ReloadRules(): boolean;
   ResetPerApp(appId: string): boolean;
   GetAdaptations(): string;

@@ -42,6 +42,59 @@ code changes, MINOR for features, PATCH for fixes.
 - Scripts that no longer apply to the laptop's harness are struck from the plan
   with a reason (`scripts/server-test.sh` needs the not-yet-set-up server).
 
+### Added (Stage 2 — slots, routing, maximise, emptiness)
+
+- The adapter now routes, maximises, unmaximises, fullscreens and reaps through
+  the pure v2 model (`core/placement.ts` + `core/workspaces.ts`):
+  `routeNewWindow`, `maximizeWindow`, `unmaximizeWindow`, `reapPlan` and the
+  escape. The screen class is read from GNOME (`org.gnome.mutter`
+  `dynamic-workspaces`/`workspaces-only-on-primary` and
+  `org.gnome.desktop.wm.preferences num-workspaces`), never from internal vs
+  external. `ScreenClass`/`Env`/`State` are built per drain.
+- **The escape rule** (§16/§10): a managed window that does not fit its slot
+  (oversized, `min == max`, or refusing) gets its own workspace to the right,
+  sized to itself, clamped to `[1/6, full screen]`, flush at slot 0; on a
+  single-workspace screen the trigger keeps the screen and the others minimize.
+- **`follow-moved-window`** (default on), the workspace-move shortcuts
+  (next/previous/by index), and nudge on both axes; `DumpState` gains each
+  window's `min`/`max`.
+- New scenarios: `A85`–`A93`, `A106`, `A113`–`A118`.
+- `MoveFocusedToWorkspace` on the test D-Bus surface.
+
+### Changed (Stage 2)
+
+- Maximize is in place with the other managed windows minimized on a
+  single-workspace screen; on a workspace-capable screen it is a workspace to
+  the right. Fullscreen behaves the same.
+- Unmaximize joins the left workspace when it holds exactly one window (into
+  slot 1), else the right, else parks minimized left/right, else re-maximizes
+  the lone window. No origin memory.
+- Reaping is a property: every empty workspace other than GNOME's trailing spare
+  is removed wherever it sits; a workspace holding only minimized windows
+  relocates its occupant first; a float pins its workspace.
+- The `get_min_size()`/`get_max_size()` reading is fixed for GNOME 50, which
+  returns `[hasSize, width, height]` (it previously read the leading boolean).
+- A not-yet-ready window is excluded from the tiling until its routing decides
+  its side, removing the race that could form a pair swapped.
+- `A50`, `A53`, `A59` and `A40` are retired with recorded skips; their v2
+  replacements are `A90`/`A91`/`A113`.
+
+### Removed (Stage 2 — dead v1 machinery)
+
+- The `tileables.length > 2` extra branch (both in `retile` and the coherence
+  sweep) and `floatOverPair`-as-eviction.
+- `unmaximizeStaleLone`, `returnFromMaximize`, `previousWorkspaceIdx` and the
+  `onMaximizeSignal` origin memory.
+- The minimise-slide (`onMinimized` moving a lone window left) and the old
+  `pruneEmptyWorkspaces` rules (the `dynamicWorkspaces` set and its cooldown).
+- `EXILE_COOLDOWN_MS`, the spawn-budget gates and `core/budget.ts` (with its
+  test): the model has no rationing, no budget and no cooldown.
+- `workspaceOpDepth` (the reorder re-entry guard is now unnecessary: the
+  reorder handler only schedules a drain).
+- Settings `workspace-auto-name`, `workspace-move-grace-seconds` and
+  `respect-user-workspace-move`.
+- The auto-float pull-back from the coherence sweep: a float pins its workspace.
+
 ## [0.1.0] - 2026-09-29
 
 ### Added

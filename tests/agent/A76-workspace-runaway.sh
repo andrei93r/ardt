@@ -2,13 +2,12 @@
 # Generated with AI for personal use.
 # Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
 # and can maintain this code.
-# A76 The exile policy must never run away. `moveToNewWorkspace` reorders
-# workspaces, Mutter emits `workspaces-reordered` synchronously, and the handler
-# retiled — which called straight back into the exile policy. One window was
-# exiled 160 times in a second at ~1 ms per iteration and the workspace list
-# reached 86, leaving the desktop unusable (the window's clone stuck on every
-# workspace). Moving a window onto a full pair with the workspace to its right
-# occupied is what closes that loop.
+# A76 The workspace policy must never run away. The v1 exile policy reordered
+# workspaces, Mutter emitted `workspaces-reordered` synchronously, and the
+# handler retiled — calling straight back into the exile policy; one window was
+# exiled 160 times a second and the list reached 86. In v2 a move onto a full
+# pair simply floats (§6/§34): nothing is evicted, so no loop can start. This
+# asserts the bounded count and that the pair survived.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 ensure_clean
@@ -59,15 +58,22 @@ for i in range(len(tiles)):
 print(len(tiles), "tiled windows, none stacked")
 ' 12
 
-# The containment must be what stopped it: either the budget/cooldown refused a
-# creation, or the loop never started (a bounded count is itself the proof).
-if grep -q 'ws_spawn_blocked' "$(history_file)" 2>/dev/null; then
-  pass "workspace creation was refused by the containment ($(grep -c 'ws_spawn_blocked' "$(history_file)") times)"
-elif [ "$(state_expr 'd["workspaces"]')" -le 4 ]; then
+# Nothing is evicted: the workspace count stays bounded because a move onto a
+# full workspace floats rather than creating or reordering one (§6/§34).
+if [ "$(state_expr 'd["workspaces"]')" -le 4 ]; then
   pass "no runaway: the workspace count never grew past 4"
 else
-  fail "workspaces grew to $(state_expr 'd["workspaces"]') with no containment entry"
+  fail "workspaces grew to $(state_expr 'd["workspaces"]')"
 fi
+
+poll "the moved window floated on the full workspace instead of evicting anyone" '
+import json, sys
+d = json.load(sys.stdin)
+floats = [w for w in d["windows"] if w["layer"] == 2]
+if not floats:
+    print("no float: nothing took the no-room branch"); sys.exit(1)
+print("floats", [w["id"] for w in floats])
+' 12
 
 ensure_clean
 summary

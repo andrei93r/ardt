@@ -303,6 +303,12 @@ export class GnomeHost implements PlatformHost {
     win.minimize();
   }
 
+  unminimize(id: number): void {
+    const win = this.windowById(id);
+    if (win === null) return;
+    win.unminimize();
+  }
+
   maximize(id: number): void {
     const win = this.windowById(id);
     if (win === null) return;
@@ -312,8 +318,10 @@ export class GnomeHost implements PlatformHost {
   minSize(id: number): Size | null {
     const win = this.windowById(id);
     if (win === null) return null;
-    const min = win.get_min_size();
-    return { width: min[0], height: min[1] };
+    // GNOME 50 returns [hasSize, width, height]; older returns [width, height].
+    const min = win.get_min_size() as number[];
+    const base = (min?.length ?? 0) >= 3 ? 1 : 0;
+    return { width: Number(min?.[base] ?? 0), height: Number(min?.[base + 1] ?? 0) };
   }
 
   private windowById(id: number): any | null {

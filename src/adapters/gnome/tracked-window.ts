@@ -31,9 +31,8 @@ export class TrackedWindow {
   refusals = 0;
   stubborn = false;
   cooldownUntilMs = 0;
-  previousWorkspaceIdx: number | null = null;
-  /** True when Adrt floated this window itself (float-over-pair, unmaximize
-   * return) rather than the user asking for it. */
+  /** True when Adrt floated this window itself (a no-room placement) rather
+   * than the user asking for it. */
   autoFloated = false;
   /** Set once the first frame has been processed; signals before that are not user actions. */
   ready = false;
@@ -46,8 +45,6 @@ export class TrackedWindow {
    * maximized to its own workspace back to the pair (A45).
    */
   selfUnmaximize = false;
-  /** When Adrt last sent this window to its own workspace (see EXILE_COOLDOWN_MS). */
-  exiledAtMs = 0;
   /**
    * Set when the window is maximized while it shares its workspace (a user
    * maximize, §4), cleared when it settles alone on its own workspace or is
@@ -56,6 +53,20 @@ export class TrackedWindow {
    */
   maximizeRequested = false;
   lastWorkspaceIdx = 0;
+  /** The fullscreen state adrt has already routed for the current transition. */
+  fullscreenApplied = false;
+  /** A user unmaximize reported by Mutter, applied from the drain (§4). */
+  unmaximizeRequested = false;
+  /** A user workspace move reported by Mutter; the drain arrives it (§6/§17). */
+  userMovedTo: number | null = null;
+  /**
+   * §16: a window that did not fit its slot owns a workspace at its own clamped
+   * size. While set it is left out of the tiling — the lone law must not
+   * maximize it.
+   */
+  escaped = false;
+  /** §3/§4: the slot the window's own change chose, honoured by the tiler. */
+  pendingSlot: 0 | 1 | null = null;
 
   /** Cached min/max dimensions; never re-queried on the tile hot path. */
   minSize: Size;

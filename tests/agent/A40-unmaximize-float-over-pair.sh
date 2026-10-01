@@ -6,6 +6,12 @@
 # completely covering the tiled pair behind it.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
+# Retired with the v1 rule it tests: the v2 unmaximize ladder joins a neighbour
+# that holds exactly one window, else parks the window minimized (A90/A91).
+# There is no float-over-pair unmaximize in the model.
+skip "the float-over-pair unmaximize is replaced in Stage 2 by A90/A91"
+exit 0
+
 ensure_clean
 open_pair
 ids=($(list_ids))

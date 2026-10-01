@@ -18,6 +18,22 @@ function toRect(source: any): Rect {
   return { x: source.x, y: source.y, width: source.width, height: source.height };
 }
 
+/**
+ * GNOME 50's `Meta.Window.get_min_size()`/`get_max_size()` return
+ * `[hasSize, width, height]` (the leading boolean reports whether the hint is
+ * set), where older versions returned `[width, height]`. Read whichever shape
+ * arrived, so a client's minimum is honest across the versions.
+ */
+function toSize(pair: any): Size {
+  const arr = pair as ArrayLike<unknown> | null | undefined;
+  if (arr === null || arr === undefined) return { width: 0, height: 0 };
+  const length = arr.length ?? 0;
+  const base = length >= 3 ? 1 : 0;
+  const width = Number(arr[base] ?? 0);
+  const height = Number(arr[base + 1] ?? 0);
+  return { width: Number.isFinite(width) ? width : 0, height: Number.isFinite(height) ? height : 0 };
+}
+
 export class GnomeSurface implements Surface {
   readonly id: number;
   readonly win: any;
@@ -48,10 +64,8 @@ export class GnomeSurface implements Surface {
     this.kind = compat.kindFor(win);
     this.appId = clipText(win.get_wm_class(), 128);
     this.title = clipText(win.get_title());
-    const min = win.get_min_size();
-    const max = win.get_max_size();
-    this.min = { width: min[0], height: min[1] };
-    this.max = { width: max[0], height: max[1] };
+    this.min = toSize(win.get_min_size());
+    this.max = toSize(win.get_max_size());
     this.frame = toRect(win.get_frame_rect());
     this.screenId = win.get_monitor();
     this.workspaceId = win.get_workspace()?.index() ?? 0;
@@ -73,10 +87,8 @@ export class GnomeSurface implements Surface {
     this.workspaceId = this.win.get_workspace()?.index() ?? this.workspaceId;
     this.parentId = this.win.get_transient_for()?.get_id() ?? null;
     this.flags = this.readFlags();
-    const min = this.win.get_min_size();
-    const max = this.win.get_max_size();
-    this.min = { width: min[0], height: min[1] };
-    this.max = { width: max[0], height: max[1] };
+    this.min = toSize(this.win.get_min_size());
+    this.max = toSize(this.win.get_max_size());
   }
 
   /** Cheap update for the hot frame-changed path only. */
@@ -97,12 +109,13 @@ export class GnomeSurface implements Surface {
    * initial capture (§24 item 2).
    */
   refreshSizeHints(): boolean {
-    const min = this.win.get_min_size();
-    const max = this.win.get_max_size();
+    const min = toSize(this.win.get_min_size());
+    const max = toSize(this.win.get_max_size());
     const changed =
-      min[0] !== this.min.width || min[1] !== this.min.height || max[0] !== this.max.width || max[1] !== this.max.height;
-    this.min = { width: min[0], height: min[1] };
-    this.max = { width: max[0], height: max[1] };
+      min.width !== this.min.width || min.height !== this.min.height ||
+      max.width !== this.max.width || max.height !== this.max.height;
+    this.min = min;
+    this.max = max;
     return changed;
   }
 

@@ -208,6 +208,9 @@ export default class AdrtExtension extends Extension {
       onClosed: (id, rect) => this.onWindowClosed(id, rect),
       onDragChanged: (dragging) => this.onDragChanged(dragging),
       onWindowMoving: () => this.suppressForWorkspaceSwitch(),
+      onNotice: (key, subject) => {
+        this.toast(key, subject);
+      },
       isAnimating: () => this.animator.activeCount > 0,
     });
 
@@ -738,7 +741,6 @@ export default class AdrtExtension extends Extension {
       ['adaptation-enabled', () => this.adaptation.setEnabled(this.settings.boolean('adaptation-enabled', true))],
       ['float-persistence', () => this.floats.setEnabled(this.settings.boolean('float-persistence', false))],
       ['reflow-keeps-edges', () => this.session.invalidateAll()],
-      ['respect-user-workspace-move', () => this.session.invalidateAll()],
       ['indicator-color', () => this.syncIndicator()],
       ['indicator-width', () => this.syncIndicator()],
       ['indicator-opacity', () => this.syncIndicator()],
@@ -748,11 +750,7 @@ export default class AdrtExtension extends Extension {
       ['history-max-bytes', () => this.history.setMaxBytes(this.settings.int('history-max-bytes', 8388608))],
       ['undo-stack-size', () => this.undo.setMaxSize(this.settings.int('undo-stack-size', 20))],
       // Changing a shortcut re-registers the bindings so it takes effect at once.
-      ...[
-        'kb-undo', 'kb-focus-next', 'kb-focus-left', 'kb-focus-right', 'kb-focus-up', 'kb-focus-down',
-        'kb-move-left', 'kb-move-right', 'kb-move-up', 'kb-move-down', 'kb-toggle-float',
-        'kb-toggle-fullscreen', 'kb-quit', 'kb-nudge-left', 'kb-nudge-right',
-      ].map((key): [string, () => void] => [key, () => {
+      ...this.keybindingSettingNames().map((key): [string, () => void] => [key, () => {
         this.unregisterKeybindings();
         this.registerKeybindings();
       }]),
@@ -760,8 +758,9 @@ export default class AdrtExtension extends Extension {
     for (const [key, cb] of reactive) this.settingWatchers.push(this.settings.onChanged(key, cb));
   }
 
-  private registerKeybindings(): void {
-    const names = [
+  /** The frozen v2 keybinding surface (§17): every name is one settings key. */
+  private keybindingSettingNames(): string[] {
+    return [
       'kb-undo',
       'kb-focus-next',
       'kb-focus-left',
@@ -771,13 +770,30 @@ export default class AdrtExtension extends Extension {
       'kb-toggle-float',
       'kb-nudge-left',
       'kb-nudge-right',
+      'kb-nudge-up',
+      'kb-nudge-down',
       'kb-move-left',
       'kb-move-right',
       'kb-move-up',
       'kb-move-down',
+      'kb-move-workspace-next',
+      'kb-move-workspace-prev',
+      'kb-move-workspace-1',
+      'kb-move-workspace-2',
+      'kb-move-workspace-3',
+      'kb-move-workspace-4',
+      'kb-move-workspace-5',
+      'kb-move-workspace-6',
+      'kb-move-workspace-7',
+      'kb-move-workspace-8',
+      'kb-move-workspace-9',
       'kb-toggle-fullscreen',
       'kb-quit',
     ];
+  }
+
+  private registerKeybindings(): void {
+    const names = this.keybindingSettingNames();
     // §19.1 `keybindings`: "name=accelerator" entries override the defaults.
     for (const entry of this.settings.strv('keybindings')) {
       const eq = entry.indexOf('=');
@@ -789,6 +805,9 @@ export default class AdrtExtension extends Extension {
       }
     }
     for (const name of names) {
+      // A key with no accelerator (the by-index moves by default) is skipped:
+      // an empty binding would otherwise be registered with no effect.
+      if (this.settings.strv(name).length === 0) continue;
       wm.addKeybinding(name, this.getSettings(), Meta.KeyBindingFlags.NONE, Shell.ActionMode.NORMAL, () =>
         this.dispatchKeybinding(name),
       );
@@ -814,10 +833,22 @@ export default class AdrtExtension extends Extension {
         this.toggleFocusedFloat();
         break;
       case 'kb-nudge-left':
-        this.nudgeFocused('left', -1);
+        this.nudgeFocused('left');
         break;
       case 'kb-nudge-right':
-        this.nudgeFocused('right', 1);
+        this.nudgeFocused('right');
+        break;
+      case 'kb-nudge-up':
+        this.nudgeFocused('up');
+        break;
+      case 'kb-nudge-down':
+        this.nudgeFocused('down');
+        break;
+      case 'kb-move-workspace-next':
+        this.session.moveFocusedToAdjacentWorkspace('next');
+        break;
+      case 'kb-move-workspace-prev':
+        this.session.moveFocusedToAdjacentWorkspace('prev');
         break;
       case 'kb-move-left':
         this.session.moveToward('left');
@@ -838,6 +869,10 @@ export default class AdrtExtension extends Extension {
         this.session.closeFocused();
         break;
       default:
+        if (name.startsWith('kb-move-workspace-')) {
+          const index = Number.parseInt(name.slice('kb-move-workspace-'.length), 10);
+          if (Number.isFinite(index)) this.session.moveFocusedToWorkspace(index - 1);
+        }
         break;
     }
   }
@@ -857,13 +892,10 @@ export default class AdrtExtension extends Extension {
     if (focused !== null) this.session.toggleFloat(focused.id);
   }
 
-  private nudgeFocused(direction: string, sign: number): void {
-    const focused = this.session.focused();
-    if (focused === null) return;
-    const step = this.settings.int('nudge-step', 5) * sign;
-    this.tiling.nudgeSplit(focused.id, direction, Math.abs(step));
-    this.session.clearSignatures();
-    this.session.retile(focused.surface.workspaceId, 'nudge');
+  private nudgeFocused(direction: string): void {
+    // §17: a nudge with nothing to split is announced rather than silent; the
+    // session owns that decision and the toast.
+    this.session.nudgeFocused(direction, this.settings.int('nudge-step', 5));
   }
 
   // ------------------------------------------------------------ persistence
@@ -1094,11 +1126,8 @@ export default class AdrtExtension extends Extension {
       GetSplitRatio: (workspace, monitor, axis) => this.tiling.getSplitRatioFor(workspace, monitor, axis as SplitAxis),
       SetSplitRatio: (workspace, monitor, axis, ratio) => this.tiling.setSplitRatioFor(workspace, monitor, axis as SplitAxis, ratio),
       Undo: () => this.session.undo(),
-      NudgeSplit: (direction, step) => {
-        const focused = this.session.focused();
-        if (focused === null) return false;
-        return this.tiling.nudgeSplit(focused.id, direction, step);
-      },
+      NudgeSplit: (direction, step) => this.session.nudgeFocused(direction, step),
+      MoveFocusedToWorkspace: (index) => this.session.moveFocusedToWorkspace(index),
       ReloadRules: () => {
         this.session.invalidateAll();
         return true;
@@ -1138,6 +1167,7 @@ export default class AdrtExtension extends Extension {
       SimulateResize: (a, b, ratio) => this.simulateResize(a, b, ratio),
       SwapPair: (a, b) => {
         this.tiling.toggleSwap(a, b);
+        this.session.clearPendingSlots(a, b);
         this.session.clearSignatures();
         this.session.retile(this.session.windows.get(a)?.surface.workspaceId ?? 0, 'swap');
         return true;
@@ -1287,6 +1317,8 @@ export default class AdrtExtension extends Extension {
         reason: this.session.classify(tracked).reason,
         profile: tracked.profile.name,
         stubborn: tracked.stubborn,
+        min: tracked.minSize,
+        max: tracked.maxSize,
       };
     });
     return JSON.stringify({
