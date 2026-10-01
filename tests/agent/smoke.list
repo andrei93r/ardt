@@ -55,6 +55,8 @@
 #   cursor to the active window      A132-cursor-centre,
 #     (trigger + follows-focus)        A133-cursor-follows-focus
 #   crash: popups never tracked      A134-popup-never-tracked
+#   screen clamp (all windows       A136-clamp-to-screen
+#     stay inside the monitor)
 #
 # Out of scope for a one-configuration smoke (kept in the full suite):
 #   multi-monitor routing/drags/rescue/replay (A105-A111, A122, A124),
@@ -110,3 +112,5 @@ A132-cursor-centre
 A133-cursor-follows-focus
 # --- crash regression: popups are never tracked or closed ---
 A134-popup-never-tracked
+# --- screen clamp: every window stays inside its monitor ---
+A136-clamp-to-screen

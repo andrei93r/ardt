@@ -24,6 +24,7 @@
 #   focus cycle                            S20-focus-cycle
 #   highlight hidden on fullscreen         S21-fullscreen-no-highlight
 #   cursor to the active window centre     S22-cursor-centre
+#   windows stay inside the screen         S24-clamp-to-screen
 #
 # Not in the smoke (kept in the full live suite, or skipped here):
 #   S08 keybindings (needs ydotool), S09 periodic retile (backstop, nested A66),
@@ -54,3 +55,5 @@ S20-focus-cycle
 S21-fullscreen-no-highlight
 # --- cursor to the active window ---
 S22-cursor-centre
+# --- windows stay inside their monitor ---
+S24-clamp-to-screen

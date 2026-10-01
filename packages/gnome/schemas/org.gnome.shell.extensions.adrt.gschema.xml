@@ -56,6 +56,11 @@
       <summary>Float pins its workspace</summary>
       <description>A floating window keeps its workspace from being reaped.</description>
     </key>
+    <key name="clamp-windows-to-screen" type="b">
+      <default>true</default>
+      <summary>Keep windows inside the screen</summary>
+      <description>Pull a window back inside its own monitor when its frame exceeds the whole screen surface. Fullscreen and minimized windows are left alone.</description>
+    </key>
     <key name="min-size-policy" type="s">
       <default>'respect'</default>
       <summary>Minimum-size policy</summary>
