@@ -187,3 +187,25 @@ export function snapRect(rect: Rect, scale: number): Rect {
     height: snap(rect.height, scale),
   };
 }
+
+/**
+ * §10/§25: shrink a rectangle to the monitor's scale grid from the inside. The
+ * leading edges round up and the trailing edges round down, so the result has
+ * integer physical-pixel edges and is never larger than the input. The tiler
+ * fits the work area through this before splitting, so a fractional work-area
+ * edge can never push a tile out of bounds. Integer scales are a no-op, which
+ * keeps scale 1/2 geometry byte-identical.
+ */
+export function snapRectInward(rect: Rect, scale: number): Rect {
+  if (!Number.isFinite(scale) || scale <= 1 || Number.isInteger(scale)) return rect;
+  const left = Math.ceil(rect.x * scale) / scale;
+  const top = Math.ceil(rect.y * scale) / scale;
+  const right = Math.floor((rect.x + rect.width) * scale) / scale;
+  const bottom = Math.floor((rect.y + rect.height) * scale) / scale;
+  return {
+    x: left,
+    y: top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
+  };
+}

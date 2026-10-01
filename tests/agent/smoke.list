@@ -42,6 +42,8 @@
 #   overview (coherence +            A56-coherence-sweep,
 #     drop-is-a-move)                A74-overview-drop-is-a-move
 #   registry / identity              A98-registry-lists-every-app
+#   fractional scaling (the split    A144-fractional-scaling
+#     boundary is reconciled)         (SimulateScreens scale per screen)
 #   displays (plan / rescue / replay A112-workarea-change-replans-one-monitor
 #     — rescues and replays are the (the one-monitor replan; rescue/replay
 #     two-screen scenarios)          need two screens, so they stay in the suite)
@@ -133,3 +135,5 @@ A138-os-timing
 A140-prefs-options
 # --- topology: every screen keeps its own axis, gated by signature ---
 A142-topology-cases
+# --- fractional scaling: the split boundary is reconciled (no seam/overlap) ---
+A144-fractional-scaling
