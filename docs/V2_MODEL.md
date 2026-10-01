@@ -847,6 +847,12 @@ never debug-gated (the deduplication and rate limits still apply).
     nothing floated, and a slight overlap is enough — the rectangles need not cover
     each other.
 
+73. **Dialogs float, centred on their parent, and raised** (round scenario 14,
+    confirmed): they never take a slot, never get a workspace, and never disturb the
+    pair underneath. Floats that **adrt places itself** (overflow and no-room cases)
+    are nudged off-centre so they never sit exactly on the window below; floats the
+    app or the user positioned are left exactly where they are.
+
 ## Deliberate non-goals
 
 
