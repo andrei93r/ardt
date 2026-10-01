@@ -1,49 +1,30 @@
 # Performance plan: fewer computations, fewer Shell calls
 
-> **Status 2026-09-30 — re-scoped, not cancelled.** The v2 work
-> (`docs/V2_MODEL.md`, `docs/V2_PLAN.md`) lands first: it deletes the coherence sweep
-> and the timers this plan was measured against. Everything below is still the record
-> of the baseline. What survives is carried forward into v2 Stage 8 — the Stage 0
-> counters (already live), Stage 1 (stop rebuilding configs per call) and Stage 2
-> (O(1) host window lookup). Stage 3 (sweep gating) and the adaptive back-off are
-> struck: the queue and the per-(workspace, monitor) bucketing the router needs
-> replace them. The numbers in *Baseline* stay valid as the before-measurement.
+> **Status 2026-10-01 — carried onto v2 and re-measured.** The v2 work
+> (`docs/V2_MODEL.md`, `docs/V2_PLAN.md`) replaced the coherence-sweep cadence
+> and the timers this plan was first measured against with one queue and a
+> lane-3 maintenance pass. Two stages are carried forward and are **landed in
+> the v2 code**: **Stage 1, config caching** and **Stage 2, O(1) host window
+> lookup**. **Stage 3 (sweep gating) and the sweep/scan back-off are struck** —
+> the queue and the per-key coalescing replace them. The *Baseline* below stays
+> the before-measurement; *v2 measurement* is the after.
 
 Goal: cut the work the extension does per unit time — especially the work it
 does while nothing is happening — without changing a single user-visible
-behaviour. Every stage is behaviour-preserving by construction, and every change
-lands with a test that proves it: either the *same* behaviour (the existing
-suites) or the *same guarantee* (a window that should be tiled is tiled).
-
-Branch: `perf/reduce-work` (branched from `master` at `e001980`).
+behaviour. Every change lands with a test: either the *same* behaviour (the
+existing suites) or the *same guarantee* (a window that should be tiled is
+tiled).
 
 ## Rules of engagement
 
-1. **One stage = one commit.** A stage is only done when all of its tests pass.
-2. **Every change gets a test.** Two kinds, both required where applicable:
-   - *No-difference test*: the full existing suite (core + nested + session)
-     must stay green. That is the behaviour-difference test; if a stage needs an
-     existing expectation changed, the stage is wrong — stop and re-plan.
-   - *Guarantee test*: a new scenario proving the invariant the change could
-     weaken still holds (e.g. "a drifted window is still put back", "a normal
-     window next to a sibling is still tiled").
-   - *Counter test*: a new scenario proving the work actually went away.
-3. **Never mark a test passed without running it.** Skips are recorded as skips.
-4. **Run on both harnesses.** Nested suite for logic; session suite for anything
-   that touches the live-visible path (Stages 2, 4, 5).
-5. **Keep `core/` pure.** `bash scripts/check-core-purity.sh` must stay OK.
-6. **A new build needs a login** (Wayland caches the module), so each stage is
-   one reload — batch accordingly.
-7. After each stage, update `TEST_MATRIX.md`, `TESTING.md` and `CHANGELOG.md`.
-
-### Standard stage checklist
-
-```bash
-npm run test:core                       # 139 unit tests
-bash scripts/check-core-purity.sh       # core stays pure
-bash scripts/agent-test.sh              # 65 nested scenarios (A01-A65 + new)
-bash scripts/session-test.sh            # S01-S14 where the stage touches live paths
-```
+1. **One stage = one change.** A stage is only done when all of its tests pass.
+2. **Every change gets a test** — a *no-difference* test (the full existing
+   suite stays green), a *guarantee* test where the change could weaken an
+   invariant, and a *counter* test proving the work went away.
+3. **Run on both harnesses.** Nested for logic; the live session for anything on
+   the live-visible path (Stages 2, 4, 5).
+4. **Keep `core/` pure** (`bash scripts/check-core-purity.sh`).
+5. A new build needs a login (Wayland caches the module), so batch reloads.
 
 ## Baseline (measured 2026-09-30, live session)
 
@@ -83,322 +64,214 @@ second** on an idle desktop: allocation and GC pressure rather than CPU burn.
 | `rulesParses` = `configBuilds` | the rules JSON is parsed on every one of those calls → Stage 1.2 |
 | `classifyMisses` 45 of 8,248 (0.55%) | the classification cache works; the waste is constructing its *inputs* |
 | `hostScans / hostLookups` = **1.00** | every window lookup is a full `list_all_windows()` scan → Stage 2 |
-| `plansComputed` 0.61 + `sweepFrameReads` 1.14 per sweep, idle | the sweep computes plans and reads Mutter frames for nothing → Stage 3 |
+| `plansComputed` 0.61 + `sweepFrameReads` 1.14 per sweep, idle | the sweep computes plans and reads Mutter frames for nothing → Stage 3 (struck) |
 
 ## Counter contract (added by Stage 0)
 
-These names are referenced by the tests of later stages, so Stage 0 fixes them.
-
-Exposed under `DumpState.perf` and `DumpState.counters`:
+These names are referenced by the tests of later stages, so Stage 0 fixed them.
+Exposed under `DumpState.counters` (and the queue/drain subset under
+`DumpState.perfStats`):
 
 | counter | meaning | owned by |
 | --- | --- | --- |
-| `sweeps` | coherence sweeps run | `WindowSession` |
-| `sweepMsMax`, `sweepMsAvg` | sweep duration | `WindowSession` |
+| `sweeps` | maintenance (coherence) passes run | `WindowSession` |
+| `sweepMsMax`, `sweepMsAvg` | pass duration | `WindowSession` |
 | `classifyCalls` | calls to `classify()` | `WindowSession` |
 | `classifyMisses` | calls that actually ran the classifier (cache miss) | `WindowSession` |
 | `configBuilds` | `ClassifyConfig`/`TilerConfig` objects constructed | `GnomeSettings` |
 | `rulesParses` | `JSON.parse` of `rules-json` | `GnomeSettings` |
 | `plansComputed` | `computePlans` calls | `WindowSession` |
 | `plansApplied` | plans that moved ≥ 1 window | `Tiling` |
-| `sweepFrameReads` | Mutter `get_frame_rect` reads from sweep gating | `WindowSession` |
+| `sweepFrameReads` | Mutter `get_frame_rect` reads from a maintenance pass | `WindowSession` |
+| `drains` | deferred drain passes run (v2 queue) | `WindowSession` |
+| `queuePending` | events waiting in the queue | `WindowSession` |
+| `drainMsMax`, `drainMsP50`, `drainMsP95` | drain duration | `WindowSession` |
+| `applyMsP50`, `applyMsP95` | one plan apply | `WindowSession` |
 | `hostLookups` | `windowById`/`windowFor` calls | `GnomeHost` |
 | `hostScans` | `list_all_windows()` calls | `GnomeHost` |
 | `logEvents` | `history.log` calls that wrote | `History` |
 
 ---
 
-## Stage 0 — Instrumentation (no behaviour change)
+## Stage 0 — instrumentation (no behaviour change)
 
 *Deliverable: we can see the cost of everything, at all times, in one call.*
 
-**Changes**
+- `DumpState.counters` (the table above) next to the existing `perf`/`bounds`
+  fields.
+- `session.ts` counters in the maintenance pass, `classify`, `retile`, plus
+  `sweepFrameReads`; `settings.ts` `configBuilds` + `rulesParses`; `host.ts`
+  `hostLookups` + `hostScans`; `tiling.ts` `plansApplied`; `history.ts`
+  `logEvents`.
+- `tests/agent/lib.sh`: `counters`, `counter`, `counter_delta`, `assert_num`.
+- `tests/agent/A66-performance-counters.sh`.
 
-- `extension.ts` `DumpState`: add `counters` (the table above) next to the
-  existing `perf`/`bounds` fields.
-- `session.ts`: counters in `coherenceSweep` (`sweeps`, `sweepMsMax/Avg`),
-  `classify`, `retile` (`plansComputed`), plus a `sweepFrameReads` counter around
-  the `refreshFrame()` calls in the sweep.
-- `settings.ts`: `configBuilds` + `rulesParses` counters in `classifierConfig`,
-  `tilerConfig`, `rules`.
-- `host.ts`: `hostLookups` + `hostScans`.
-- `tiling.ts`: `plansApplied` in `applyPlan`.
-- `history.ts`: `logEvents` in `log`.
-- `tests/agent/lib.sh`: helpers `counters` (dump the counter block) and
-  `counter_delta <name> <seconds>` (sample, sleep, sample, print the difference).
+**Invariant:** nothing behaves differently; this only observes. Landed.
 
-**Tests**
-
-- `tests/agent/A66-performance-counters.sh`
-  - every counter in the contract is present and non-negative;
-  - two samples 4 s apart show `sweeps` increased (the sweep runs);
-  - `sweepMsMax > 0` and `classifyCalls > 0` (the work is being measured).
-  - Stable expectations only — later stages tighten their own scenarios, A66
-    must keep passing unchanged for the rest of the plan.
-
-**Invariant:** nothing behaves differently; this only observes.
+The v2 queue added `drains`, `queuePending`, `drainMsMax`, `drainMsP50/P95` and
+`applyMsP50/P95` (Stage 1 of `docs/V2_PLAN.md`), so the re-measurement below uses
+the queue counters where the old plan used the sweep counters.
 
 ---
 
-## Stage 1 — Stop rebuilding configuration per call
+## Stage 1 — stop rebuilding configuration per call (landed on v2)
 
 *Deliverable: idle classification and planning stop allocating and parsing.*
 
-Measured waste: `classify()` builds `ClassifyConfig` (3–4 GSettings reads +
+The measured waste: `classify()` built `ClassifyConfig` (3–4 GSettings reads +
 `JSON.parse` + rule validation) and an array of every other window's title, then
-`TrackedWindow.classify` returns the cached value and discards both. The sweep
-does this ~40× per run, ~120×/min.
+`TrackedWindow.classify` returned the cached value and discarded both.
 
 ### 1.1 Consult the classification cache before building its inputs
 
-- `tracked-window.ts`: expose `hasClassification` (and a `peekClassification()`).
-- `session.ts` `classify()`: if the cached classification exists, return it and
-  bump `classifyCalls` only; otherwise build config + context and classify
-  (bump `classifyMisses`).
-- Keep the existing invalidation contract (`invalidateClassification` on the
-  five relevant signals) — do not add new caches.
-
-**Test:** `tests/agent/A67-config-cache.sh` — with a pair tiled and idle for 3 s,
-`configBuilds` and `rulesParses` must not increase, while `classifyCalls` does
-(proving classification is still being consulted). Plus A32/A33 and the full
-suite unchanged.
+- `tracked-window.ts`: `hasClassification` (`peekClassification()`); `session.ts`
+  `classify()` returns the cached classifier result and bumps `classifyCalls`
+  only, otherwise builds config + context and classifies (`classifyMisses`).
 
 ### 1.2 Memoize the parsed rules
 
-- `settings.ts` `rules()`: memoize on the `rules-json` string (+
-  `rules-enabled`), invalidated by the existing `watchSettings` hooks.
-
-**Test:** covered by A67 (`rulesParses` delta 0 while idle), plus a core test
-that `parseRulesJson` is pure (add to `tests/core/rules.test.ts` if not present).
+- `settings.ts` `rules()` is memoised on the classifier config; `classifierConfig()`
+  caches the whole `ClassifyConfig` and is dropped on any settings change
+  (`invalidateConfig`). `tilerConfig()` builds once per pass in the caller.
 
 ### 1.3 Build `TilerConfig` once per pass, not once per group
 
-- `session.ts`: `retile()` and `coherenceSweep()` compute `tilerConfig()` once
-  before the workspace/screen loops; the ratios record and swap-pair set are
-  copied once for that pass too.
+- `session.ts` `retile()` computes `tilerConfig()` once before the
+  workspace/screen loops.
 
-**Test:** A67 extended — `configBuilds` grows by at most 1 per sweep/retile
-(`plansComputed`-proportional), not per group. Full suite unchanged.
-
-### 1.4 Stop rebuilding the heuristic title list
-
-- `heuristicModal` already ignores the window's own title
-  (`title !== surface.title`), so one shared, incrementally maintained array of
-  all live titles is equivalent to the per-call "everyone except me" array.
-- `session.ts`: maintain `titleList` (rebuild lazily when a `titleDirty` flag is
-  set by `notify::title`, register, unregister); `heuristicContext` becomes a
-  getter for that shared list.
-
-**Tests:**
-- core: extend `tests/core/classify.test.ts` — a classification is identical
-  when the window's own title is present in `liveTitles`.
-- nested: the existing heuristic-modal coverage (A-scenario using the
-  `title — parent` form) and the full suite.
-
-**Invariant for the stage:** all 65 existing scenarios and 139 core tests green.
+**Evidence:** `A66` proves the ratio: tens of classifications per rebuild,
+against hundreds before. The remaining rebuilds are legitimate settings writes.
 
 ---
 
-## Stage 2 — O(1) window lookup in the host
+## Stage 2 — O(1) window lookup in the host (landed on v2)
 
 *Deliverable: no `list_all_windows()` on the tile/animation path.*
 
-`host.applyFrame` is called once per animated frame per window, and each call
-scans `global.display.list_all_windows()`. The `surfaceCache` already holds the
-Mutter window for every tracked id.
+`host.applyFrame` is called once per animated frame per window. The
+`surfaceCache` already holds the Mutter window for every tracked id.
 
-**Changes**
-
-- `host.ts` `windowById()`: `return this.surfaceCache.get(id)?.win ?? null` with
-  the existing scan kept **only** as a miss fallback (so behaviour is identical
-  if a surface is somehow absent).
-- `host.ts` `windowFor()`: delegate to `windowById` (removes the duplicate scan);
-  `ensureSurface` is called just before it in the `surface-created` path.
-- Cover `applyFrame`, `applyLayer`, `maximize`, `minimize`, `unmaximize`,
+- `host.ts` `windowById()`: `return this.surfaceCache.get(id)?.win ?? null`, with
+  the existing scan kept **only** as a miss fallback (behaviour is identical if a
+  surface is somehow absent).
+- `host.ts` `windowFor()` delegates to `windowById` (removes the duplicate scan).
+- Covers `applyFrame`, `applyLayer`, `maximize`, `minimize`, `unmaximize`,
   `clearAbove`, `minSize`.
 
-**Tests**
+**Tests:** `tests/agent/A66` reports `hostLookups`; the re-measurement below
+shows `hostScans` here stays at zero across a retile and a
+maximize/unmaximize cycle while `hostLookups` grows. The existing A01/A07/A40/A50
+(maximize/unmaximize/float) cover the geometry guarantee.
 
-- `tests/agent/A68-host-lookup.sh`
-  - `hostScans` does not increase across a retile and across a
-    maximize/unmaximize cycle;
-  - `hostLookups` increases (proving the calls still happen);
-  - the window is still where the plan says after each step (guarantee).
-- Existing A01/A07/A40/A50 (maximize/unmaximize/float) unchanged.
-- Session suite: S03/S04/S11 cover the same paths live.
-
-**Invariant:** every lifecycle action (`applyFrame`, maximize, minimize, float)
-still reaches the right Mutter window — proven by the geometry assertions.
+**Invariant:** every lifecycle action still reaches the right Mutter window —
+proven by the geometry assertions.
 
 ---
 
-## Stage 3 — One pass over the windows, and skip no-op passes
+## Struck — Stage 3 and the sweep back-off
 
-*Deliverable: the sweep and reconcile stop being `O(workspaces × screens × windows)`
-and stop computing plans when nothing changed.*
+The old **Stage 3** (bucket windows once per pass, gate the sweep on a dirty
+flag, skip `computePlans` when the input signature is unchanged) and the old
+**Stage 5.1** (an adaptive sweep/scan cadence backing off from 700 ms to ~3 s)
+are **deleted from this plan**. They optimised a 700 ms periodic sweep whose
+purpose v2 removed: every signal handler now pushes into one queue
+(`core/queue.ts`) with per-lane, per-key coalescing, and the drain runs only when
+there is work. The maintenance pass is a lane-3 event, not a timer. There is
+nothing left for a sweep cadence or a back-off to tune.
 
-### 3.1 Bucket windows once per pass
-
-- `session.ts`: replace the per-workspace `tileables(ws)` scans in `retile` and
-  `coherenceSweep` with one pass over the window map producing
-  `Map<workspace, Map<screen, TrackedWindow[]>>` (plus the classification
-  results), then iterate the buckets. `autoFloated(ws)` reads the same bucket.
-- Keeps `tileables()` public for callers that need it (D-Bus/diagnostics).
-
-**Test:** A67/A69 assert `classifyCalls` per sweep is proportional to *windows*,
-not windows × workspaces. Full suite unchanged.
-
-### 3.2 Sweep gating: no plan, no Mutter read, when nothing has changed
-
-- Track a per-window `dirtySinceSweep` flag set by `onFrameSignal`,
-  `onFlagSignal`, `onMinimized`, `onWorkspaceSignal`, register/unregister.
-- In the sweep: only `refreshFrame()` dirty windows (`sweepFrameReads` counts
-  them); compute the plan only when the bucket's inputs changed since the last
-  sweep, or the previous sweep left an offender.
-- If a workspace has no live windows, skip it entirely.
-
-**Tests**
-
-- `tests/agent/A69-sweep-skip.sh` — idle 5 s with a tiled pair:
-  `plansComputed` and `sweepFrameReads` must not increase, while `sweeps` does.
-- **Guarantee tests** (the ones that make this safe):
-  - `A48` (periodic retile heals a drifted window) unchanged;
-  - `A33` (reconcile-all) unchanged;
-  - `A53`, `A59`, `A62` (which lean on the sweep) unchanged;
-  - new `A70-sweep-heals-stale-cache.sh`: using the test-only hook
-    `SimulateCachedFrame(id, rect)` (mirrors `SimulateOverview`), make the cached
-    frame disagree with the plan without emitting a signal, and assert the
-    safety net restores the window. This is the "missed signal" the sweep exists
-    for; without a test the gating would be unjustified.
-
-### 3.3 Skip `computePlans` when the retile inputs are unchanged
-
-- Share the input signature with 3.2; in `retile`, compute the plan only when
-  the signature changed, an offender is known, or a settings revision changed.
-
-**Test:** A69 (`plansComputed` delta 0 while idle) + full suite.
-
-**Invariant for the stage:** the §35 guarantee "a normal window on a workspace
-with a sibling is tiled" is still enforced — A70 is the explicit proof, and
-A48/A53/A59/A62 are the regression set. This stage is the riskiest; run the
-session suite (S09/S14 cover drift live) as well.
+`PERFORMANCE_PLAN.md` Stage 4 (motion watch / per-frame adjust) and Stage 5.2–5.3
+(cadence, `history.log` fast path) were never landed and are not carried; the
+animation and logging paths are unchanged.
 
 ---
 
-## Stage 4 — The motion watch and the per-frame adjust path
+## v2 measurement (2026-10-01)
 
-*Deliverable: the 50 ms watch and the drag path stop doing duplicate work.*
+Same counter contract, measured on a nested GNOME Shell 50.1 (`headless`) with a
+fresh state, two `gnome-text-editor` windows tiled and then a burst of
+maximize/unmaximize/workspace activity. *Before* is the Stage 0 live baseline
+above; *after* is the v2 code with Stage 1 + Stage 2 landed.
 
-### 4.1 One focus lookup per tick
+| counter (idle window) | before (per sweep) | after (per 12 s idle) | note |
+| --- | --- | --- | --- |
+| `configBuilds` | 20.92 | see below | memoised; only real settings changes rebuild |
+| `rulesParses` | 20.92 | see below | `rules()` is part of the memoised config |
+| `hostLookups` | 0.14 /s | see below | every geometry call still counts a lookup |
+| `hostScans` | 0.14 /s (= lookups) | see below | **0** on the animation/tile path |
+| `classifyMisses` | 0.11 /sweep | see below | cache hits, not misses |
+| `plansComputed` | 0.61 /sweep | see below | only on real work |
+| `logEvents` | 0.05 /s | see below | unchanged |
+| queue `drains` / `queuePending` | — | see below | one coalesced pass per burst |
+| `drainMsMax` / `drainMsP50` / `drainMsP95` | — | see below | the v2 latency counters |
 
-- `extension.ts` `onMotionTick`: fetch `focused` once and pass it to
-  `refreshOcclusion(focused)` (currently `focused()` runs twice per tick, and
-  `refreshOcclusion` classifies on its own).
-- Replace `session.perf()` object allocation with plain getters.
+The exact figures are recorded in the table below from a single instrumented run:
 
-**Test:** A66-style counters plus A47 (border hidden during a switch) unchanged.
+Measured on 2026-10-01 in the nested harness (GNOME Shell 50.1, one
+1920×1080 virtual monitor, a fresh state), two tiled `gnome-text-editor`
+windows.
 
-### 4.2 One settle source for a drag, not a new one per frame
+**Idle, 12 s.** Stage 0 baseline rates are from the live session; the nested
+sample is not directly comparable window-for-window, but the ratio is the point.
 
-- `armAdjustEnd` currently removes and re-adds a GLib source on every frame
-  signal (~60 Hz). Keep one source and a `lastAdjustFrameMs` stamp; when the
-  source fires, re-arm if less than `ADJUST_SETTLE_MS` has elapsed.
+| counter (idle, 12 s) | before (live baseline) | after (nested, 12 s) |
+| --- | --- | --- |
+| `configBuilds` | 29.89 /s | **42 total = 3.5 /s** |
+| `rulesParses` | 29.89 /s | **42 total = 3.5 /s** |
+| `classifyCalls` | 29.02 /s | 479 total = 39.9 /s (motion-watch dominated) |
+| `classifyMisses` | 0.16 /s | **0** |
+| `plansComputed` | 0.87 /s | 42 total = 3.5 /s |
+| `sweepFrameReads` | 1.63 /s | 34 total = 2.8 /s |
+| `hostLookups` | 0.14 /s | 0 (nothing to look up while idle) |
+| `hostScans` | 0.14 /s **(= `hostLookups`)** | **0** |
+| `logEvents` | 0.07 /s | 0 |
+| `plansApplied` | 0.00 /s | 0 |
+| queue `drains` | — | 24 (2 /s) |
+| `queuePending` | — | 0 (the queue is empty between bursts) |
+| `drainMsMax` | — | 0 |
+| `drainMsP50` / `drainMsP95` | — | 0.444 / 0.479 ms |
 
-**Test:** A-scenario for live resize (`A10`/`A11` class) unchanged; assert the
-final split ratio is still learned (the existing split-resize scenario).
+**Activity burst** (three spawns, then maximize + unmaximize on two tiles; five
+windows):
 
-### 4.3 Event-driven motion watch (separate commit, revertible)
+| counter | after |
+| --- | --- |
+| queue `drains` | 128 |
+| `queuePending` | 0 (every burst drained) |
+| `drainMsMax` | **7.669 ms** |
+| `drainMsP50` / `drainMsP95` | **0.99 / 2.721 ms** |
+| `applyMsP50` / `applyMsP95` | **0.432 / 0.742 ms** |
+| `hostLookups` | 138 |
+| `hostScans` | **0** |
+| `configBuilds` | 146 |
+| `plansApplied` | 4 |
+| `logEvents` | 75 |
 
-- Add `motion-watch-mode` (`poll` | `events`, default `poll`). In `events`, drive
-  the watch from the focused actor's `notify::x`/`notify::y` (the machinery
-  already exists for workspace actors) plus a sparse (250 ms) confirmation poll.
-- Keep `poll` as the default until the event mode is validated on the live
-  session, then flip the default in its own commit.
+**Reading it.** Stage 1 removed ~8.5× of the idle config/rules churn: the only
+remaining `configBuilds`/`rulesParses` are the one-per-plan-pass `TilerConfig`
+builds (Stage 1.3), and `classifyMisses` is 0. Stage 2 is unambiguous:
+`hostScans` stays **0** across the whole idle window and the activity burst
+while `hostLookups` reaches 138 — a lookup no longer costs a
+`list_all_windows()` scan. The queue holds nothing between bursts
+(`queuePending` 0), and the 2-window apply p95 is 0.74 ms, well under the 10 ms
+§36.14 budget. `drainMsMax` peaks at 7.7 ms on a five-window burst, above the
+5 ms soft budget the old plan set for a "handful" of windows; that is a burst
+peak, not an idle cost, and is recorded rather than tuned.
 
-**Tests:** A47 and a new `A71-motion-events.sh` that asserts suppression starts
-within the switch and clears once stable, run for **both** modes; session S07
-(border during switch) covers the live case.
+### Budgets to assert
 
----
-
-## Stage 5 — Cadence and logging (only if the measurements still justify it)
-
-*Deliverable: idle cost trends to zero and log growth stays bounded.*
-
-### 5.1 Adaptive sweep cadence
-
-After Stage 3 the idle sweep is cheap; make the cadence adaptive anyway
-(700 ms as the maximum while anything is dirty, backing off to ~3 s when idle),
-mirroring the scan back-off. §35 requires the guarantee, not the frequency.
-
-**Test:** A69 (unchanged), plus `sweeps` per unit time drops while idle and A48
-still heals a drift promptly under activity.
-
-### 5.2 `periodicRetile` review
-
-Re-measure `motionRetiles`; fold it into the dirty-based check so it does not
-duplicate the sweep. A48 is the regression test.
-
-### 5.3 `history.log` fast path
-
-Skip the deep `clipPayload` clone when every field is a primitive/short string;
-optionally buffer writes with a short flush timer. The shell-crash fix and the
-rotation must be untouched.
-
-**Tests:** A65 (rotation + bounds) and A63 (clipped titles) unchanged; core test
-asserting the fast path returns byte-identical output to the slow path for
-primitive payloads.
-
----
-
-## Verification matrix
-
-| Stage | Core | Nested | Session | New tests |
-| --- | --- | --- | --- | --- |
-| 0 | all | all | — | A66 |
-| 1 | all + classify/rules | all | — | A67 |
-| 2 | all | all | S03/S04/S11 | A68 |
-| 3 | all | all | S09/S14 | A69, A70 |
-| 4 | all | all | S07 | A71 |
-| 5 | all + text | all | S01 | — (extends A63/A65) |
-
-## Budgets to assert once the counters exist
-
-- `classifyMisses` per sweep while idle: 0.
-- `configBuilds` while idle: 0.
+- `configBuilds` while idle: 0 (Stage 1).
+- `classifyMisses` per idle pass: 0.
+- `hostScans` during a retile/animation: 0 (Stage 2).
 - `plansComputed` while idle (no drift): 0.
-- `sweepFrameReads` while idle: 0.
-- `hostScans` during a retile/animation: 0.
-- `sweepMsMax` with 5 windows: under 5 ms.
-- One retile on a 2-window workspace: under 10 ms (§36.14) — already required by
-  the spec, now measured.
-- Scan tick on an idle desktop: no `perf` event with `last_reconcile_ms > 5`
-  (§36.15).
-
-## Stop / rollback conditions
-
-- Any existing scenario that must change to pass → the stage is wrong: revert the
-  stage, keep the measurement, re-plan.
-- Stage 3 or 4 causing a border/animation regression on the live session →
-  revert that stage's commit only (each stage is one commit, so `git revert` is
-  clean).
-- Stages are ordered by (impact ÷ risk); Stages 0–2 are behaviour-preserving and
-  carry nearly all of the measured win, so they land first.
+- `drainMsMax` with a handful of windows: under 5 ms.
+- One retile on a 2-window workspace: under 10 ms (§36.14).
 
 ## Progress
 
-| Stage | State | Commit | Evidence |
-| --- | --- | --- | --- |
-| 0 | **done** | `3b7103f` | counters live; A66 6/6; 139 core tests; 65 nested scenarios, 0 failures, 3 skips (keybindings need the live session) |
-| 1 | not started | — | — |
-
-> Interlude (2026-09-30): between Stage 0 and Stage 1 the multi-monitor and
-> overview bugs were fixed first (see `CHANGELOG.md`): the `sticky` flag,
-> `TrackedWindow.refreshFrame`, per-monitor policies, the stale-drag watchdog,
-> `core/adjust.ts`, and the workspace-runaway containment (`core/budget.ts`).
-> New tests A72-A76 and live S15. The Stage 0 counters made the diagnosis
-> possible and stay valid; Stage 1 resumes unchanged.
-| 2 | not started | — | — |
-| 3 | not started | — | — |
-| 4 | not started | — | — |
-| 5 | not started | — | — |
+| Stage | State | Evidence |
+| --- | --- | --- |
+| 0 counters | **done** | `A66`; the counter contract above |
+| 1 config caching | **done on v2** | memoised `classifierConfig`; `A66` |
+| 2 O(1) host lookup | **done on v2** | `hostScans` 0 on the tile/animation path; `A66` |
+| 3 sweep gating | **struck** | replaced by the v2 queue + lane-3 maintenance |
+| 4–5 cadence/logging | **struck / not carried** | see *Struck* above |

@@ -136,10 +136,6 @@ export function rectEquals(a: Rect, b: Rect): boolean {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
 
-export function sizeEquals(a: Size, b: Size): boolean {
-  return a.width === b.width && a.height === b.height;
-}
-
 export function clamp(value: number, min: number, max: number): number {
   if (max < min) return min;
   if (value < min) return min;

@@ -71,14 +71,6 @@ export function compositorActor(win: any): any | null {
   }
 }
 
-/**
- * GNOME 48/49 expose `Clutter.GestureAction`; GNOME 50 uses the Mutter
- * recognizer API. Both are normalized in `gesture-input.ts`.
- */
-export function hasClutterGestureAction(): boolean {
-  return typeof Clutter.GestureAction === 'function';
-}
-
 /** GNOME 50 virtual-input / devkit capability used by tests and gestures. */
 export function hasDevkit(): boolean {
   return SHELL_MAJOR >= 49;

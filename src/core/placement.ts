@@ -290,21 +290,6 @@ export function impossibleSplit(env: Env, trigger: Win, reactor: Win): SplitOutc
 }
 
 /**
- * §4: two branch rule for a window whose client refuses to shrink into the
- * shared screen. It keeps what it insists on; the sibling takes the rest; when
- * the sibling cannot either, the split does not exist.
- */
-export function refusalLadder(
-  keepSize: number,
-  siblingMinimum: number,
-  screen: number,
-): { sibling: number; escaped: boolean } {
-  const sibling = Math.min(Math.max(screen - keepSize, siblingMinimum), screen);
-  if (keepSize + sibling <= screen) return { sibling, escaped: false };
-  return { sibling: screen, escaped: true };
-}
-
-/**
  * §10 step 3 / §16: the width (along the split axis) a window gets on its own
  * escape workspace — its own size, clamped between one sixth of the screen and
  * the whole screen. The escaping window keeps the slot-0 position.

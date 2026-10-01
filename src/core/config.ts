@@ -12,7 +12,13 @@
 export type ConfigValue = number | boolean | string | string[];
 
 export const BUNDLE_FORMAT = 'adrt.config';
-export const BUNDLE_VERSION = 3;
+/**
+ * §12/Stage 4: v4 folds `adaptation.json`, `behavior.json` and `exception-apps`
+ * into the app registry. A v3 bundle is read by the same normaliser and its
+ * registry field is synthesised from the legacy stores; a bundle newer than
+ * this constant is refused rather than downgraded.
+ */
+export const BUNDLE_VERSION = 4;
 
 /** §9.4 */
 export interface AdaptationRecord {
@@ -32,6 +38,14 @@ export interface AdaptationRecord {
 export interface BundleTracked {
   adaptations: Record<string, AdaptationRecord>;
   behavior: Record<string, unknown>;
+  /** §12: the app registry state (v4). Absent when reading a v3 bundle. */
+  registry?: BundleRegistry;
+}
+
+/** The serialised app registry, as carried by a v4 bundle. */
+export interface BundleRegistry {
+  version: number;
+  entries: unknown[];
 }
 
 export interface Bundle {
@@ -81,6 +95,10 @@ export function normalizeBundle(raw: unknown, errors: string[] = []): Bundle | n
     return null;
   }
   const version = typeof raw.version === 'number' ? raw.version : 0;
+  if (version > BUNDLE_VERSION) {
+    errors.push(`bundle version ${version} is newer than ${BUNDLE_VERSION}`);
+    return null;
+  }
 
   const settings: Record<string, ConfigValue> = {};
   if (isRecord(raw.settings)) {
@@ -108,9 +126,24 @@ export function normalizeBundle(raw: unknown, errors: string[] = []): Bundle | n
   }
   behavior = asStringArrayMap(behaviorSource);
 
+  let registry: BundleRegistry | undefined;
+  const registrySource = trackedRaw?.registry;
+  if (isRecord(registrySource) && Array.isArray(registrySource.entries)) {
+    registry = {
+      version: typeof registrySource.version === 'number' ? registrySource.version : 1,
+      entries: [...registrySource.entries],
+    };
+  }
+
   const exportedAt = typeof raw.exportedAt === 'string' ? raw.exportedAt : new Date(0).toISOString();
 
-  return { format: BUNDLE_FORMAT, version, exportedAt, settings, tracked: { adaptations, behavior } };
+  return {
+    format: BUNDLE_FORMAT,
+    version,
+    exportedAt,
+    settings,
+    tracked: { adaptations, behavior, ...(registry === undefined ? {} : { registry }) },
+  };
 }
 
 export function parseBundle(json: string): { bundle: Bundle | null; errors: string[] } {

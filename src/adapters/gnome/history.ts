@@ -10,7 +10,6 @@
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 
-import type { Rect } from '../../core/types.js';
 import { clipPayload } from '../../core/text.js';
 import { partPath, partsToPrune, shouldRotate } from '../../core/rotation.js';
 import { dataDir, readText, writeAtomic } from './adapt.js';
@@ -25,18 +24,6 @@ export interface HistoryEvent {
   ev: string;
   trace: number;
   [field: string]: unknown;
-}
-
-export interface UndoEntry {
-  workspaceId: number;
-  trace: number;
-  rects: { id: number; rect: Rect }[];
-  /**
-   * §15: the split ratios that produced `rects`. Undo must restore them too,
-   * otherwise the plan disagrees with the restored layout and the very next
-   * reconcile (scan tick, periodic pass) re-tiles over the undo.
-   */
-  ratios?: Record<string, number>;
 }
 
 function dayString(date: Date): string {
@@ -60,52 +47,6 @@ function historyDir(): string {
   const dir = `${dataDir()}/history`;
   GLib.mkdir_with_parents(dir, 0o755);
   return dir;
-}
-
-export class UndoStack {
-  private readonly entries: UndoEntry[] = [];
-  private trace = 0;
-
-  constructor(private maxSize: number) {}
-
-  setMaxSize(size: number): void {
-    this.maxSize = Math.max(0, size);
-    this.trim();
-  }
-
-  /** §15: only a retile that actually moved a tileable window is undoable. */
-  push(workspaceId: number, rects: { id: number; rect: Rect }[], moved: boolean, ratios?: Record<string, number>): boolean {
-    if (!moved || rects.length === 0) return false;
-    this.trace += 1;
-    const entry: UndoEntry = { workspaceId, trace: this.trace, rects };
-    if (ratios !== undefined) entry.ratios = { ...ratios };
-    this.entries.push(entry);
-    this.trim();
-    return true;
-  }
-
-  pop(): UndoEntry | null {
-    return this.entries.pop() ?? null;
-  }
-
-  get size(): number {
-    return this.entries.length;
-  }
-
-  toJSON(): UndoEntry[] {
-    return [...this.entries];
-  }
-
-  restore(entries: UndoEntry[]): void {
-    this.entries.length = 0;
-    for (const entry of entries) this.entries.push(entry);
-    this.trace = entries.reduce((max, entry) => Math.max(max, entry.trace), 0);
-    this.trim();
-  }
-
-  private trim(): void {
-    while (this.entries.length > this.maxSize) this.entries.shift();
-  }
 }
 
 export class History {

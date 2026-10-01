@@ -185,6 +185,30 @@ wait_python() {
   return 1
 }
 
+# The last N decisions (journal), as JSON.
+decisions_json() { adrt DumpDecisions "${1:-400}" | python3 "$PARSE"; }
+
+# Block until a python predicate over DumpDecisions succeeds.
+wait_decisions() {
+  local timeout="$1" code="$2"
+  local deadline=$((SECONDS + timeout))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if decisions_json 400 | python3 -c "$code" >/dev/null 2>&1; then return 0; fi
+    sleep 0.5
+  done
+  return 1
+}
+
+poll_decisions() {
+  local label="$1" code="$2" timeout="${3:-20}" out
+  if wait_decisions "$timeout" "$code"; then
+    pass "$label"
+  else
+    out="$(decisions_json 400 | python3 -c "$code" 2>&1 || true)"
+    fail "$label${out:+ — $out}"
+  fi
+}
+
 wait_border_visible() {
   wait_for "${1:-15}" bash -c "bash '$NESTED' dbus DumpState | python3 '$PARSE' | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)[\"border\"][\"visible\"] else 1)'"
 }
@@ -218,6 +242,39 @@ wait_count() {
   wait_for "$timeout" bash -c "[ \"\$(bash '$NESTED' dbus DumpState | python3 '$PARSE' | python3 -c 'import json,sys;print(len(json.load(sys.stdin)[\"windows\"]))')\" -ge '$target' ]"
 }
 
+# Build a `SimulateScreens` fixture from the current DumpState. With `keep > 0`
+# only the leftmost `keep` monitors are kept, which simulates an unplug.
+screens_fixture() {
+  local keep="${1:-0}"
+  dump | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+mons = sorted(d['monitors'], key=lambda m: m['geometry']['x'])
+if ${keep} > 0:
+    mons = mons[:${keep}]
+out = []
+for m in mons:
+    g = m['geometry']
+    a = m.get('workArea') or g
+    out.append({
+        'index': m['index'], 'connector': m['connector'],
+        'x': g['x'], 'y': g['y'], 'width': g['width'], 'height': g['height'],
+        'isPrimary': m['isPrimary'], 'workArea': a,
+    })
+print(json.dumps(out))
+"
+}
+
+# Move a window to another monitor with a directional move. `MoveDirection` acts
+# on the focused window, so focus is re-derived as a property first; the move
+# itself is confirmed by the caller's own poll, not by a clock here.
+move_to_monitor() {
+  local id="$1" target="$2" direction="${3:-right}"
+  adrt ActivateWindow "$id" >/dev/null
+  wait_python 10 "import json,sys; sys.exit(0 if json.load(sys.stdin).get('focused') == $id else 1)" || true
+  adrt MoveDirection "$direction" >/dev/null
+}
+
 # Run a python snippet against the current DumpState; exit non-zero to fail.
 check_python() {
   local label="$1" code="$2" out
@@ -249,6 +306,9 @@ ensure_clean() {
   set_system_setting org.gnome.mutter dynamic-workspaces true >/dev/null 2>&1 || true
   set_system_setting org.gnome.mutter workspaces-only-on-primary true >/dev/null 2>&1 || true
   set_system_setting org.gnome.desktop.wm.preferences num-workspaces 4 >/dev/null 2>&1 || true
+  # Nor a display fixture or remembered arrangement left by a display scenario.
+  adrt SimulateScreens null >/dev/null 2>&1 || true
+  adrt ForgetDisplayMemory >/dev/null 2>&1 || true
   sleep 0.5
 }
 

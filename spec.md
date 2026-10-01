@@ -1,16 +1,23 @@
 # Adrt — Specification
 
-A GNOME 50+ tiling window manager extension for Wayland laptops. This document is authoritative. It is written so that a second platform (KDE Plasma 6 / KWin) can be added later by writing a new adapter, without changing `core/`.
+A GNOME 50+ tiling window manager extension for Wayland laptops. **Behaviour is specified by `docs/V2_MODEL.md` (frozen, authoritative);** this document keeps the architecture, build, test and install surface that the model does not restate. It is written so that a second platform (KDE Plasma 6 / KWin) can be added later by writing a new adapter, without changing `core/`.
+
+
+> **Behaviour is specified by `docs/V2_MODEL.md`, not by this file.** The v2 model
+> is frozen and authoritative; the v1 behaviour sections below are superseded and
+> have been replaced with pointers. Read `docs/V2_MODEL.md` first, then
+> `docs/V2_PLAN.md` for the order of work, then this file for the architectural,
+> build, test and installation surface that the model does not restate.
 
 ---
 
 ## 0. Mission
 
-Tile windows into pairs per monitor. Exactly two windows share a monitor, side by side or stacked, split by a learned ratio. A third window on the same workspace gets pushed to a new workspace. A single window fills the monitor. A maximized window gets its own workspace. Floating, modals, and dialog chrome sit above the tiling. The extension adapts only to problem windows that demonstrably refuse geometry.
+Tile windows into pairs per monitor. Exactly two windows share a monitor, split along the screen's own axis by a per-workspace ratio; workspaces are packed, workspaces are never evicted, floats are explicit, and undo holds exactly one change. The full behavioural model lives in `docs/V2_MODEL.md`.
 
 Six non-negotiable requirements:
 
-1. **Business logic fidelity** — §7–§25 are the spec.
+1. **Business logic fidelity** — `docs/V2_MODEL.md` is the spec; the v1 sections here are pointers.
 2. **Testable core** — decision logic runs in plain Node, no `gi://`, no Mutter, no Shell imports.
 3. **GNOME-only today, KDE-ready architecture** — the platform interface is designed so a KWin adapter can be added later without touching `core/`. No KDE code ships today.
 4. **Performant** — no redundant classification, no repeated Mutter queries, no hot-path allocations.
@@ -439,95 +446,19 @@ Every generated source file begins with:
 
 ## 5. Classification
 
-A window is **tileable** if all of:
-
-- Not skip-taskbar, not override-redirect, not sticky (pinned to every workspace; Mutter's `on-all-workspaces` alone does not count when it is implied by a window sitting on a non-primary monitor while `workspaces-only-on-primary` is set), not fullscreen, not above.
-- `appId` not in the exception list.
-- Not floating.
-- `kind` not in the non-tileable set (desktop, dock, popup menu, dropdown, tooltip, notification, splash, dialog, modal-dialog, attached-dialog).
-- `min ≠ max` on both axes.
-- Not transient, not modal, not attached-dialog.
-- No rule matched `float: true`.
-- Heuristic modal detection: title doesn't match `<title> — <parent>` where `<parent>` is another live window.
-
-Fail → modal (if transient/modal/attached/heuristic) or ignored.
-
-Classification is a pure function of the surface's state and the current configuration. Cached on `TrackedWindow`, invalidated on:
-
-- `notify::wm-class`
-- `notify::skip-taskbar`
-- `notify::transient-for`
-- `notify::above`
-- `notify::fullscreen`
-- `notify::window-type`
-- Changes to `exception-apps`, `rules-json`, `heuristic-modal-detect`
-
-Nothing else can flip classification.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
 ## 6. Layout
 
-Per workspace, per monitor:
-
-- **One window**: fills the monitor minus gap on all sides. Size ≥ min size.
-- **Two windows**: split the monitor along the shorter axis (portrait → vertical, landscape → horizontal), separated by gaps. Split ratio:
-  1. User's saved ratio for this app-class pair and axis, if any.
-  2. Else if exactly one app is in the "primary apps" list: primary gets the configured primary ratio (default 50%, clamped 20–80%).
-  3. Else 50%.
-     Ratio clamped to 5–95%, then further clamped so neither window is below its min size.
-- **Pair-swap flag set**: the two windows swap sides.
-- **If the pair doesn't fit with both minimums respected**:
-  - `respect` (default): try horizontal, then vertical. If neither fits, **stack layout**: both at minimum sizes, side by side if that fits, otherwise pinned to left/right edges at minimum widths.
-  - `ignore`: lay out at the requested split regardless of minimums.
-  - `stack`: use stack layout directly.
-- **Rule override** runs first: the first window (id order) whose matching rule has a `tile` action wins. `full` → that window fills the monitor. `left-half` / `right-half` → that window takes that half; the other takes the other half.
-
-Gaps: base gap + optional portrait/landscape overrides. Negative = inherit from base. Targets snapped to monitor scale if > 1.
-
-Layout returns a `TilePlan` (list of `Placement`), never a list of bare rects. Today every placement has `layer: TILED` and `order: 0` or `1`.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
 ## 7. Lifecycle and Workspace Policy
 
-### 7.1 Window creation
-
-- Not tileable, not modal → ignore.
-- Not mapped → wait first frame + configured delay.
-- Register: capture version, original geometry, connect signals, classify.
-- Fully maximized + no other tileable windows → leave.
-- Fully maximized + other tileable windows → move to new workspace.
-- Not maximized + workspace already has two tileable windows → schedule move to new workspace appended right.
-- Otherwise → schedule retile + evaluate lone-maximize.
-
-### 7.2 Lone-maximize policy
-
-- Exactly one non-transient window, exactly one tileable, not maximized → maximize it.
-- More than one non-transient window, the tileable window is maximized → unmaximize and tile.
-
-### 7.3 Maximize changes
-
-- User maximizes a window with tileable siblings → move to new workspace.
-- User unmaximizes:
-  - Previous workspace exists → move there. If that workspace has ≥ 2 tileable windows, the incoming window floats instead of tiling.
-  - No previous workspace:
-    - Only tileable window on its workspace → re-maximize.
-    - Otherwise → leave unmaximized, let it tile with the existing pair.
-  - Current workspace removed if dynamic and empty.
-
-### 7.4 Minimize
-
-Minimized window is the only tileable on its workspace, workspace index > 0 → move to previous workspace.
-
-### 7.5 Close
-
-Clean up all per-window state. Empty workspace → switch away (next with windows, else previous, else first). Dynamic + empty → remove. Re-evaluate lone-maximize. Retile.
-
-### 7.6 Workspace removal / reorder
-
-- User removes: drop from dynamic set, cancel pending retiles.
-- User reorders: update `lastWorkspaceIdx` for every window, clear signature cache, retile every workspace.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
@@ -554,64 +485,7 @@ Cache by pid + process start time. Pruned on scan tick for dead pids.
 
 ## 9. Problem-Window Adaptation
 
-Deliberate scope restriction. The extension does not learn general per-app behavior. It adapts only to windows that demonstrably refuse geometry or need extra time.
-
-### 9.1 Trigger
-
-A window enters adaptation only when:
-
-1. A geometry change is refused (verify step fails after all retries), AND
-2. The same `appId` has refused at least once before (or the user explicitly enables adaptation for that app).
-
-### 9.2 What is learned
-
-Keyed by `appId` only, NOT `appId@version`.
-
-| Signal                   | Threshold            | Use                                  |
-| ------------------------ | -------------------- | ------------------------------------ |
-| Refused min size         | 1 refusal            | Override declared min size next tile |
-| Unmaximize delay         | 2 observations       | Add to profile delay                 |
-| Settle time              | 2 successful settles | Extend verify wait                   |
-| Repeated refusal (3+)    | 3 refusals           | Skip animation for this app          |
-| Stubborn (3 consecutive) | 3 failures           | 60s cooldown, apply without verify   |
-
-### 9.3 What is NOT learned
-
-- Workspace affinities.
-- Monitor affinities.
-- General float preferences. Floats are user-driven only; persistence is opt-in per window via a keybinding.
-- Per-version quirks. Adaptation is keyed by `appId` alone.
-
-### 9.4 Record
-
-```typescript
-interface AdaptationRecord {
-  appId: string;
-  firstSeen: number;
-  lastSeen: number;
-  observations: number;
-  unmaximizeDelayEma?: number;
-  settleTimeEma?: number;
-  refusedMinW?: number;
-  refusedMinH?: number;
-  acceptedW?: number;
-  acceptedH?: number;
-  skipAnimation?: boolean;
-}
-```
-
-Trusted at ≥ 2 observations. Pruned after 30 days of inactivity.
-
-### 9.5 User control
-
-- Preference toggle to enable/disable adaptation (default: on).
-- Per-app reset: D-Bus `ForgetAdaptation(appId)`.
-- List: D-Bus `GetAdaptations()`.
-- Prefs shows records under "Problem windows" with delete per app.
-
-### 9.6 Rationale
-
-The per-version quirks system was the largest source of complexity in the original codebase. Per-app adaptation, triggered only by refusal, removes ~60% of the learning code while preserving the behavior that matters.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
@@ -629,185 +503,67 @@ Shared, in `core/profiles.ts`:
 
 ## 11. Animation and Retry
 
-### 11.1 Applying geometry
-
-When target differs from current:
-
-1. If maximized: unmaximize, record time, wait `max(profile.delay, learned delay)`.
-2. Compute effective target: apply effectiveMin, snap to profile increments, clamp to monitor.
-3. Animate or apply instantly:
-   - Animations enabled + profile allows → interpolate over `animation-duration` ms, ease-out cubic, snapped to monitor scale.
-   - Else → instant.
-
-### 11.2 Verification
-
-- Wait `max(100, learned settle)` ms.
-- Within 2px of target on all axes → success. Record.
-- Else if retries remain → wait next backoff, re-unmaximize if needed, re-apply, retry.
-- Else → record refusal, mark stubborn. After 3 consecutive stubborn events → 60s cooldown (apply without verification). Add app class to session-wide stubborn set.
-- 3+ refusals in adaptation history → `skipAnimation` for the app.
-
-### 11.3 Animation implementation
-
-- Use `Clutter.Timeline` tied to the actor's `frame_clock`, not `GLib.timeout_add`.
-- Preallocate the interpolated rect per window; write into it each frame.
-- Snap to exact target on completion.
-- Cancel cleanly when a new animation starts on the same window.
-- Respect `org.gnome.desktop.interface.enable-animations`, `St.Settings.get().enable_animations`, and the extension's `disable-animations` setting.
-- Skip animation when a workspace switch is in flight or when the user is dragging.
-
-### 11.4 Easing and duration
-
-- Ease-out cubic for most movements.
-- Ease-out quad for short moves (< 150ms).
-- Linear only for opacity.
-- Never ease-in-out for tiling.
-- 100–150ms for focus changes.
-- 150–200ms for a single window moving.
-- 200–250ms for two windows swapping.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
 ## 12. Inner-Edge Resize
 
-User drags shared edge between a pair (inner edge only, one axis, outer edges fixed):
-
-- Detect axis, which window's inner edge moved.
-- Compute new ratio, clamped to minimums.
-- A gesture counts as a resize only when it changes exactly one axis; a change
-  on both axes (an overview drop, a compositor clamp) is a **move** and can
-  never teach a ratio (`core/adjust.ts`).
-- Apply instantly to both. Save under `appA|appB|axis`.
-
-Keyboard nudge: same, by configured step %, clamped, saved under same key.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
 ## 13. Pair Swap
 
-- **Keyboard**: focus one, move toward sibling → toggle swap flag.
-- **Drag**: pick up one, drag center past sibling's center along split axis, no resize, exactly one sibling → toggle swap. A drop that lands on the sibling swaps even when the client clamped the window's size on the way — the clamp would otherwise read as an inner-edge resize (§12, `core/adjust.ts`).
-- Swap flag stored as set of pair keys (`min(idA,idB)|max(idA,idB)`).
-- Live preview during drag: highlighted rect over the sibling.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
 ## 14. Focus and Navigation
 
-- **Focus direction**: closest window by center, same workspace. If none on monitor → closest on adjacent monitor in that direction. Modal windows focusable after tileables. Fullscreen/minimized/skip-taskbar/override-redirect not.
-- **Focus cycle**: next tileable on same monitor/workspace, wrapping.
-- **Move direction**: if exactly one sibling in that direction and it's the only other window → swap. Else → move to adjacent monitor (mark as user-moved for grace period).
-- **Modal centering**: re-center when parent moves/resizes.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
 ## 15. Undo
 
-Every retile that actually moves ≥ 1 window pushes a snapshot of all tileable windows' frame rects before the move. Undo pops and re-applies. Stack size configurable. Persisted across restarts.
-
-- **Undoable**: a retile that moved at least one tileable window.
-- **Not undoable**: focus changes, workspace switches, modal centering, indicator movement, float toggles, settings changes.
-- **After a workspace switch**: applies to the currently focused workspace. If the entry references windows on a different workspace, activate that workspace first.
-- **Closed windows**: entry is a no-op for that window; the rest are restored.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
 ## 16. Workspace Dynamics
 
-Set of dynamic workspaces created by the third-window or maximized-window policies. Empty dynamic → remove (unless only one). User removes dynamic → drop from set. Pending retiles for removed workspaces → cancel. Scan tick periodically re-checks.
-
-Sending a window to a new workspace reorders workspaces, which emits Mutter's `workspaces-reordered` **synchronously**. That must never re-enter the policy: the reorder handler only schedules a debounced pass, a workspace operation blocks a nested exile, a window that was just exiled waits 3 s, and creation itself is rationed (12 per 10 s) and capped at `windows + 4`. A refused exile floats the window over the pair and logs `ws_spawn_blocked`. Without this, one window was exiled 160 times a second and the workspace count reached 86 (`core/budget.ts`, A76).
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
 ## 17. Monitor Changes
 
-Snapshot live connectors. Removed connector: remember geometry, move windows to `targetWorkspaceForRemovedMonitor`:
-
-- Left of primary → ws − 1. Right → ws + 1. Overlapping/unknown → ws + 1. Clamp [0, count − 1].
-- Track orphans by connector, persisted. On reconnect → move back.
-- Re-center every modal. Retile every workspace. Cancel in-flight drag.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
 ## 18. Session Modes
 
-Watched via `Main.sessionMode`:
-
-- **user** (normal): full functionality.
-- **unlock-dialog** (lock screen or unlock prompt): extension is paused. No tiling, no retiles, no scan tick, no animations. Indicator hidden. Existing window positions left as-is. On return to user, resume and retile the active workspace once.
-- **screen-sharing**: tiling continues. Indicator hidden (it would appear in the shared stream). Scan tick continues.
-
-The transition is handled in a single `_onSessionModeChanged()` handler. It sets a `_paused` flag, hides or shows the indicator, cancels or reschedules the scan tick. Nothing else checks `Main.sessionMode.currentMode`.
-
-**Invariant**: when paused, the extension does not call `move_resize_frame`, does not schedule retiles, does not run the scan tick, does not show the indicator. On unpause, it retiles the active workspace exactly once.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
 ## 19. Configuration
 
-### 19.1 Settings (GSettings)
-
-gaps (base, portrait, landscape), min-size-policy, reflow-keeps-edges, heuristic-modal-detect, animation-duration, disable-animations, gnome-animation-delay, scan-interval, max-frame-interval-ms, nudge-step, undo-stack-size, workspace-auto-name, respect-user-workspace-move, workspace-move-grace-seconds, log-workspace-reorder, exception-apps, primary-apps, primary-app-ratio, rules-enabled, rules-json, dry-run-mode, debug-enabled, trace-enabled, history-enabled, history-retention-days, history-daily-folders, dbus-enabled, adaptation-enabled, float-persistence, active-window-indicator, indicator-color, indicator-opacity, indicator-width, indicator-animated-pulse, indicator-corner-radius, close-animation-enabled, close-animation-duration, escape-fullscreen-only-fullscreen, gesture-enabled, gesture-3-swipe-action, gesture-3-vertical-action, gesture-4-swipe-action, gesture-4-vertical-action, gesture-pinch-action, gesture-sensitivity, keybindings.
-
-The schema file `packages/gnome/schemas/org.gnome.shell.extensions.adrt.gschema.xml` is authoritative. Every key the code reads is declared. `metadata.json` includes `"settings-schema": "org.gnome.shell.extensions.adrt"`.
-
-### 19.2 Config bundle
-
-```json
-{
-  "format": "adrt.config",
-  "version": 3,
-  "exportedAt": "...",
-  "settings": { "...": "flat map" },
-  "tracked": {
-    "adaptations": { "...": "..." },
-    "behavior": { "...": "..." }
-  }
-}
-```
-
-Version 2 files put adaptations and behavior at the top level. Normalize both shapes.
-
-Import modes:
-
-- **merge** — per-app records merge one level deep for `classes` and `floats`; everything else replaces.
-- **replace** — overwrite.
-
-Count applied vs skipped keys; report.
-
-### 19.3 Settings migration
-
-Every schema change bumps the extension version. Migration runs in `enable()`, once, gated on a `settings-version` key. Reads old key, writes new, marks complete. On failure: log error, continue with defaults.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
 ## 20. Persistence
 
-Files under `$XDG_DATA_HOME/adrt/`:
-
-- `adaptation.json` (v1) — adaptation records.
-- `behavior.json` (v1) — floats.
-- `state.json` (v1) — original geometries, orphans, stubborn, split ratios, undo.
-- `history/YYYY-MM-DD.jsonl` — daily rotation, retention, async append.
-
-All writes: temp file + rename. All blob writes: 2s debounce. Flush on disable.
-
-Crash recovery: on enable(), reconcile persisted state. Drop records whose window id is not live. Keep adaptation records, floats, split ratios. Drop stale original geometries. Drop undo entries with no live windows.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
 ## 21. History and Diagnostics
 
-Every meaningful event → JSON line with `t` (timestamp), `ev` (event type), `trace` (per-operation sequence number), plus event-specific fields. Events: register, close, tile, resize_retry, stubborn, swap, split_resize, new_ws, spawn_ws, ws_removed, ws_switch_empty, monitors_changed, snapshot, session_mode, config_imported, float_toggle, above_changed, dry_run, disable, undo, lookup, frame_timing, perf, gesture.
-
-Lookup-by-window-id: scans the last N days, newest first.
-
-Log tail: watches today's file, seeks to end, polls, emits parsed events.
-
-Performance telemetry: every 60 scan ticks, log a `perf` event. Gated on `debug-enabled`.
-
-Memory leak detection: scan tick asserts that `windows.size`, `pendingRetiles.size`, connected signals, and GLib sources are bounded. On 3 consecutive violations, disable the extension and log details.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 
@@ -1050,10 +806,10 @@ Or from source: `make install`.
 {
   "uuid": "adrt@adrt.dev",
   "name": "Adrt",
-  "description": "Tiles windows into pairs per monitor with learned split ratios.",
+  "description": "Tiles windows into pairs per monitor on each screen's own axis: packed workspaces, explicit floats, one-change undo.",
   "shell-version": ["48", "49", "50"],
   "settings-schema": "org.gnome.shell.extensions.adrt",
-  "version-name": "0.1.0"
+  "version-name": "0.2.0"
 }
 ```
 
@@ -1084,23 +840,7 @@ Semver: MAJOR (Shell bump requiring code changes), MINOR (features), PATCH (fixe
 
 ## 35. Design Rationale
 
-- **Pairs only**: the layout algorithm, split-ratio learning, and workspace policy all assume two windows per monitor.
-- **Sticky means pinned, not "on a second monitor"**: Mutter reports `on-all-workspaces` for every window on a non-primary monitor while `workspaces-only-on-primary` is set (GNOME's default), so the skip decision uses the flags that are *not* implied by the monitor. Otherwise nothing on a second monitor can ever be tiled.
-- **Every per-monitor policy is evaluated per monitor**: lone-maximize, the "more than a pair" rule and the unfloat pass are scoped to one workspace **and** one monitor, so a pair on one screen cannot turn a lone window on another into an "extra".
-- **A window that changes monitor is re-read**: `on-all-workspaces` (and the rest of the flags) depend on the monitor, so a cross-monitor move refreshes the whole surface instead of leaving a stale classification.
-- **A drag that never ends must not disable tiling**: every path skips while a drag is in flight, so a lost `grab-op-end` is abandoned by the sweep once the gesture has been quiet and no button is held, and the drop is deliberately not interpreted.
-- **Per-app not per-version**: removes ~60% of learning code.
-- **Adaptation only on refusal**: invisible for well-behaved windows.
-- **No heuristics**: user-authored rules.
-- **One border owner**: fixes the flicker bug class.
-- **Cached classification**: every signal that could change classification invalidates the cache. Safe, must not be bypassed.
-- **Scan tick safety net**: signals unreliable across Shell versions, hot-plug scenarios, external manipulation.
-- **Wayland-only**: GNOME 50 is Wayland-only.
-- **No overview handling**: indicator is chrome-layer, hidden by GNOME.
-- **Lock screen pauses**: authentication boundary. One flag, one place.
-- **No auto-tiling interaction**: assumed off. Edge-tiling is the exception.
-- **Gestures first-class**: laptop target.
-- **GNOME today, KDE-ready**: the `platform/` interfaces are the only concession to a future platform. No KDE code ships. The discipline pays off now via testability — `core/` runs in plain Node.
+> **Superseded.** v2 behaviour is specified in `docs/V2_MODEL.md` (authoritative). This v1 section is kept only as a pointer and must not be implemented.
 
 ---
 

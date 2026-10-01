@@ -17,20 +17,21 @@ import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import { layoutManager, notify, overview, sessionMode, wm } from 'resource:///org/gnome/shell/ui/main.js';
 
 import type { AdaptationRecord, Bundle, ImportMode } from '../../core/config.js';
-import { BUNDLE_FORMAT, BUNDLE_VERSION, mergeAdaptations, normalizeBundle, serializeBundle } from '../../core/config.js';
+import { BUNDLE_FORMAT, BUNDLE_VERSION, normalizeBundle, serializeBundle } from '../../core/config.js';
 import { BorderState } from '../../core/border.js';
 import type { SuppressionReason } from '../../core/border.js';
 import { SessionMachine } from '../../core/session.js';
 import type { SessionMode } from '../../core/session.js';
 import { ChangeLog } from '../../core/undo.js';
 import type { SplitAxis } from '../../core/tiler.js';
+import type { MemoryEntry } from '../../core/displays.js';
 import { NoticeGate, isAlwaysNotice, noticeTitle } from '../../core/notify.js';
 import { clamp } from '../../core/types.js';
-import type { Rect } from '../../core/types.js';
+import type { Rect, Screen } from '../../core/types.js';
 import type { GestureKind } from '../../core/gestures.js';
 import type { DbusHandlers } from '../../platform/dbus.js';
 import { PLATFORM_EVENT_TYPES } from '../../platform/events.js';
-import { AdaptationStore, FloatStore, dataDir, readText, writeAtomic } from './adapt.js';
+import { dataDir, readJson, readText, writeAtomic } from './adapt.js';
 import * as compat from './compat.js';
 import { GnomeDbus } from './dbus.js';
 import { FrameClockAnimator } from './frame-clock.js';
@@ -39,6 +40,7 @@ import { GnomeHost } from './host.js';
 import { History } from './history.js';
 import { GnomeIndicator } from './indicator.js';
 import { EventJournal } from './journal.js';
+import { RegistryStore } from './registry.js';
 import { WindowSession } from './session.js';
 import { GnomeSettings } from './settings.js';
 import { Tiling } from './tiling.js';
@@ -94,8 +96,7 @@ type Handlers = DbusHandlers & ExtraHandlers;
 export default class AdrtExtension extends Extension {
   private settings!: GnomeSettings;
   private host!: GnomeHost;
-  private adaptation!: AdaptationStore;
-  private floats!: FloatStore;
+  private registry!: RegistryStore;
   private history!: History;
   private journal!: EventJournal;
   private changes!: ChangeLog;
@@ -170,10 +171,15 @@ export default class AdrtExtension extends Extension {
     );
     this.history.setSink((event) => this.journal.decide(event.ev, event as unknown as Record<string, unknown>));
     this.migrate();
-    this.adaptation = new AdaptationStore(this.settings.boolean('adaptation-enabled', true));
-    this.adaptation.load();
-    this.floats = new FloatStore(this.settings.boolean('float-persistence', false));
-    this.floats.load();
+    this.registry = new RegistryStore();
+    this.registry.load();
+    // §12: fold the legacy stores in exactly once (copy-verify-delete).
+    this.registry.migrateLegacy({
+      adaptation: readJson(`${dataDir()}/adaptation.json`),
+      behavior: readJson(`${dataDir()}/behavior.json`),
+      exceptionApps: this.settings.strv('exception-apps'),
+    });
+    this.registry.setEnabled(this.settings.boolean('adaptation-enabled', true));
     this.changes = new ChangeLog();
     this.border = new BorderState();
 
@@ -191,7 +197,7 @@ export default class AdrtExtension extends Extension {
       host: this.host,
       settings: this.settings,
       history: this.history,
-      adaptation: this.adaptation,
+      registry: this.registry,
       animator: this.animator,
       changes: this.changes,
       windows: () => this.session.windows,
@@ -205,8 +211,7 @@ export default class AdrtExtension extends Extension {
       settings: this.settings,
       tiling: this.tiling,
       history: this.history,
-      adaptation: this.adaptation,
-      floats: this.floats,
+      registry: this.registry,
       changes: this.changes,
       isPaused: () => this.isPaused(),
       onStateChanged: () => this.onStateChanged(),
@@ -218,6 +223,7 @@ export default class AdrtExtension extends Extension {
         this.toast(key, subject);
       },
       onModelEvent: (event, fields) => this.onModelEvent(event, fields),
+      onDisplayMemoryChanged: () => this.saveDisplayMemory(),
       isAnimating: () => this.animator.activeCount > 0,
     });
 
@@ -233,12 +239,20 @@ export default class AdrtExtension extends Extension {
     });
 
     this.restoreState();
+    this.restoreDisplayMemory();
     this.subscribeHost();
     this.watchSettings();
 
     // §22: the trace's initial state is the model before any window is adopted.
     this.captureRecordInitial();
     for (const win of global.display.list_all_windows()) this.session.register(win);
+    // §20: every enable normalises the existing workspaces. Adoption finishes on
+    // the first ready timeout, so normalisation is deferred just past it; the
+    // pass itself is idempotent.
+    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
+      this.session?.normalizeOnEnable();
+      return GLib.SOURCE_REMOVE;
+    });
 
     this.gestures.configure();
     if (this.settings.boolean('dbus-enabled', true)) {
@@ -311,8 +325,8 @@ export default class AdrtExtension extends Extension {
     this.animator.destroy();
     this.indicator.destroy();
     this.host.disable();
-    this.adaptation.flush();
-    this.floats.flush();
+    this.registry.flush();
+    this.saveDisplayMemory();
     this.history.destroy();
     this.saveState();
     // §18: leave GNOME's animations as we found them.
@@ -365,13 +379,16 @@ export default class AdrtExtension extends Extension {
       this.host.on('focus-changed', (payload) => this.onFocusChanged((payload as { id: number | null }).id)),
       this.host.on('workspace-switched', (payload) => this.onWorkspaceSwitched(payload as { from: number; to: number })),
       this.host.on('screens-changed', () => {
-        this.session.clearSignatures();
+        // §10: re-read every surface (monitor, frame, monitor-implied sticky,
+        // size hints) and drop classification before the deferred replan.
+        this.session.onScreensChanged();
         if (this.settings.boolean('debug-displays', false)) {
           this.history.log('screens_changed', { monitors: this.host.screens().length });
         }
         // §11: no policy in a signal handler. The work-area change needs a
         // settle, so it is a maintenance pass; the retile rides the layout lane.
         this.session.scheduleReconcile('screens-changed');
+        this.session.scheduleDisplayPass('screens-changed');
         this.session.scheduleMaintenance('work-area', { reason: 'screens-changed' });
       }),
     );
@@ -701,7 +718,7 @@ export default class AdrtExtension extends Extension {
   }
 
   private onStubborn(_appId: string): void {
-    this.history.log('stubborn', { cooldownMs: this.adaptation.cooldownRemainingMs() });
+    this.history.log('stubborn', { cooldownMs: this.registry.cooldownRemainingMs() });
   }
 
   /** Keep the active-window marker glued to the window as it animates. */
@@ -758,8 +775,7 @@ export default class AdrtExtension extends Extension {
       ['gesture-4-swipe-action', () => this.gestures.configure()],
       ['gesture-4-vertical-action', () => this.gestures.configure()],
       ['gesture-pinch-action', () => this.gestures.configure()],
-      ['adaptation-enabled', () => this.adaptation.setEnabled(this.settings.boolean('adaptation-enabled', true))],
-      ['float-persistence', () => this.floats.setEnabled(this.settings.boolean('float-persistence', false))],
+      ['adaptation-enabled', () => this.registry.setEnabled(this.settings.boolean('adaptation-enabled', true))],
       ['reflow-keeps-edges', () => this.session.invalidateAll()],
       ['indicator-color', () => this.syncIndicator()],
       ['indicator-width', () => this.syncIndicator()],
@@ -960,6 +976,27 @@ export default class AdrtExtension extends Extension {
     writeAtomic(this.stateFile(), JSON.stringify(payload));
   }
 
+  /** §9: display memory keyed by connector, persisted beside the state. */
+  private displayMemoryFile(): string {
+    return `${dataDir()}/display-memory.json`;
+  }
+
+  private restoreDisplayMemory(): void {
+    const raw = readJson(this.displayMemoryFile());
+    if (raw === null || typeof raw !== 'object') return;
+    const entries = (raw as { entries?: unknown }).entries;
+    if (!Array.isArray(entries)) return;
+    this.session.setDisplayMemory(entries as MemoryEntry[]);
+  }
+
+  private saveDisplayMemory(): void {
+    if (this.session === undefined) return;
+    writeAtomic(
+      this.displayMemoryFile(),
+      JSON.stringify({ version: 1, at: Date.now(), entries: this.session.getDisplayMemory() }),
+    );
+  }
+
   private migrate(): void {
     const current = this.settings.int('settings-version', 0);
     if (current >= EXTENSION_VERSION) return;
@@ -1084,9 +1121,14 @@ export default class AdrtExtension extends Extension {
   // ------------------------------------------------ platform probe, injection
 
   /** The capability JSON the harness depends on (§40.4, Stage 0). */
+  /** The screen with this Mutter index, from the last screen read (§10). */
+  private screenAt(monitor: number): Screen | undefined {
+    return this.host.screens().find((screen) => screen.index === monitor);
+  }
+
   /** The work area of one monitor, from the last screen read (§10). */
   private workAreaOf(monitor: number): Rect {
-    const screen = this.host.screens()[monitor];
+    const screen = this.screenAt(monitor);
     if (screen === undefined) return { x: 0, y: 0, width: 0, height: 0 };
     return screen.workArea ?? screen.geometry;
   }
@@ -1226,11 +1268,28 @@ export default class AdrtExtension extends Extension {
         this.session.invalidateAll();
         return true;
       },
-      ResetPerApp: (appId) => this.adaptation.forget(appId),
-      GetAdaptations: () => JSON.stringify(this.adaptation.list()),
-      ForgetAdaptation: (appId) => this.adaptation.forget(appId),
+      ResetPerApp: (appId) => this.session.forgetApp(appId),
+      GetAdaptations: () => JSON.stringify(this.registry.legacyRows()),
+      ForgetAdaptation: (appId) => this.session.forgetApp(appId),
       GetFloats: () => JSON.stringify(this.floatState()),
-      ForgetFloat: (appId) => this.forgetFloat(appId),
+      ForgetFloat: (appId) => this.session.setNeverTile(appId, false),
+      GetRegistry: () => JSON.stringify(this.registry.entries()),
+      SetNeverTile: (appId, value) => this.session.setNeverTile(appId, value),
+      ToggleNeverTile: (appId) => {
+        const value = this.registry.toggleNeverTile(appId);
+        this.session.setNeverTile(appId, value);
+        return value;
+      },
+      ForgetApp: (appId) => this.session.forgetApp(appId),
+      GetDisplayMemory: () => JSON.stringify(this.session.getDisplayMemory()),
+      ForgetDisplayMemory: () => {
+        this.session.setDisplayMemory([]);
+        this.saveDisplayMemory();
+        return true;
+      },
+      SimulateScreens: (json) => this.simulateScreens(json),
+      SimulateWorkArea: (connector, x, y, width, height) =>
+        this.host.setSimulatedWorkArea(connector, { x, y, width, height }),
       ExportConfig: () => this.exportConfig(),
       ImportConfig: (json, merge) => this.importConfig(json, merge ? 'merge' : 'replace'),
       ListHistoryDays: () => JSON.stringify(this.history.days()),
@@ -1366,7 +1425,7 @@ export default class AdrtExtension extends Extension {
 
   /** The pair axis of a monitor: portrait screens and vertical workspaces stack. */
   private axisOf(monitor: number): 'horizontal' | 'vertical' {
-    const screen = this.host.screens()[monitor];
+    const screen = this.screenAt(monitor);
     const rows = global.workspace_manager.layout_rows;
     if (rows === -1) return 'vertical';
     if (screen !== undefined && screen.geometry.height > screen.geometry.width) return 'vertical';
@@ -1395,6 +1454,12 @@ export default class AdrtExtension extends Extension {
       return {
         id: tracked.id,
         cls: tracked.surface.appId,
+        identity: tracked.identityKey,
+        identitySource: tracked.identitySource,
+        provisional: tracked.provisional,
+        instanceId: tracked.instanceId,
+        ordinal: this.registry.ordinalFor(tracked.appKey, tracked.instanceId) ?? null,
+        neverTile: this.registry.isNeverTile(tracked.appKey),
         title: tracked.surface.title,
         version: tracked.surface.appVersion,
         workspace: tracked.surface.workspaceId,
@@ -1462,7 +1527,11 @@ export default class AdrtExtension extends Extension {
       motionRetiles: this.motionRetiles,
       motionTicks: this.motionTicks,
       motionSkip: this.motionSkip,
-      adaptations: this.adaptation.size,
+      adaptations: this.registry.size,
+      registry: this.registry.entries(),
+      registrySize: this.registry.size,
+      neverTile: this.registry.entries().filter((entry) => entry.neverTile).map((entry) => entry.appId),
+      displayMemory: this.session.getDisplayMemory().map((entry) => entry.connector),
       perf: this.session.perf(),
       perfStats: {
         queueDepth: this.session.counters().queuePending,
@@ -1518,33 +1587,40 @@ export default class AdrtExtension extends Extension {
     return out;
   }
 
-  /** Current floating windows plus any persisted app classes. */
-  private floatState(): { windows: Record<string, number[]>; persisted: string[] } {
-    return { windows: this.floatingWindows(), persisted: this.floats.list() };
-  }
-
-  private forgetFloat(appId: string): boolean {
-    const removed = this.floats.forget(appId);
-    let found = removed;
-    for (const tracked of this.session.windows.values()) {
-      if (tracked.surface.appId !== appId || !tracked.surface.flags.floating) continue;
-      this.session.toggleFloat(tracked.id);
-      found = true;
-    }
-    return found;
+  /** Current floating windows plus the durable neverTile app ids. */
+  private floatState(): { windows: Record<string, number[]>; neverTile: string[] } {
+    return {
+      windows: this.floatingWindows(),
+      neverTile: this.registry.entries().filter((entry) => entry.neverTile).map((entry) => entry.appId),
+    };
   }
 
   private exportConfig(): string {
     const settings: Record<string, unknown> = {};
     for (const key of this.settings.keys()) settings[key] = this.settings.read(key);
     const adaptations: Record<string, AdaptationRecord> = {};
-    for (const record of this.adaptation.list()) adaptations[record.appId] = record;
+    for (const entry of this.registry.entries()) {
+      if (Object.keys(entry.adapt).length === 0) continue;
+      adaptations[entry.appId] = {
+        appId: entry.appId,
+        firstSeen: entry.firstSeen,
+        lastSeen: entry.lastSeen,
+        observations: entry.windowsSeen,
+        unmaximizeDelayEma: entry.adapt.unmaximizeDelayMs,
+        settleTimeEma: entry.adapt.settleMs,
+        skipAnimation: entry.adapt.skipAnimation,
+      };
+    }
     const bundle: Bundle = {
       format: BUNDLE_FORMAT,
       version: BUNDLE_VERSION,
       exportedAt: new Date().toISOString(),
       settings: settings as Bundle['settings'],
-      tracked: { adaptations, behavior: { floats: this.floatingWindows() } },
+      tracked: {
+        adaptations,
+        behavior: { floats: this.floatingWindows() },
+        registry: this.registry.toJSON(),
+      },
     };
     return serializeBundle(bundle);
   }
@@ -1561,21 +1637,85 @@ export default class AdrtExtension extends Extension {
     for (const [key, value] of Object.entries(incoming.settings)) {
       if (this.settings.keys().includes(key)) this.settings.write(key, value);
     }
-    const merged = mergeAdaptations(
-      Object.fromEntries(this.adaptation.list().map((record) => [record.appId, record])),
-      incoming.tracked.adaptations,
-      mode,
-    );
-    this.adaptation.replaceAll(Object.values(merged.record));
+    const applied: string[] = [];
+    const incomingRegistry = incoming.tracked.registry;
+    if (mode === 'replace' && incomingRegistry !== undefined) {
+      this.registry.adopt({ version: 1, entries: incomingRegistry.entries as never[] });
+      applied.push(...this.registry.entries().map((entry) => entry.appId));
+    } else {
+      for (const [appId, record] of Object.entries(incoming.tracked.adaptations)) {
+        // §12: only the timing fields survive; a legacy geometric field is
+        // dropped by setAdapt, never imported.
+        this.registry.setAdapt(appId, {
+          unmaximizeDelayMs: record.unmaximizeDelayEma,
+          settleMs: record.settleTimeEma,
+          skipAnimation: record.skipAnimation,
+        });
+        applied.push(appId);
+      }
+      if (mode === 'replace' && incomingRegistry !== undefined) {
+        for (const entry of incomingRegistry.entries as Array<{ appId?: unknown }>) {
+          if (typeof entry.appId === 'string') this.registry.observe(entry.appId);
+        }
+      }
+    }
     const importedFloats = incoming.tracked.behavior.floats;
     if (importedFloats !== null && typeof importedFloats === 'object') {
       const appIds = Object.keys(importedFloats as Record<string, unknown>);
-      if (mode === 'replace') this.floats.replace(appIds);
-      else for (const appId of appIds) this.floats.set(appId, true);
+      for (const appId of appIds) this.registry.setNeverTile(appId, true);
     }
+    this.session.refreshIdentities();
     this.session.invalidateAll();
-    this.history.log('config_imported', { mode, applied: merged.report.applied.length, skipped: merged.report.skipped.length });
-    return JSON.stringify({ ok: true, applied: merged.report.applied, skipped: merged.report.skipped });
+    this.history.log('config_imported', { mode, applied: applied.length });
+    return JSON.stringify({ ok: true, applied, skipped: [] });
+  }
+
+  /** §9 `SimulateScreens`: hand the extension a fixture screen list, or clear it. */
+  private simulateScreens(json: string): boolean {
+    if (json.length === 0 || json === 'null') {
+      this.host.setSimulatedScreens(null);
+      return true;
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(json);
+    } catch {
+      return false;
+    }
+    if (!Array.isArray(raw)) return false;
+    const screens: Screen[] = [];
+    raw.forEach((item, position) => {
+      if (typeof item !== 'object' || item === null) return;
+      const m = item as Record<string, unknown>;
+      const geometry = {
+        x: Number(m.x ?? 0),
+        y: Number(m.y ?? 0),
+        width: Number(m.width ?? 0),
+        height: Number(m.height ?? 0),
+      };
+      if (geometry.width <= 0 || geometry.height <= 0) return;
+      const work = m.workArea;
+      screens.push({
+        index: typeof m.index === 'number' ? m.index : position,
+        connector: typeof m.connector === 'string' ? m.connector : `M${position}`,
+        geometry,
+        workArea:
+          typeof work === 'object' && work !== null
+            ? {
+                x: Number((work as Record<string, unknown>).x ?? 0),
+                y: Number((work as Record<string, unknown>).y ?? 0),
+                width: Number((work as Record<string, unknown>).width ?? 0),
+                height: Number((work as Record<string, unknown>).height ?? 0),
+              }
+            : undefined,
+        scale: typeof m.scale === 'number' ? m.scale : 1,
+        refreshRate: typeof m.refreshRate === 'number' ? m.refreshRate : 60,
+        isPrimary: m.isPrimary === true,
+      });
+    });
+    if (screens.length > 0 && !screens.some((screen) => screen.isPrimary)) screens[0].isPrimary = true;
+    this.host.setSimulatedScreens(screens.length > 0 ? screens : null);
+    return true;
   }
 
   private simulateResize(a: number, b: number, ratio: number): boolean {

@@ -21,6 +21,41 @@
       <summary>Landscape gap override</summary>
       <description>Negative inherits the base gap.</description>
     </key>
+    <key name="gaps-left" type="i">
+      <default>-1</default>
+      <summary>Left outer gap</summary>
+      <description>Pixels on the left edge of a tile; negative inherits the base gap.</description>
+    </key>
+    <key name="gaps-right" type="i">
+      <default>-1</default>
+      <summary>Right outer gap</summary>
+      <description>Pixels on the right edge of a tile; negative inherits the base gap.</description>
+    </key>
+    <key name="gaps-top" type="i">
+      <default>-1</default>
+      <summary>Top outer gap</summary>
+      <description>Pixels on the top edge of a tile; negative inherits the base gap.</description>
+    </key>
+    <key name="gaps-bottom" type="i">
+      <default>-1</default>
+      <summary>Bottom outer gap</summary>
+      <description>Pixels on the bottom edge of a tile; negative inherits the base gap.</description>
+    </key>
+    <key name="gaps-between" type="i">
+      <default>-1</default>
+      <summary>Between-window gap</summary>
+      <description>Pixels between the two windows of a pair; negative inherits the base gap.</description>
+    </key>
+    <key name="display-memory-minutes" type="i">
+      <default>30</default>
+      <summary>Display memory lifetime</summary>
+      <description>Minutes a connector's arrangement is remembered for reconnect replay.</description>
+    </key>
+    <key name="float-pins-workspace" type="b">
+      <default>true</default>
+      <summary>Float pins its workspace</summary>
+      <description>A floating window keeps its workspace from being reaped.</description>
+    </key>
     <key name="min-size-policy" type="s">
       <default>'respect'</default>
       <summary>Minimum-size policy</summary>
@@ -233,12 +268,6 @@
       <summary>Dry run</summary>
       <description>Compute plans without applying them.</description>
     </key>
-    <key name="escape-fullscreen-only-fullscreen" type="b">
-      <default>false</default>
-      <summary>Escape fullscreen only when fullscreen</summary>
-      <description>Restrict Escape handling to fullscreen windows.</description>
-    </key>
-
     <!-- Gestures (§41.3) -->
     <key name="gesture-enabled" type="b">
       <default>true</default>

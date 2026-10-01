@@ -12,7 +12,7 @@ import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-import { AdaptationStore } from './adapt.js';
+import { RegistryStore } from './registry.js';
 
 export default class AdrtPreferences extends ExtensionPreferences {
   fillPreferencesWindow(window: any): void {
@@ -23,7 +23,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
     window.add(this.indicatorPage(settings));
     window.add(this.gesturePage(settings));
     window.add(this.keysPage(settings));
-    window.add(this.problemWindowsPage());
+    window.add(this.appsPage(settings));
     window.add(this.aboutPage(settings));
   }
 
@@ -40,7 +40,6 @@ export default class AdrtPreferences extends ExtensionPreferences {
     split.add(this.spinRow(settings, 'primary-app-ratio', 'Primary app ratio (%)', 'Clamped to 20–80%.', 20, 80));
     split.add(this.entryRow(settings, 'primary-apps', 'Primary apps', 'Comma-separated app ids.'));
     split.add(this.spinRow(settings, 'nudge-step', 'Nudge step (%)', '', 1, 50));
-    split.add(this.spinRow(settings, 'undo-stack-size', 'Undo stack size', '', 0, 100));
     page.add(split);
     return page;
   }
@@ -126,23 +125,33 @@ export default class AdrtPreferences extends ExtensionPreferences {
     return page;
   }
 
-  private problemWindowsPage(): any {
-    const page = new Adw.PreferencesPage({ title: 'Problem windows', icon_name: 'dialog-warning-symbolic' });
-    const group = new Adw.PreferencesGroup({ title: 'Adaptation records' });
-    const store = new AdaptationStore(true);
+  /**
+   * §12: the app registry page. It replaces the old problem-windows page: one
+   * row per app adrt has seen, a durable `neverTile` switch, and a forget
+   * button that drops the entry (and returns live windows to the tiling).
+   */
+  private appsPage(settings: any): any {
+    const page = new Adw.PreferencesPage({ title: 'Apps', icon_name: 'view-app-grid-symbolic' });
+    const group = new Adw.PreferencesGroup({
+      title: 'App registry',
+      description: 'Every app adrt has seen. "Never tile" keeps it floating.',
+    });
+    const store = new RegistryStore();
     store.load();
-    const records = store.list();
-    if (records.length === 0) {
-      group.add(new Adw.ActionRow({ title: 'No problem windows recorded yet' }));
+    const entries = store.entries().sort((a, b) => b.lastSeen - a.lastSeen);
+    if (entries.length === 0) {
+      group.add(new Adw.ActionRow({ title: 'No apps recorded yet' }));
     }
-    for (const record of records) {
-      const row = new Adw.ActionRow({
-        title: record.appId,
-        subtitle: `observations ${record.observations}${record.skipAnimation ? ', animation skipped' : ''}`,
+    for (const entry of entries) {
+      const row = new Adw.SwitchRow({ title: entry.appId, subtitle: `${entry.windowsSeen} window(s)` });
+      row.active = entry.neverTile;
+      row.connect('notify::active', () => {
+        store.setNeverTile(entry.appId, row.active);
+        store.flush();
       });
       const button = new Gtk.Button({ icon_name: 'user-trash-symbolic', valign: Gtk.Align.CENTER });
       button.connect('clicked', () => {
-        store.forget(record.appId);
+        store.forget(entry.appId);
         store.flush();
         group.remove(row);
       });
@@ -150,6 +159,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
       group.add(row);
     }
     page.add(group);
+    void settings;
     return page;
   }
 

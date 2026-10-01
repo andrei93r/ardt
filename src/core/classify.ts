@@ -143,10 +143,4 @@ export function classify(
   return { tileable: true, layer: Layer.TILED, reason: null, modal: false };
 }
 
-export function isTileable(
-  surface: Surface,
-  config: ClassifyConfig,
-  context?: HeuristicContext,
-): boolean {
-  return classify(surface, config, context).tileable;
-}
+

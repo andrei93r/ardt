@@ -6,6 +6,60 @@ code changes, MINOR for features, PATCH for fixes.
 
 ## [Unreleased]
 
+### Added (Stage 4 — app registry, prefs, migration)
+
+- **The app registry** (`core/appregistry.ts`, adapter `registry.ts`) replaces
+  `adaptation.json`, `behavior.json` and the `exception-apps` list with one entry
+  per app: identity, `neverTile`, timing-only `adapt` hints, and per-instance
+  placements with a durable per-app ordinal. `adapt` is **performance only**:
+  the learned minimum (`refusedMin*`/`accepted*`) is gone and no geometry ever
+  reaches the tiler.
+- **Identity resolution** (`core/identity.ts`, adapter `appidentity.ts`): the
+  documented chain — Shell desktop id → sandboxed app id → GTK application id →
+  an AppImage ancestor (walking `/proc` because Chromium zeroes its own
+  environment) → `wm_class` → a session-only `window:<seq>` — resolved at the
+  first frame, recorded with its source, and re-keyed on `notify::wm-class` and
+  the shell's `tracked-windows-changed`.
+- **Settings migration**: `BUNDLE_VERSION` 3 → 4; a v4 bundle carries the
+  registry and a v3 bundle is read into it (a newer bundle is refused rather than
+  downgraded). The legacy `adaptation.json`/`behavior.json` are folded in exactly
+  once with copy-verify-delete.
+- **Enable-time normalisation** (`core/normalize.ts`, §20), run on every enable
+  including mid-session: one managed window is maximized; a window covering ≥70%
+  of the work area is maximized with the rest minimized; otherwise the top two by
+  visible surface pair up and the rest minimize. Floats and fullscreen windows
+  are untouched.
+- The **prefs app registry page** replaces the problem-windows page: one row per
+  app, a durable `neverTile` switch and a forget button. The row that bound the
+  deleted `undo-stack-size` key is removed (opening prefs no longer throws).
+- New settings: `display-memory-minutes`, `float-pins-workspace`, the per-side
+  gaps (`gaps-left/right/top/bottom`) and `gaps-between`.
+- `DumpState` gains each window's resolved `identity`, `identitySource`,
+  `provisional`, `instanceId`, `ordinal` and `neverTile`, plus the `registry`,
+  `neverTile` and `displayMemory` blocks.
+- `GetRegistry`, `SetNeverTile`, `ToggleNeverTile` and `ForgetApp` on the test
+  D-Bus surface.
+
+### Added (Stage 5 — displays and hotplug)
+
+- **Display plans** (`core/displays.ts`, adapter wiring in the layout drain):
+  `monitors-changed`/`workareas-changed` push to lane 2, never policy in the
+  Mutter handler; disconnect rescue (two windows per fresh workspace, on the
+  physical side the screen was on), reconnect replay (slots, minimized, floats,
+  fullscreen, by instance id), connector-keyed memory with a TTL and the primary
+  read from GNOME, never set.
+- `SimulateScreens` (a fixture screen list) and `SimulateWorkArea` (one
+  connector's work area; an invalid reading keeps the last good value), plus
+  `GetDisplayMemory`/`ForgetDisplayMemory`.
+- `startup-complete` gating: the first layout drain waits for the shell to
+  finish starting up (with a bounded fallback so it can never hang).
+- Scenarios `A98`–`A100` (registry), `A15` rewritten (a refusing client is
+  accepted and no minimum is learned), `A109`–`A112`, `A122` (displays) and the
+  assisted `S17-dock-drill`; `S15` covers decision 68 (a screen without
+  workspaces ignores a workspace switch). `tests/MANUAL.md` is the hardware
+  acceptance handover (physical hotplug/dock, real gestures, suspend/logind lock,
+  fractional scaling).
+
 ### Added (Stage 0 — grounding and event-confirmed triggers)
 
 - `ProbePlatform` on the test D-Bus surface: a capability JSON (laters and
@@ -139,6 +193,59 @@ code changes, MINOR for features, PATCH for fixes.
 - `A44` is retired with a recorded skip: the v1 opposite-direction focus fallback
   is deleted by the model (§6/§17, decision 58); the silent direction is covered
   by `A57`/`A121`.
+
+### Added (Stage 7 — monitor matrix and vertical hardening)
+
+- **The per-screen split axis**: `moveToward` and `DumpState.tileAxis` read the
+  focused screen's own axis (portrait or `layout_rows === -1` stacks; landscape
+  with horizontal workspaces splits side by side) instead of a session-wide
+  guess. A window crossing an edge re-slots on the target's axis.
+- **Geometry-based monitor movement**: `adjacentScreen` picks the next screen by
+  rectangle adjacency (perpendicular overlap first, then the nearest edge) — never
+  by index — so a mixed landscape/portrait layout moves a window the way a user
+  sees it.
+- **`screens-changed` re-reads the surface**: `WindowSession.onScreensChanged`
+  refreshes every tracked surface (monitor, frame, monitor-implied sticky, size
+  hints) and drops classification before the deferred replan.
+- The host keys screens by the real Mutter index and connector, and marks the
+  primary from GNOME's current `primaryIndex`; `workAreaOf`/`axisOf` look a
+  monitor up by index.
+- **The cross-screen arrival waits for the move to land**: `move_to_monitor` is
+  asynchronous, so the arrival ladder could float a window against the *source*
+  work area and drag it straight back (A106 failed on two monitors at HEAD). The
+  drain now re-arms until the window reports the target screen (bounded).
+- New scenario `A105-per-screen-axis` (a landscape and a portrait screen in one
+  session, plus the `layout_rows === -1` stack); `A81` derives the monitor set
+  from the actual geometry (a size multiset plus the primary from `isPrimary`,
+  never the input order); `A64` expects the screen's own axis after the
+  orientation override is lifted (a portrait monitor keeps stacking).
+
+### Removed (Stage 7 — hard-coded geometry)
+
+- `fallbackScreen` (`session.ts`) and `dummyScreen` (`tiling.ts`): the hard-coded
+  `1920x1080` and `0x0` screens. A missing screen now skips the frame instead of
+  inventing one.
+
+### Changed (Stage 8 — docs, dead code, perf re-scope)
+
+- `spec.md`/`README.md`: the superseded v1 behaviour sections (§5–§7, §9,
+  §11–§21, §35) are replaced with pointers to `docs/V2_MODEL.md`; the metadata
+  description and `version-name` move to `0.2.0`.
+- `PERFORMANCE_PLAN.md` re-scoped: Stage 1 (config caching) and Stage 2 (O(1)
+  host lookup) carried onto the v2 code; Stage 3 and the sweep back-off struck
+  (the queue and the lane-3 maintenance pass replace them).
+
+### Removed (Stage 8 — dead code and settings)
+
+- Setting `escape-fullscreen-only-fullscreen`: declared for compatibility but
+  never read (Adrt never grabbed `Escape`).
+- `UndoStack` and `UndoEntry` (`adapters/gnome/history.ts`): the persisted v1
+  undo stack, superseded by the single in-memory `core/undo.ts` change.
+- `isSwapped` (`tiling.ts`), `layerOf`/`pairKeyFor`/`pruneEmptyNow`
+  (`session.ts`), `easeOutQuad` (`frame-clock.ts`), `hasClutterGestureAction`
+  (`compat.ts`), `refusalLadder` (`core/placement.ts`), `isTileable`
+  (`core/classify.ts`), `sizeEquals` (`core/types.ts`) and `EventQueue.isEmpty`
+  (`core/queue.ts`): all were unreferenced.
 
 ## [0.1.0] - 2026-09-29
 

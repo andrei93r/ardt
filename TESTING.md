@@ -147,12 +147,10 @@ hardware are marked.
 ## Settings coverage
 
 Every key the code reads is declared in the schema (`npm run check:core`
-verifies the core boundary; the schema is the source of truth). All settings
-listed in §19.1 are wired except:
-
-- `escape-fullscreen-only-fullscreen` — Adrt never grabs `Escape`; the Shell
-  and the focused app own that key, so the flag has nothing to gate. It is
-  declared for compatibility and intentionally inert.
+verifies the core boundary; the schema is the source of truth). Behaviour and
+the settings it consumes live in `docs/V2_MODEL.md`; the v1 setting
+`escape-fullscreen-only-fullscreen` was dead (Adrt never grabbed `Escape`) and
+has been removed.
 
 1. **Basic pair tiling.** Two normal windows on an empty workspace tile side
    by side (stacked on portrait). Neither overlaps; the gap is correct.

@@ -44,7 +44,7 @@ export function readText(path: string): string | null {  let contents: Uint8Arra
   return out;
 }
 
-function readJson(path: string): unknown {
+export function readJson(path: string): unknown {
   const text = readText(path);
   if (text === null) return null;
   try {

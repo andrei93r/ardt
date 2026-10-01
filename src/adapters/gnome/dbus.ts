@@ -85,6 +85,19 @@ const INTERFACE_XML = `
     <method name="SimulateWorkspaceReorder"><arg type="u" direction="in"/><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
     <method name="SimulateWorkspaceOrientation"><arg type="b" direction="in"/><arg type="b" direction="out"/></method>
 
+    <!-- Stage 4/5: the app registry and the display fixtures. -->
+    <method name="GetRegistry"><arg type="s" direction="out"/></method>
+    <method name="SetNeverTile"><arg type="s" direction="in"/><arg type="b" direction="in"/><arg type="b" direction="out"/></method>
+    <method name="ToggleNeverTile"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
+    <method name="ForgetApp"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
+    <method name="GetDisplayMemory"><arg type="s" direction="out"/></method>
+    <method name="ForgetDisplayMemory"><arg type="b" direction="out"/></method>
+    <method name="SimulateScreens"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
+    <method name="SimulateWorkArea">
+      <arg type="s" direction="in"/><arg type="i" direction="in"/><arg type="i" direction="in"/>
+      <arg type="i" direction="in"/><arg type="i" direction="in"/><arg type="b" direction="out"/>
+    </method>
+
     <!-- Stage 0: the capability probe, the event journal and real input. -->
     <method name="ProbePlatform"><arg type="s" direction="out"/></method>
     <method name="DumpEvents">

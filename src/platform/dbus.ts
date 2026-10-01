@@ -22,6 +22,15 @@ export interface DbusHandlers {
   ExportConfig(): string;
   ImportConfig(json: string, merge: boolean): string;
   ListHistoryDays(): string;
+  /* §12 app registry + §9 display memory (Stage 4/5). */
+  GetRegistry(): string;
+  SetNeverTile(appId: string, value: boolean): boolean;
+  ToggleNeverTile(appId: string): boolean;
+  ForgetApp(appId: string): boolean;
+  GetDisplayMemory(): string;
+  ForgetDisplayMemory(): boolean;
+  SimulateScreens(screens: string): boolean;
+  SimulateWorkArea(connector: string, x: number, y: number, width: number, height: number): boolean;
   SimulateGesture(kind: string, deltaX: number, deltaY: number, touchPoints: number): boolean;
   InjectSignal(type: string, payload: string): boolean;
   SimulateSessionMode(mode: string): boolean;

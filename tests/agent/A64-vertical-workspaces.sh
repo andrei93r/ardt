@@ -90,14 +90,25 @@ sys.exit(0 if by[a] > by[b] else 1)
 ' 30
 
 adrt SimulateWorkspaceOrientation false >/dev/null
-poll "back to horizontal the pair is side by side" '
+# With the override gone the pair splits along the screen's own axis (§1): a
+# portrait monitor still stacks, a landscape one goes side by side. Derive the
+# expectation from the monitor, never from a hard-coded orientation.
+poll "back to horizontal the pair follows the screen's own axis" '
 import json, sys
 d = json.load(sys.stdin)
 ws = [w for w in d["windows"] if w["tileable"] and not w["minimized"] and w["layer"] != 2]
 if len(ws) != 2:
     print("tiles", len(ws)); sys.exit(1)
-if abs(ws[0]["rect"]["y"] - ws[1]["rect"]["y"]) > 2:
-    print("not side by side", ws[0]["rect"], ws[1]["rect"]); sys.exit(1)
+mons = {m["index"]: m for m in d["monitors"]}
+g = mons.get(ws[0]["monitor"], {}).get("geometry", {})
+portrait = g.get("height", 0) > g.get("width", 0)
+a, b = sorted(ws, key=lambda w: (w["rect"]["x"], w["rect"]["y"]))
+if portrait:
+    if abs(a["rect"]["x"] - b["rect"]["x"]) > 2 or a["rect"]["y"] + a["rect"]["height"] > b["rect"]["y"] + 2:
+        print("portrait screen should stack", a["rect"], b["rect"]); sys.exit(1)
+else:
+    if abs(a["rect"]["y"] - b["rect"]["y"]) > 2 or a["rect"]["x"] + a["rect"]["width"] > b["rect"]["x"] + 2:
+        print("landscape screen should be side by side", a["rect"], b["rect"]); sys.exit(1)
 sys.exit(0)
 ' 15
 

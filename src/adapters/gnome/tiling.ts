@@ -14,8 +14,8 @@ import { ratioKey, screenArea } from '../../core/tiler.js';
 import type { SplitAxis } from '../../core/tiler.js';
 import { clamp, rectEquals } from '../../core/types.js';
 import type { Rect, Screen, TilePlan } from '../../core/types.js';
-import type { AdaptationStore } from './adapt.js';
 import * as compat from './compat.js';
+import type { RegistryStore } from './registry.js';
 import type { FrameClockAnimator } from './frame-clock.js';
 import type { GnomeHost } from './host.js';
 import type { History } from './history.js';
@@ -31,7 +31,8 @@ export interface TilingDeps {
   host: GnomeHost;
   settings: GnomeSettings;
   history: History;
-  adaptation: AdaptationStore;
+  /** §12: the app registry; `adapt` is timing-only. */
+  registry: RegistryStore;
   animator: FrameClockAnimator;
   changes: ChangeLog;
   windows(): Map<number, TrackedWindow>;
@@ -56,7 +57,6 @@ export class Tiling {
    * was refused twice with the window's size unchanged, so a stale size under
    * load cannot teach a bogus minimum (A52).
    */
-  private readonly refusalSightings = new Map<number, { target: string; current: string; count: number }>();
   private lastAppliedAtMs = 0;
   /** Diagnostics: plans that actually moved at least one window. */
   private appliedPlans = 0;
@@ -119,10 +119,6 @@ export class Tiling {
     this.ratios.set(key, clamped);
     this.deps.onRatiosChanged();
     return true;
-  }
-
-  isSwapped(a: number, b: number): boolean {
-    return this.swapPairs.has(a < b ? `${a}|${b}` : `${b}|${a}`);
   }
 
   toggleSwap(a: number, b: number): boolean {
@@ -246,8 +242,8 @@ export class Tiling {
         tracked.selfUnmaximize = false;
       }
       const observed = Math.round((GLib.get_monotonic_time() - started) / 1000);
-      this.deps.adaptation.observeUnmaximizeDelay(tracked.surface.appId, observed);
-      delay = this.deps.adaptation.delayFor(tracked.surface.appId, tracked.profile.unmaximizeDelayMs);
+      this.deps.registry.observeUnmaximizeDelay(tracked.appKey, observed);
+      delay = this.deps.registry.delayFor(tracked.appKey, tracked.profile.unmaximizeDelayMs);
     }
 
     if (delay > 0) {
@@ -310,7 +306,7 @@ export class Tiling {
   }
 
   private scheduleVerify(tracked: TrackedWindow, target: Rect, reason: string, attempt: number): void {
-    const settle = Math.max(MIN_SETTLE_MS, this.deps.adaptation.settleFor(tracked.surface.appId));
+    const settle = Math.max(MIN_SETTLE_MS, this.deps.registry.settleFor(tracked.appKey, MIN_SETTLE_MS));
     this.addTimeout(settle, () => this.verify(tracked, target, reason, attempt));
   }
 
@@ -326,8 +322,8 @@ export class Tiling {
     }
 
     if (this.within(current, target)) {
-      this.deps.adaptation.noteSuccess(tracked.surface.appId);
-      this.deps.adaptation.observeSettle(tracked.surface.appId, settleFor(tracked));
+      this.deps.registry.noteSuccess(tracked.appKey);
+      this.deps.registry.observeSettle(tracked.appKey, settleFor(tracked));
       tracked.refusals = 0;
       tracked.lastTarget = { ...target };
       this.deps.history.log('tile', { id: tracked.id, reason, attempt, rect: target });
@@ -341,37 +337,21 @@ export class Tiling {
     const retries = tracked.profile.retriesMs;
     if (attempt < retries.length) {
       this.deps.history.log('resize_retry', { id: tracked.id, reason, attempt, rect: current });
-      this.addTimeout(retries[attempt], () => this.applyFrame(tracked, target, dummyScreen(), false, reason, attempt + 1));
+      this.addTimeout(retries[attempt], () => {
+        // §10: the retry re-reads the window's real screen; a hard-coded dummy
+        // geometry would animate against the wrong area (or none at all).
+        const screen = this.screenFor(tracked.surface.screenId);
+        if (screen === null) return;
+        this.applyFrame(tracked, target, screen, false, reason, attempt + 1);
+      });
       return;
     }
     tracked.refusals += 1;
-    // Only a window that refused to *shrink* has a minimum: it ended up larger
-    // than the rect we asked for. A window that stayed smaller than the target
-    // (a max-size app) must not teach us a minimum — doing so pinned, e.g.,
-    // Chrome to its current width and made a 50/50 split impossible.
-    // A minimum has to be a *stable* property: the same target refused twice
-    // with the window's size unchanged. One sample can be a drop, a slow client
-    // or a stale size under load — learning from that pinned windows that never
-    // refused at all (A52).
-    const larger = current.width > target.width + VERIFY_TOLERANCE || current.height > target.height + VERIFY_TOLERANCE;
-    if (larger) {
-      const signature = `${target.x},${target.y},${target.width},${target.height}`;
-      const size = `${current.width}x${current.height}`;
-      const seen = this.refusalSightings.get(tracked.id);
-      if (seen !== undefined && seen.target === signature && seen.current === size) {
-        seen.count += 1;
-        if (seen.count >= 2) {
-          this.deps.adaptation.observeRefusedMin(tracked.surface.appId, current.width, current.height);
-          this.refusalSightings.delete(tracked.id);
-        }
-      } else {
-        this.refusalSightings.set(tracked.id, { target: signature, current: size, count: 1 });
-      }
-    } else {
-      this.refusalSightings.delete(tracked.id);
-    }
-    const stubborn = this.deps.adaptation.noteRefusal(tracked.surface.appId);
-    this.deps.history.log('stubborn', { id: tracked.id, appId: tracked.surface.appId, refusals: tracked.refusals });
+    // §12: no learned minimum. A refusal may make the app stubborn for the
+    // session (skip animation, back off retries), but it never records a size
+    // and never reaches the tiler as geometry.
+    const stubborn = this.deps.registry.noteRefusal(tracked.appKey);
+    this.deps.history.log('stubborn', { id: tracked.id, appId: tracked.appKey, refusals: tracked.refusals });
     if (stubborn) {
       tracked.stubborn = true;
       this.deps.onStubborn(tracked.surface.appId);
@@ -433,7 +413,7 @@ export class Tiling {
     if (this.deps.settings.boolean('disable-animations', false)) return false;
     if (!St.Settings.get().enable_animations) return false;
     if (!tracked.profile.animate) return false;
-    if (this.deps.adaptation.skipAnimation(tracked.surface.appId)) return false;
+    if (this.deps.registry.skipAnimation(tracked.appKey)) return false;
     return true;
   }
 
@@ -465,10 +445,6 @@ export class Tiling {
 
 function settleFor(tracked: TrackedWindow): number {
   return Math.max(MIN_SETTLE_MS, tracked.profile.retriesMs[0] ?? MIN_SETTLE_MS);
-}
-
-function dummyScreen(): Screen {
-  return { index: 0, connector: '', geometry: { x: 0, y: 0, width: 0, height: 0 }, scale: 1, refreshRate: 60, isPrimary: true };
 }
 
 export const FRAME_INTERVAL_BUDGET_MS = MAX_FRAME_INTERVAL_MS;

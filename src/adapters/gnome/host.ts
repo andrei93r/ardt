@@ -11,6 +11,7 @@
 
 import { layoutManager } from 'resource:///org/gnome/shell/ui/main.js';
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 
 import { Layer } from '../../core/types.js';
 import type { Rect, Screen, Size, Surface } from '../../core/types.js';
@@ -51,6 +52,13 @@ export class GnomeHost implements PlatformHost {
    */
   private lookupCount = 0;
   private scanCount = 0;
+  /** §9: a fixture screen list for the display scenarios (`SimulateScreens`). */
+  private simulatedScreens: Screen[] | null = null;
+  /** §9: per-connector work-area overrides (`SimulateWorkArea`). */
+  private readonly simulatedWorkAreas = new Map<string, Rect>();
+  /** §20: whether the shell has finished starting up. */
+  private startupComplete = false;
+  private startupFallback = 0;
 
   get hostLookups(): number {
     return this.lookupCount;
@@ -73,6 +81,17 @@ export class GnomeHost implements PlatformHost {
     } catch {
       this.mutter = null;
     }
+    // §20: the first layout drain waits for the shell to finish starting up.
+    try {
+      this.connect(layoutManager, 'startup-complete', () => this.markStartupComplete());
+    } catch {
+      this.startupComplete = true;
+    }
+    this.startupFallback = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+      this.startupFallback = 0;
+      this.markStartupComplete();
+      return GLib.SOURCE_REMOVE;
+    });
     this.connect(global.display, 'window-created', (_display: any, win: any) => {
       this.emit({ type: 'surface-created', surface: this.ensureSurface(win) });
     });
@@ -94,6 +113,10 @@ export class GnomeHost implements PlatformHost {
   }
 
   disable(): void {
+    if (this.startupFallback !== 0) {
+      GLib.source_remove(this.startupFallback);
+      this.startupFallback = 0;
+    }
     for (const connection of this.connections.splice(0)) {
       connection.object.disconnect(connection.id);
     }
@@ -245,16 +268,59 @@ export class GnomeHost implements PlatformHost {
     }
   }
 
+  /**
+   * Resolve the live Mutter window for a surface id. The surface cache already
+   * holds it, so a lookup is O(1); the `list_all_windows()` scan is kept only
+   * as a miss fallback, so behaviour is identical if a surface is somehow
+   * absent (PERFORMANCE_PLAN stage 2, carried into v2).
+   */
   windowFor(id: number): any | null {
-    this.lookupCount += 1;
-    for (const win of this.listAllWindows()) {
-      if (win.get_id() === id) return win;
-    }
-    return null;
+    return this.windowById(id);
   }
 
   screens(): Screen[] {
     return this.screensCache;
+  }
+
+  /** §20: true once the shell's startup is complete (or the fallback fired). */
+  isStartupComplete(): boolean {
+    return this.startupComplete;
+  }
+
+  private markStartupComplete(): void {
+    if (this.startupComplete) return;
+    this.startupComplete = true;
+    // Nudge the deferred first drain now that adoption may move windows.
+    this.emit({ type: 'screens-changed' });
+  }
+
+  /**
+   * §9 `SimulateScreens`: replace the screen list the extension reads with a
+   * fixture, so a disconnect/reconnect/primary change can be exercised without
+   * physical hardware. The primary flag is part of what GNOME reports here;
+   * adrt still never sets the real primary.
+   */
+  setSimulatedScreens(screens: Screen[] | null): void {
+    this.simulatedScreens = screens;
+    this.refreshScreens();
+    this.emit({ type: 'screens-changed' });
+  }
+
+  /**
+   * §9 `SimulateWorkArea`: change one connector's work area. A transient or
+   * invalid reading (a `-1 × -1` mid-transition) keeps the last good value.
+   */
+  setSimulatedWorkArea(connector: string, area: Rect): boolean {
+    if (area.width <= 0 || area.height <= 0) return false;
+    this.simulatedWorkAreas.set(connector, { ...area });
+    const apply = (screen: Screen): void => {
+      if (screen.connector !== connector) return;
+      screen.workArea = { ...area };
+    };
+    for (const screen of this.screensCache) apply(screen);
+    if (this.simulatedScreens !== null) for (const screen of this.simulatedScreens) apply(screen);
+    this.emit({ type: 'screens-changed' });
+    return true;
   }
 
   activeWorkspaceId(): number {
@@ -326,6 +392,8 @@ export class GnomeHost implements PlatformHost {
 
   private windowById(id: number): any | null {
     this.lookupCount += 1;
+    const cached = this.surfaceCache.get(id);
+    if (cached !== undefined) return cached.win;
     for (const win of this.listAllWindows()) {
       if (win.get_id() === id) return win;
     }
@@ -337,16 +405,27 @@ export class GnomeHost implements PlatformHost {
   }
 
   private refreshScreens(): void {
+    if (this.simulatedScreens !== null) {
+      this.screensCache = this.simulatedScreens.map((screen) => ({
+        ...screen,
+        geometry: { ...screen.geometry },
+        workArea: this.simulatedWorkAreas.get(screen.connector) ?? (screen.workArea === undefined ? undefined : { ...screen.workArea }),
+      }));
+      this.primaryMonitorIndex = this.screensCache.find((screen) => screen.isPrimary)?.index ?? this.screensCache[0]?.index ?? 0;
+      return;
+    }
     const monitors: any[] = layoutManager.monitors;
     const connectors = this.monitorConnectors();
     this.primaryMonitorIndex = layoutManager.primaryIndex ?? 0;
     const workspace = global.workspace_manager.get_active_workspace();
-    this.screensCache = monitors.map((monitor, index) => {
-      const monitorIndex = monitor.index ?? index;
+    this.screensCache = monitors.map((monitor, position) => {
+      // The real Mutter index, never the array position: a reordered monitor
+      // list must not move the connector or the primary flag.
+      const monitorIndex = monitor.index ?? position;
       const work = workspace === null ? null : workspace.get_work_area_for_monitor(monitorIndex);
       return {
         index: monitorIndex,
-        connector: connectors[index] ?? `M${index}`,
+        connector: connectors.get(monitorIndex) ?? connectors.get(position) ?? `M${monitorIndex}`,
         geometry: { x: monitor.x, y: monitor.y, width: monitor.width, height: monitor.height },
         workArea:
           work === null
@@ -354,19 +433,28 @@ export class GnomeHost implements PlatformHost {
             : { x: work.x, y: work.y, width: work.width, height: work.height },
         scale: monitor.scale ?? 1,
         refreshRate: monitor.refreshRate ?? 60,
-        isPrimary: monitorIndex === layoutManager.primaryIndex,
+        isPrimary: monitorIndex === this.primaryMonitorIndex,
       };
     });
   }
 
-  private monitorConnectors(): string[] {
+  /**
+   * Connectors keyed by the real logical-monitor index, so a screen carries the
+   * right connector even when the backend list is ordered differently from
+   * `layoutManager.monitors`.
+   */
+  private monitorConnectors(): Map<number, string> {
+    const map = new Map<number, string>();
     try {
       const manager = global.backend.get_monitor_manager();
       const monitors: any[] = manager.get_monitors();
-      return monitors.map((monitor: any) => monitor.get_connector());
+      monitors.forEach((monitor: any, position: number) => {
+        const index = typeof monitor.get_index === 'function' ? monitor.get_index() : position;
+        map.set(index, monitor.get_connector());
+      });
     } catch (e) {
       console.debug(`[adrt] monitor connector lookup failed: ${(e as Error).message}`);
-      return [];
     }
+    return map;
   }
 }

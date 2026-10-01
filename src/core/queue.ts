@@ -42,10 +42,6 @@ export class EventQueue {
     return this.count;
   }
 
-  isEmpty(): boolean {
-    return this.count === 0;
-  }
-
   /** Whether pushing this key/lane would arm the drain (the queue was empty). */
   push(lane: Lane, key: string, kind: string, data?: Record<string, unknown>): boolean {
     const wasEmpty = this.count === 0;

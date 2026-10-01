@@ -89,4 +89,42 @@ if w[0]["monitor"] != int("'"$CUR"'"):
 sys.exit(0 if w[0]["tileable"] else 1)
 ' 20
 
+# §9 decision 68: while the workspaces screen changes workspace, the other
+# screen keeps its windows exactly as they are (slots, size) and nothing is
+# notified. A screen without workspaces simply has nothing to switch.
+if [ "$(state_expr 'd["workspaces"]')" -gt 1 ]; then
+  adrt MoveDirection "$direction" >/dev/null
+  poll "the test window is on the non-primary monitor for the switch check" '
+import json, sys
+d = json.load(sys.stdin)
+w = [x for x in d["windows"] if x["id"] == int("'"$ID"'")]
+sys.exit(0 if w and w[0]["monitor"] == int("'"$OTHER"'") else 1)
+' 20
+
+  before_rect="$(dump | python3 -c '
+import json, sys
+w = [x for x in json.load(sys.stdin)["windows"] if x["id"] == int("'"$ID"'")]
+print(json.dumps(w[0]["rect"]) if w else "{}")')"
+
+  other_ws="$(state_expr "0 if d['activeWorkspace'] != 0 else 1")"
+  adrt ActivateWorkspace "$other_ws" >/dev/null
+  # The switch is asynchronous: re-derive it as a property before asserting.
+  wait_python 15 "import json,sys; sys.exit(0 if json.load(sys.stdin)['activeWorkspace'] == $other_ws else 1)" || true
+
+  poll "a workspace switch leaves the non-primary window exactly as it was" '
+import json, sys
+d = json.load(sys.stdin)
+w = [x for x in d["windows"] if x["id"] == int("'"$ID"'")]
+if not w:
+    print("window gone"); sys.exit(1)
+if w[0]["monitor"] != int("'"$OTHER"'"):
+    print("moved to monitor", w[0]["monitor"]); sys.exit(1)
+if json.dumps(w[0]["rect"]) != "'"$before_rect"'":
+    print("rect changed", w[0]["rect"], "'"$before_rect"'"); sys.exit(1)
+print("untouched on the non-primary monitor")
+' 15
+
+  adrt ActivateWorkspace "${START_WS:-0}" >/dev/null
+fi
+
 summary

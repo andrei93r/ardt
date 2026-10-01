@@ -16,6 +16,10 @@ import type { HeuristicContext } from '../../core/classify.js';
 import { classifyAdjust } from '../../core/adjust.js';
 import type { AdjustMode } from '../../core/adjust.js';
 import { EventQueue } from '../../core/queue.js';
+import type { DisplayMove, DisplayState, DisplayWorkspace, MemoryEntry, NewWorkspace } from '../../core/displays.js';
+import { displayPlan } from '../../core/displays.js';
+import { normalizePlan } from '../../core/normalize.js';
+import type { NormalizeWindow } from '../../core/normalize.js';
 import {
   dropPlacement, escapeSize, maximizeWindow, routeNewWindow, unmaximizeWindow, windowCount,
 } from '../../core/placement.js';
@@ -29,16 +33,17 @@ const MAINTENANCE_SETTLE_MS = 200;
 import { checkPlan } from '../../core/invariants.js';
 import { SignatureCache, planSignature } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
-import { computePlans, pairKey, ratioKey, screenArea } from '../../core/tiler.js';
+import { computePlans, ratioKey, screenArea } from '../../core/tiler.js';
 import type { FocusDirection } from '../../core/focus.js';
 import { cycleOrder, pickDirectional } from '../../core/focus.js';
 import type { CycleEntry } from '../../core/focus.js';
 import { Layer } from '../../core/types.js';
 import type { Rect, Screen, TilePlan } from '../../core/types.js';
-import type { AdaptationStore, FloatStore } from './adapt.js';
 import * as compat from './compat.js';
 import type { GnomeHost } from './host.js';
 import type { History } from './history.js';
+import { instanceIdFor, resolveWindowIdentity } from './appidentity.js';
+import type { RegistryStore } from './registry.js';
 import type { GnomeSettings } from './settings.js';
 import type { Tiling } from './tiling.js';
 import { TrackedWindow } from './tracked-window.js';
@@ -48,8 +53,7 @@ export interface SessionDeps {
   settings: GnomeSettings;
   tiling: Tiling;
   history: History;
-  adaptation: AdaptationStore;
-  floats: FloatStore;
+  registry: RegistryStore;
   changes: ChangeLog;
   isPaused(): boolean;
   onStateChanged(): void;
@@ -62,6 +66,8 @@ export interface SessionDeps {
   onNotice?(key: string, subject: string): void;
   /** Journal one model-level event for the replayable trace (§22, Stage 6). */
   onModelEvent?(event: string, fields: Record<string, unknown>): void;
+  /** §9: display memory changed and should be persisted. */
+  onDisplayMemoryChanged?(): void;
   /** Whether any window is mid-animation (the drain waits for it rather than
    * applying a frame onto a moving surface). */
   isAnimating?: () => boolean;
@@ -92,6 +98,11 @@ export class WindowSession {
    * (maintenance) on idle; both are removed as soon as the drain runs.
    */
   private readonly queue = new EventQueue();
+  /** §12: monotonic sequence for provisional `window:<seq>` identity keys. */
+  private windowSeq = 0;
+  /** §9: display memory keyed by connector, plus the previous screen list. */
+  private displayMemory: MemoryEntry[] = [];
+  private lastScreens: Screen[] | null = null;
   /** Re-queued layout passes waiting for an animation to finish. */
   private drainDeferrals = 0;
   /** §19: set while the drain finishes the backlog a pause caught. */
@@ -118,6 +129,10 @@ export class WindowSession {
   /** A cross-screen move reported by a directional key; the drain arrives it. */
   private crossScreenFrom: 'left' | 'right' | 'above' | 'below' | null = null;
   private crossScreenId: number | null = null;
+  /** The screen the move is heading to; the arrival waits until it lands there. */
+  private crossScreenTarget: number | null = null;
+  /** Bounded re-arms while a `move_to_monitor` is still in flight. */
+  private crossScreenAttempts = 0;
   /** When the dragged window last changed geometry (stale-drag watchdog). */
   private dragLastActivityMs = 0;
   /** True while a compositor state makes tiling pointless (the overview). */
@@ -358,6 +373,9 @@ export class WindowSession {
     if (compat.isOverrideRedirect(win)) return;
     const surface = this.deps.host.ensureSurface(win);
     const tracked = new TrackedWindow(win, surface);
+    this.windowSeq += 1;
+    tracked.instanceId = instanceIdFor(win);
+    tracked.seq = this.windowSeq;
     tracked.originalRect = { ...surface.frame };
     tracked.lastWorkspaceIdx = surface.workspaceId;
     this.windows.set(id, tracked);
@@ -390,12 +408,17 @@ export class WindowSession {
       return;
     }
     tracked.ready = true;
-    // §9.3 / §19.1: an app the user opted to keep floating stays floating.
-    if (this.deps.floats.has(tracked.surface.appId)) {
+    this.resolveTrackedIdentity(tracked);
+    const appId = tracked.appKey;
+    this.deps.registry.observe(appId, tracked.surface.title);
+    // §12: neverTile takes precedence over everything: the user asked this app
+    // to float, so it floats and is never re-tiled, however it arrived.
+    if (this.deps.registry.isNeverTile(appId)) {
       tracked.autoFloated = false;
       tracked.surface.setFloating(true);
       this.deps.host.applyLayer(tracked.id, Layer.FLOATING, 0);
       tracked.invalidateClassification();
+      this.deps.registry.place(appId, tracked.instanceId, this.placementInput(tracked));
       return;
     }
     const classification = this.classify(tracked);
@@ -425,6 +448,63 @@ export class WindowSession {
     }
     // §3: the routing decision comes from the pure model; the adapter applies it.
     this.routeWindow(tracked);
+  }
+
+  /**
+   * §12: resolve the window's identity at its first frame and on every signal
+   * that can change it (`notify::wm-class`, `tracked-windows-changed`). A
+   * provisional key is re-keyed onto the real identity, carrying its entry.
+   */
+  private resolveTrackedIdentity(tracked: TrackedWindow): void {
+    const previous = tracked.identityKey;
+    const resolution = resolveWindowIdentity(tracked.win, tracked.seq);
+    tracked.identityKey = resolution.key;
+    tracked.identitySource = resolution.source;
+    tracked.provisional = resolution.provisional;
+    tracked.rawValues = resolution.rawValues;
+    tracked.identityResolved = true;
+    if (previous.length > 0 && previous !== resolution.key) {
+      this.deps.registry.rekey(previous, resolution.key);
+      this.deps.history.log('identity_rekey', { id: tracked.id, from: previous, to: resolution.key, origin: resolution.source });
+    }
+    this.deps.history.log('identity', {
+      id: tracked.id,
+      key: resolution.key,
+      origin: resolution.source,
+      provisional: resolution.provisional,
+    });
+  }
+
+  /** Re-resolve every tracked window (a Shell `tracked-windows-changed`). */
+  refreshIdentities(): void {
+    for (const tracked of this.windows.values()) {
+      if (!tracked.ready) continue;
+      this.resolveTrackedIdentity(tracked);
+    }
+  }
+
+  private placementInput(
+    tracked: TrackedWindow,
+    connectorOverride?: string,
+    slotOverride?: number,
+  ): { connector: string; slot: number; maximized?: boolean; fullscreen?: boolean; rect: Rect } {
+    const screen = this.screenFor(tracked.surface.screenId);
+    const slot = slotOverride ?? this.slotFor(tracked);
+    return {
+      connector: connectorOverride ?? screen?.connector ?? '',
+      slot: slot ?? 0,
+      maximized: tracked.surface.flags.maximized || compat.isMaximized(tracked.win),
+      fullscreen: tracked.surface.flags.fullscreen,
+      rect: { ...tracked.surface.frame },
+    };
+  }
+
+  /** §12: record the window's current placement under its app entry. */
+  private recordPlacement(tracked: TrackedWindow, connectorOverride?: string, slotOverride?: number): void {
+    if (!tracked.identityResolved) return;
+    const appId = tracked.appKey;
+    if (appId.length === 0) return;
+    this.deps.registry.place(appId, tracked.instanceId, this.placementInput(tracked, connectorOverride, slotOverride));
   }
 
   // ------------------------------------------------------------- v2 model
@@ -596,6 +676,8 @@ export class WindowSession {
     }
     this.signatures.clearAll();
     this.scheduleReconcile(`${reason}-settle`);
+    // §12: keep the app's placement current for display memory and restarts.
+    this.recordPlacement(tracked);
   }
 
   /** §4: maximize in place, minimizing the other managed windows on this monitor. */
@@ -692,6 +774,320 @@ export class WindowSession {
     for (const tracked of this.windows.values()) tracked.invalidateClassification();
     this.signatures.clearAll();
     this.retileAll('settings');
+  }
+
+  // ------------------------------------------------------ §20 normalisation
+
+  /**
+   * §20 enable-time normalisation, run on every enable (including a mid-session
+   * one). Per workspace and screen: one managed window is maximized; a window
+   * dominating the work area is maximized with the rest minimized; otherwise
+   * the top two by visible surface pair up and the rest are minimized. Floats
+   * and fullscreen windows are left exactly as they are.
+   */
+  normalizeOnEnable(): void {
+    const screens = this.deps.host.screens();
+    const count = global.workspace_manager.get_n_workspaces();
+    let changed = false;
+    let normalised = 0;
+    for (let index = 0; index < count; index++) {
+      for (const screen of screens) {
+        const plane = [...this.windows.values()].filter(
+          (tracked) =>
+            tracked.ready &&
+            tracked.surface.workspaceId === index &&
+            tracked.surface.screenId === screen.index &&
+            !tracked.surface.flags.minimized &&
+            !tracked.surface.flags.floating &&
+            !tracked.surface.flags.fullscreen &&
+            !tracked.autoFloated &&
+            !tracked.escaped &&
+            this.classify(tracked).tileable,
+        );
+        if (plane.length === 0) continue;
+        const area = screen.workArea ?? screen.geometry;
+        const inputs: NormalizeWindow[] = plane.map((tracked) => ({
+          id: tracked.id,
+          rect: tracked.surface.frame,
+          visibleArea: this.visibleSurface(tracked, plane),
+          managed: true,
+          fullscreen: tracked.surface.flags.fullscreen,
+          floating: false,
+        }));
+        const decision = normalizePlan(inputs, area);
+        if (decision.kind === 'lone' || decision.kind === 'dominant') {
+          normalised += decision.maximize.length + decision.minimize.length;
+          for (const id of decision.maximize) {
+            const tracked = this.windows.get(id);
+            if (tracked === undefined || compat.isMaximized(tracked.win)) continue;
+            this.deps.tiling.noteSelfApply();
+            this.deps.host.maximize(id);
+            changed = true;
+          }
+          for (const id of decision.minimize) {
+            if (!this.windows.get(id)?.surface.flags.minimized) {
+              this.deps.tiling.noteSelfApply();
+              this.deps.host.minimize(id);
+              changed = true;
+            }
+          }
+        } else if (decision.kind === 'pair') {
+          normalised += decision.slots.length + decision.minimize.length;
+          for (const slot of decision.slots) {
+            const tracked = this.windows.get(slot.id);
+            if (tracked === undefined) continue;
+            tracked.escaped = false;
+            tracked.pendingSlot = slot.slot;
+            if (compat.isMaximized(tracked.win)) {
+              this.deps.tiling.noteSelfApply();
+              tracked.selfUnmaximize = true;
+              try {
+                this.deps.host.unmaximize(tracked.id);
+              } finally {
+                tracked.selfUnmaximize = false;
+              }
+            }
+            changed = true;
+          }
+          for (const id of decision.minimize) {
+            if (!this.windows.get(id)?.surface.flags.minimized) {
+              this.deps.tiling.noteSelfApply();
+              this.deps.host.minimize(id);
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+    if (normalised > 0) {
+      this.deps.history.log('normalize', { workspaces: count, windows: normalised });
+      this.deps.onModelEvent?.('normalize', { workspaces: count, windows: normalised });
+    }
+    if (changed) {
+      this.signatures.clearAll();
+      this.scheduleReconcile('normalize-enable');
+    }
+  }
+
+  /** Visible surface: the rect's area minus what is stacked above it. */
+  private visibleSurface(tracked: TrackedWindow, peers: readonly TrackedWindow[]): number {
+    tracked.surface.captureZ();
+    const rect = tracked.surface.frame;
+    let area = Math.max(0, rect.width) * Math.max(0, rect.height);
+    const z = tracked.surface.zPosition;
+    for (const other of peers) {
+      if (other.id === tracked.id) continue;
+      other.surface.captureZ();
+      if (other.surface.zPosition <= z) continue;
+      area -= this.overlapArea(rect, other.surface.frame);
+      if (area <= 0) return 0;
+    }
+    return Math.max(0, area);
+  }
+
+  // ---------------------------------------------------------- §9 displays
+  /** §9: persisted display memory (keyed by connector). */
+  setDisplayMemory(memory: MemoryEntry[]): void {
+    this.displayMemory = Array.isArray(memory) ? memory : [];
+  }
+
+  getDisplayMemory(): MemoryEntry[] {
+    return this.displayMemory;
+  }
+
+  /** §9: a screen/work-area change is planned in the layout drain, never in
+   * the Mutter signal handler. */
+  scheduleDisplayPass(reason: string): void {
+    if (this.queue.push(2, 'displays', 'displays', { reason })) this.armDrain(2);
+  }
+
+  /** §9 display plan: rescue, replay and primary-change handling. */
+  private applyDisplayChange(): void {
+    const screens = this.deps.host.screens();
+    // `prev` is the arrangement that was on screen *before* this change,
+    // rebuilt from the live windows against the previous screen list. Storing a
+    // full arrangement snapshot would miss windows that opened since.
+    const next = this.buildDisplayState(screens);
+    const prev = this.buildDisplayState(this.lastScreens ?? screens);
+    const ttlMs = Math.max(1, this.deps.settings.int('display-memory-minutes', 30)) * 60 * 1000;
+    const classes: Record<string, ScreenClass> = {};
+    for (const screen of screens) classes[screen.connector] = this.screenClass(screen.index);
+    let plan;
+    try {
+      plan = displayPlan(prev, next, this.displayMemory, { now: Date.now(), ttlMs, classes, alive: [...this.windows.keys()] });
+    } catch (e) {
+      this.deps.history.log('error', { reason: 'display-plan', error: (e as Error).message });
+      return;
+    }
+    if (plan.moves.length > 0 || plan.remember.length > 0 || plan.forget.length > 0) {
+      this.deps.history.log('screens_changed', {
+        moves: plan.moves.length,
+        remember: plan.remember.map((entry) => entry.connector),
+        forget: plan.forget,
+      });
+    }
+    for (const move of plan.moves) this.applyDisplayMove(move, screens);
+    for (const entry of plan.remember) {
+      const at = this.displayMemory.findIndex((candidate) => candidate.connector === entry.connector);
+      if (at >= 0) this.displayMemory[at] = entry;
+      else this.displayMemory.push(entry);
+    }
+    if (plan.forget.length > 0) {
+      this.displayMemory = this.displayMemory.filter((entry) => !plan.forget.includes(entry.connector));
+    }
+    this.lastScreens = screens;
+    this.deps.onDisplayMemoryChanged?.();
+    if (plan.moves.length > 0) {
+      this.signatures.clearAll();
+      this.scheduleReconcile('display-plan');
+    }
+  }
+
+  private applyDisplayMove(move: DisplayMove, screens: readonly Screen[]): void {
+    const tracked = this.windows.get(move.id);
+    if (tracked === undefined) return;
+    let workspaceIndex = move.workspace ?? tracked.surface.workspaceId;
+    let targetConnector: string | undefined;
+    if (move.create !== undefined) {
+      const created = this.createWorkspaceForDisplay(move.create);
+      if (created === null) return;
+      workspaceIndex = created;
+      const target = screens.find((screen) => screen.index === move.create?.screen);
+      if (target !== undefined) {
+        targetConnector = target.connector;
+        tracked.surface.screenId = target.index;
+        this.deps.tiling.noteSelfApply();
+        try {
+          tracked.win.move_to_monitor?.(target.index);
+        } catch {
+          /* simulated screen: the policy move still stands */
+        }
+      }
+    }
+    this.deps.history.log('display_move', {
+      id: move.id,
+      workspace: workspaceIndex,
+      create: move.create?.key ?? null,
+      screen: move.create?.screen ?? null,
+      float: move.float === true,
+      minimize: move.minimize === true,
+      maximize: move.maximize === true,
+      slot: move.slot ?? null,
+    });
+    if (workspaceIndex !== tracked.surface.workspaceId) this.moveWindowToWorkspace(tracked, workspaceIndex);
+    if (move.float === true) {
+      this.floatWindow(tracked);
+      this.recordPlacement(tracked, targetConnector, move.slot);
+      return;
+    }
+    if (move.minimize === true) {
+      this.deps.tiling.noteSelfApply();
+      this.deps.host.minimize(tracked.id);
+      this.recordPlacement(tracked, targetConnector, move.slot);
+      return;
+    }
+    if (move.maximize === true) {
+      this.deps.tiling.noteSelfApply();
+      this.deps.host.maximize(tracked.id);
+    } else if (move.slot !== undefined) {
+      tracked.pendingSlot = move.slot;
+      this.pinSlots(workspaceIndex, tracked, move.slot);
+      this.unmaximizeOccupants(workspaceIndex, tracked.id);
+    }
+    if (move.fullscreen === true) tracked.fullscreenApplied = true;
+    // §12: the routed placement is what display memory and a restart replay.
+    this.recordPlacement(tracked, targetConnector, move.slot);
+  }
+
+  /** §9: the workspaces a screen displays (the primary shows them all). */
+  private workspacesForScreen(screen: Screen): number[] {
+    const manager = global.workspace_manager;
+    const count = manager.get_n_workspaces();
+    if (screen.isPrimary) {
+      const all: number[] = [];
+      for (let index = 0; index < count; index++) all.push(index);
+      return all;
+    }
+    return [manager.get_active_workspace_index()];
+  }
+
+  /** A snapshot of the display arrangement for the pure plan (§9). */
+  private buildDisplayState(screens: Screen[]): DisplayState {
+    const manager = global.workspace_manager;
+    const entries = new Map<string, DisplayWorkspace>();
+    const ensure = (screen: number, workspace: number): DisplayWorkspace => {
+      const key = `${screen}:${workspace}`;
+      let entry = entries.get(key);
+      if (entry === undefined) {
+        entry = { id: workspace, screen, slots: [null, null], minimized: [], floats: [] };
+        entries.set(key, entry);
+      }
+      return entry;
+    };
+    for (const screen of screens) {
+      for (const workspace of this.workspacesForScreen(screen)) ensure(screen.index, workspace);
+    }
+    const known = new Set(screens.map((screen) => screen.index));
+    for (const tracked of [...this.windows.values()].sort((a, b) => a.id - b.id)) {
+      if (!tracked.ready) continue;
+      // A window on a screen that is no longer present is exactly the one a
+      // disconnect plan must route; it is not part of the new arrangement.
+      if (!known.has(tracked.surface.screenId)) continue;
+      const managed = this.classify(tracked).tileable;
+      const floating = tracked.surface.flags.floating || tracked.autoFloated || tracked.escaped;
+      if (!managed && !floating) continue;
+      const workspace = ensure(tracked.surface.screenId, tracked.surface.workspaceId);
+      const win = {
+        id: tracked.id,
+        maximized: tracked.surface.flags.maximized || compat.isMaximized(tracked.win),
+        fullscreen: tracked.surface.flags.fullscreen,
+        rect: { ...tracked.surface.frame },
+      };
+      if (tracked.surface.flags.minimized) {
+        workspace.minimized.push(win);
+        continue;
+      }
+      if (floating) {
+        (workspace.floats ??= []).push(win);
+        continue;
+      }
+      const slot = this.slotFor(tracked);
+      if (slot !== null && workspace.slots[slot] === null) {
+        workspace.slots[slot] = win;
+      } else if (workspace.slots[0] === null) {
+        workspace.slots[0] = win;
+      } else {
+        (workspace.floats ??= []).push(win);
+      }
+    }
+    return { screens, workspaces: [...entries.values()], viewed: manager.get_active_workspace_index() };
+  }
+
+  /** §9: create a rescued workspace on the physical side the screen was on. */
+  private createWorkspaceForDisplay(create: NewWorkspace): number | null {
+    const manager = global.workspace_manager;
+    if (create.side === 'right') return this.createWorkspaceRight(create.anchor);
+    const target = create.leftmost === true ? 0 : Math.max(0, create.anchor - 1);
+    const appended = manager.get_n_workspaces();
+    manager.append_new_workspace(false, global.get_current_time());
+    const created = manager.get_workspace_by_index(appended);
+    if (created !== null && target < appended) manager.reorder_workspace(created, target);
+    return Math.min(target, manager.get_n_workspaces() - 1);
+  }
+
+  /**
+   * §10: a monitor or work-area change. The host has already re-read its
+   * screens; every surface is re-read in full (frame, monitor, the
+   * monitor-implied sticky flag, size hints) and its classification is dropped,
+   * because both depend on where the window is and how big the surface is. The
+   * replan itself is deferred by the caller so the struts have settled.
+   */
+  onScreensChanged(): void {
+    for (const tracked of this.windows.values()) {
+      tracked.refresh();
+      tracked.refreshFrame();
+    }
+    this.signatures.clearAll();
   }
 
   /**
@@ -797,6 +1193,8 @@ export class WindowSession {
         }
         this.drainDeferrals = 0;
         this.reconcileAll(String(data.reason ?? 'queue'), data.rememberUndo === true);
+      } else if (event.kind === 'displays') {
+        this.applyDisplayChange();
       } else if (event.kind === 'maintenance') {
         const kind = String(data.kind ?? 'unknown');
         switch (kind) {
@@ -821,6 +1219,9 @@ export class WindowSession {
    * entries, so they can never mask the entry a user action pushed. */
   reconcileAll(reason: string, rememberUndo = false): void {
     if (this.deps.isPaused() || this.suspended || this.dragging || this.adjustId !== null) return;
+    // §20: the first layout drain waits for the shell's startup to complete;
+    // the host nudges us again when it does.
+    if (!this.deps.host.isStartupComplete()) return;
     // §6/§11: a released drag is interpreted here, not inside the grab signal.
     for (const [id, mode] of [...this.dropPending]) {
       this.dropPending.delete(id);
@@ -833,14 +1234,28 @@ export class WindowSession {
       this.reorderPending = false;
       this.realignWorkspaces();
     }
-    // §6: a directional move that crossed a screen edge is arrived from here.
+    // §6: a directional move that crossed a screen edge is arrived from here,
+    // but only once Mutter has actually put the window on the target screen —
+    // `move_to_monitor` is asynchronous and arriving early floats it against the
+    // source work area (A106).
     if (this.crossScreenId !== null) {
       const id = this.crossScreenId;
-      const from = this.crossScreenFrom ?? 'left';
-      this.crossScreenId = null;
-      this.crossScreenFrom = null;
       const tracked = this.windows.get(id);
-      if (tracked !== undefined) this.arriveCrossScreen(tracked, from);
+      if (tracked === undefined) {
+        this.clearCrossScreenMove();
+      } else {
+        tracked.refreshFrame();
+        const target = this.crossScreenTarget;
+        if (target !== null && tracked.surface.screenId !== target) {
+          this.crossScreenAttempts += 1;
+          if (this.crossScreenAttempts > 40) this.clearCrossScreenMove();
+          else this.scheduleReconcile('move-monitor-arrive');
+        } else {
+          const from = this.crossScreenFrom ?? 'left';
+          this.clearCrossScreenMove();
+          this.arriveCrossScreen(tracked, from);
+        }
+      }
     }
     // §4/§16: fullscreen and user-unmaximize transitions are re-derived here,
     // never acted on inside the Mutter signal handler that reported them.
@@ -976,7 +1391,10 @@ export class WindowSession {
       const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, this.tilerConfig());
       const violations = checkPlan(plan, screen.workArea ?? screen.geometry);
       if (violations.length > 0) {
-        this.deps.history.log('error', { reason, workspaceId, violations });
+        // §5: the packing invariant is asserted, not enforced — a violation is
+        // logged with its identifier and the state so the long mixed run can
+        // assert that the journal never carries one.
+        this.deps.history.log('invariant_violated', { reason, workspaceId, violations });
       }
       if (Date.now() < this.ignoreMismatchUntilMs) continue;
     const key = `ws:${workspaceId}:${screen.index}`;
@@ -1061,6 +1479,7 @@ export class WindowSession {
     // The cached classification still says tileable; drop it so the next pass
     // treats the window as the float it now is.
     tracked.invalidateClassification();
+    this.recordPlacement(tracked);
     this.deps.tiling.noteSelfApply();
     this.deps.host.applyLayer(tracked.id, Layer.FLOATING, 0);
     // Never touch a minimized window's geometry: Mutter un-minimizes it as a
@@ -1170,7 +1589,9 @@ export class WindowSession {
       const sibling = peers.find((t) => t.id !== current.id);
       if (sibling === undefined) return;
       const horizontal = direction === 'left' || direction === 'right';
-      const splitHorizontal = this.workspaceSplitHorizontal();
+      // §1/§6: the axis is the focused screen's own — a portrait screen (or a
+      // vertical workspace layout) stacks, so up/down toggle its swap.
+      const splitHorizontal = this.axisFor(current.surface.screenId) === 'horizontal';
       if (horizontal === splitHorizontal) {
         this.captureChange([current.id, sibling.id]);
         this.deps.tiling.toggleSwap(current.id, sibling.id);
@@ -1202,14 +1623,55 @@ export class WindowSession {
     tracked.autoFloated = false;
     tracked.surface.setFloating(floating);
     this.deps.host.applyLayer(id, floating ? Layer.FLOATING : Layer.TILED, 0);
-    // The durable per-app path is the registry's neverTile (§12); this session
-    // store only records the mark when persistence is on (it defaults off).
-    this.deps.floats.set(tracked.surface.appId, floating);
+    // §12: the float key floats this window for the session. The durable
+    // per-app decision is `neverTile`, set through the registry (prefs, the
+    // `SetNeverTile` trigger) or, when the user opts in, by this toggle.
+    if (this.deps.settings.boolean('float-persistence', false)) {
+      this.deps.registry.setNeverTile(tracked.appKey, floating);
+    }
     tracked.invalidateClassification();
     this.deps.history.log('float_toggle', { id, floating });
     this.signatures.clearAll();
     this.scheduleRetile(tracked.surface.workspaceId, 'float');
     return floating;
+  }
+
+  /** §12: set the durable neverTile decision and float/un-float live windows. */
+  setNeverTile(appId: string, value: boolean): boolean {
+    if (appId.length === 0) return false;
+    this.deps.registry.setNeverTile(appId, value);
+    for (const tracked of [...this.windows.values()]) {
+      if (tracked.appKey !== appId) continue;
+      if (value && !tracked.surface.flags.floating) {
+        this.floatWindow(tracked);
+      } else if (!value && (tracked.surface.flags.floating || tracked.autoFloated)) {
+        tracked.autoFloated = false;
+        tracked.surface.setFloating(false);
+        this.deps.tiling.noteSelfApply();
+        this.deps.host.applyLayer(tracked.id, Layer.TILED, 0);
+        tracked.invalidateClassification();
+      }
+    }
+    this.signatures.clearAll();
+    this.scheduleReconcile('never-tile');
+    return true;
+  }
+
+  /** §12: forget an app entry; its live windows return to the tiling. */
+  forgetApp(appId: string): boolean {
+    const removed = this.deps.registry.forget(appId);
+    for (const tracked of [...this.windows.values()]) {
+      if (tracked.appKey !== appId) continue;
+      if (tracked.surface.flags.floating && !tracked.autoFloated) {
+        tracked.surface.setFloating(false);
+        this.deps.tiling.noteSelfApply();
+        this.deps.host.applyLayer(tracked.id, Layer.TILED, 0);
+        tracked.invalidateClassification();
+      }
+    }
+    this.signatures.clearAll();
+    this.scheduleReconcile('forget-app');
+    return removed;
   }
 
   /** §13: capture the pair's current configuration before a user ratio change. */
@@ -1289,14 +1751,12 @@ export class WindowSession {
     for (const instance of change.instances) {
       const tracked = this.windows.get(instance.id);
       if (tracked === undefined) continue;
-      this.deps.tiling.applyFrame(
-        tracked,
-        instance.rect,
-        this.screenFor(tracked.surface.screenId) ?? fallbackScreen(),
-        false,
-        'undo',
-        0,
-      );
+      // §10: the screen is read fresh; a vanished screen is not invented. A
+      // window with no screen cannot be given a frame — the retile that follows
+      // re-homes it.
+      const screen = this.screenFor(tracked.surface.screenId);
+      if (screen === null) continue;
+      this.deps.tiling.applyFrame(tracked, instance.rect, screen, false, 'undo', 0);
     }
     if (change.instances.length > 0 && this.deps.host.activeWorkspaceId() !== change.instances[0].workspace) {
       this.activateWorkspace(change.instances[0].workspace);
@@ -1380,24 +1840,19 @@ export class WindowSession {
   }
 
   /**
-   * Whether the workspace layout lays workspaces out sideways, so a pair splits
-   * left/right. Vertical Workspaces / V-Shell sets the layout with
-   * `override_workspace_layout(..., rows = -1, columns = 1)`, so reading
-   * `layout_rows` keeps us in step with it — and stacked tiles then split
-   * top/bottom instead.
+   * Which way the focused screen's pair splits, exactly as the tiler and the
+   * placement model compute it: vertical workspaces (`layout_rows === -1`) or a
+   * portrait screen stack top/bottom, everything else splits side by side
+   * (§1, §6). Reading it per screen (never globally) is what lets a mixed
+   * landscape + portrait session re-slot a window on the axis of the screen it
+   * lands on.
    */
-  private workspaceSplitHorizontal(): boolean {
-    const rows = global.workspace_manager.layout_rows;
-    if (rows === -1) return false;
-    if (rows > 0) return true;
-    const focused = this.focused();
-    const screen = focused === null ? null : this.screenFor(focused.surface.screenId);
-    return screen === null || screen.geometry.width >= screen.geometry.height;
-  }
-
-  /** Which way a pair splits, as the tiler will lay it out (diagnostics). */
   tileAxis(): 'vertical' | 'horizontal' {
-    return this.workspaceSplitHorizontal() ? 'horizontal' : 'vertical';
+    const focused = this.focused();
+    if (focused !== null) return this.axisFor(focused.surface.screenId);
+    const screens = this.deps.host.screens();
+    const anchor = screens.find((screen) => screen.isPrimary) ?? screens[0];
+    return anchor === undefined ? 'horizontal' : this.axisFor(anchor.index);
   }
 
   /** Test hook: set the workspace orientation the way Vertical Workspaces does. */
@@ -1589,23 +2044,26 @@ export class WindowSession {
 
   private tilerConfig(): TilerConfig {
     const config = this.deps.settings.tilerConfig(this.deps.tiling.getRatios(), new Set(this.deps.tiling.getSwapPairs()));
-    // §6: vertical workspaces (the workspace layout stacks workspaces) tile a
-    // pair top/bottom instead of left/right.
+    // §1/§6: the pair axis is per screen. A vertical workspace layout
+    // (`layout_rows === -1`) forces the stack; otherwise leave `workspaceAxis`
+    // unset so the tiler falls back to the monitor's own orientation (a portrait
+    // screen stacks, a landscape one splits side by side). Setting it to
+    // `horizontal` here would override the portrait fallback.
     const rows = global.workspace_manager.layout_rows;
-    return { ...config, workspaceAxis: rows === -1 ? 'vertical' : 'horizontal' };
+    return rows === -1 ? { ...config, workspaceAxis: 'vertical' } : config;
   }
 
   private toTilerWindow(tracked: TrackedWindow): TilerWindow {
     const surface = tracked.surface;
-    const effectiveMin = this.deps.adaptation.effectiveMin(surface.appId);
-    // §24 item 2: min/max come from the per-window cache, never a Mutter query.
+    // §12: `adapt` is timing-only. No learned minimum ever reaches the tiler;
+    // the window's own size hints are the only minimum.
     return {
       id: tracked.id,
       appId: surface.appId,
       title: surface.title,
       kind: surface.kind,
       rect: surface.frame,
-      min: effectiveMin ?? tracked.minSize,
+      min: tracked.minSize,
       max: tracked.maxSize,
       screenId: surface.screenId,
       workspaceId: surface.workspaceId,
@@ -1935,12 +2393,6 @@ export class WindowSession {
     this.schedulePrune();
   }
 
-  /** §5: reap empty workspaces now. Used by the periodic safety pass so a
-   * workspace that was just emptied does not linger until the scan backs off. */
-  pruneEmptyNow(): void {
-    this.reapEmptyWorkspaces();
-  }
-
   /** Nearest workspace in `step` direction that holds one of our windows. */
   private nearestWorkspaceWithWindows(from: number, step: number): number {
     const manager = global.workspace_manager;
@@ -1974,32 +2426,60 @@ export class WindowSession {
     tracked.userMovedAtMs = Date.now();
     this.crossScreenId = tracked.id;
     this.crossScreenFrom = direction === 'right' ? 'left' : direction === 'left' ? 'right' : direction === 'down' ? 'above' : 'below';
+    // `move_to_monitor` is asynchronous: the arrival ladder must not run while
+    // the window is still on the source screen, or its float rect (computed from
+    // the source work area) drags it straight back (A106).
+    this.crossScreenTarget = target.index;
+    this.crossScreenAttempts = 0;
     this.signatures.clearAll();
     this.scheduleReconcile('move-monitor');
   }
 
-  /** The screen next to this one in `direction`, by geometry (never by index). */
+  private clearCrossScreenMove(): void {
+    this.crossScreenId = null;
+    this.crossScreenFrom = null;
+    this.crossScreenTarget = null;
+    this.crossScreenAttempts = 0;
+  }
+
+  /**
+   * The screen next to this one in `direction`, chosen purely by geometry —
+   * never by index. A candidate must lie on the requested side (its centre
+   * past ours on that axis); a screen whose perpendicular extent overlaps ours
+   * wins over one that does not, and among those the nearest edge wins. This
+   * keeps the choice honest in a mixed landscape/portrait layout, where array
+   * order and physical adjacency need not agree.
+   */
   private adjacentScreen(tracked: TrackedWindow, direction: string): Screen | null {
     const screens = this.deps.host.screens();
     const from = this.screenFor(tracked.surface.screenId);
     if (from === null) return null;
-    const cx = from.geometry.x + from.geometry.width / 2;
-    const cy = from.geometry.y + from.geometry.height / 2;
+    const horizontal = direction === 'left' || direction === 'right';
+    const negated = direction === 'left' || direction === 'up';
+    const f = from.geometry;
     let best: Screen | null = null;
-    let bestGap = Number.POSITIVE_INFINITY;
+    let bestScore = Number.POSITIVE_INFINITY;
     for (const screen of screens) {
       if (screen.index === from.index) continue;
-      const ox = screen.geometry.x + screen.geometry.width / 2;
-      const oy = screen.geometry.y + screen.geometry.height / 2;
-      const gap =
-        direction === 'left' ? cx - ox : direction === 'right' ? ox - cx : direction === 'up' ? cy - oy : oy - cy;
-      if (gap <= 0) continue;
-      // Prefer a screen whose centre is on the requested side; a small
-      // perpendicular offset keeps the choice the nearest one.
-      const perpendicular = direction === 'left' || direction === 'right' ? Math.abs(oy - cy) : Math.abs(ox - cx);
-      const score = gap + perpendicular;
-      if (score < bestGap) {
-        bestGap = score;
+      const g = screen.geometry;
+      const centre = horizontal
+        ? g.x + g.width / 2 - (f.x + f.width / 2)
+        : g.y + g.height / 2 - (f.y + f.height / 2);
+      if (negated ? centre >= 0 : centre <= 0) continue;
+      const gap = horizontal
+        ? negated
+          ? f.x - (g.x + g.width)
+          : g.x - (f.x + f.width)
+        : negated
+          ? f.y - (g.y + g.height)
+          : g.y - (f.y + f.height);
+      const overlap = horizontal
+        ? Math.min(f.y + f.height, g.y + g.height) - Math.max(f.y, g.y)
+        : Math.min(f.x + f.width, g.x + g.width) - Math.max(f.x, g.x);
+      // A screen with no perpendicular overlap is a fallback only.
+      const score = (overlap > 0 ? 0 : 100000) + Math.max(0, gap);
+      if (score < bestScore) {
+        bestScore = score;
         best = screen;
       }
     }
@@ -2044,7 +2524,10 @@ export class WindowSession {
       width: tracked.surface.frame.width,
       height: tracked.surface.frame.height,
     };
-    this.deps.tiling.applyFrame(tracked, rect, this.screenFor(tracked.surface.screenId) ?? fallbackScreen(), false, 'modal-center', 0);
+    // §10: the screen is read fresh; never a hard-coded geometry.
+    const screen = this.screenFor(tracked.surface.screenId);
+    if (screen === null) return;
+    this.deps.tiling.applyFrame(tracked, rect, screen, false, 'modal-center', 0);
   }
 
   private connectWindow(tracked: TrackedWindow): void {
@@ -2055,7 +2538,13 @@ export class WindowSession {
     };
 
     on('notify::title', () => this.onFlagSignal(tracked, true));
-    on('notify::wm-class', () => this.onFlagSignal(tracked, true));
+    on('notify::wm-class', () => {
+      // §12: the identity chain can change once wm_class arrives; re-resolve and
+      // re-key the registry entry before the classification is rebuilt.
+      tracked.surface.refresh();
+      if (tracked.ready) this.resolveTrackedIdentity(tracked);
+      this.onFlagSignal(tracked, true);
+    });
     on('notify::skip-taskbar', () => this.onFlagSignal(tracked, true));
     on('notify::transient-for', () => this.onFlagSignal(tracked, true));
     on('notify::above', () => this.onFlagSignal(tracked, true));
@@ -2477,8 +2966,8 @@ export class WindowSession {
     for (const id of [...this.windows.keys()]) {
       if (!live.has(id)) this.unregister(id);
     }
-    this.deps.adaptation.prune();
-    this.deps.adaptation.save();
+    this.deps.registry.prune();
+    this.deps.registry.save();
     this.reapEmptyWorkspaces();
     this.retileAll('scan');
     this.lastReconcileMs = (GLib.get_monotonic_time() - startedUs) / 1000;
@@ -2656,14 +3145,6 @@ export class WindowSession {
     return { lastReconcileMs: this.lastReconcileMs, lastApplyMs: this.lastApplyMs, lastApplyAtMs: this.lastApplyAtMs };
   }
 
-  layerOf(id: number): Layer | null {
-    return this.windows.get(id)?.surface.layer ?? null;
-  }
-
-  pairKeyFor(a: number, b: number): string {
-    return pairKey(a, b);
-  }
-
   /**
    * §6/§17/§58: focus by direction, positional, never crossing a workspace. A
    * direction with nothing that way stays silent — that is the single exception
@@ -2690,10 +3171,6 @@ export class WindowSession {
     this.focus(next);
     return true;
   }
-}
-
-function fallbackScreen(): Screen {
-  return { index: 0, connector: '', geometry: { x: 0, y: 0, width: 1920, height: 1080 }, scale: 1, refreshRate: 60, isPrimary: true };
 }
 
 /** Nearest-rank percentile of a small bounded sample set; 0 when empty. */

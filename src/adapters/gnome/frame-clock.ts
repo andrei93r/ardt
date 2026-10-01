@@ -15,10 +15,6 @@ export function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
 }
 
-export function easeOutQuad(t: number): number {
-  return 1 - (1 - t) * (1 - t);
-}
-
 /** §11.4: ease-out quad for short moves, ease-out cubic otherwise. */
 export function easingFor(_durationMs: number): (t: number) => number {
   // Always ease out cubic: a quadratic start is too abrupt and reads as janky

@@ -14,6 +14,7 @@
 
 import type { Classification, ClassifyConfig, HeuristicContext } from '../../core/classify.js';
 import { classify } from '../../core/classify.js';
+import type { IdentitySource } from '../../core/identity.js';
 import type { Profile } from '../../core/profiles.js';
 import { profileFor } from '../../core/profiles.js';
 import type { Rect, Size } from '../../core/types.js';
@@ -24,6 +25,28 @@ export class TrackedWindow {
   readonly win: any;
   readonly surface: GnomeSurface;
   readonly profile: Profile;
+  /**
+   * §12: the registry key resolved at the first frame, and how it was resolved.
+   * Empty until `resolveIdentity` has run; `appKey` falls back to `wm_class`.
+   */
+  identityKey = '';
+  identitySource: IdentitySource = 'window';
+  provisional = true;
+  /** Every raw candidate the chain saw, for the journal. */
+  rawValues: Readonly<Record<IdentitySource, string | null>> = {
+    'desktop-id': null,
+    'sandboxed-app-id': null,
+    'gtk-application-id': null,
+    appimage: null,
+    'wm-class': null,
+    window: null,
+  };
+  /** §12: the per-window placement key (a stable sequence, not the id). */
+  instanceId = '';
+  /** §12: the session sequence used for a provisional `window:<seq>` key. */
+  seq = 0;
+  /** Set once the identity has been resolved at least once. */
+  identityResolved = false;
   /** Geometry captured when the window was registered (§7.1). */
   originalRect: Rect | null = null;
   /** Last plan target actually applied, used by verification (§11.2). */
@@ -87,6 +110,11 @@ export class TrackedWindow {
 
   get sizeHintsKnown(): boolean {
     return this.hintsKnown;
+  }
+
+  /** §12: the registry / adaptation key: the resolved identity, else `wm_class`. */
+  get appKey(): string {
+    return this.identityKey.length > 0 ? this.identityKey : this.surface.appId;
   }
 
   /**
