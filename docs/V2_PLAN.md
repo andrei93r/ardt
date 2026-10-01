@@ -15,7 +15,7 @@ ticked and its target runs pass.
 | Stage | State | Done | Commit |
 | --- | --- | --- | --- |
 | 0 Grounding and event-confirmed triggers | done | 17/17 | — |
-| 1 Queue mechanism and records | not started | 0/8 | — |
+| 1 Queue mechanism and records | in progress | 1/8 | — |
 | 2 The model: slots, routing, maximise, emptiness | not started | 0/18 | — |
 | 3 User-driven interactions | not started | 0/8 | — |
 | 4 App registry, prefs, migration | not started | 0/11 | — |
@@ -90,11 +90,11 @@ and the laptop stays awake while a run is in flight.
 
 Notes: a refactor stage — the existing suite must stay green throughout.
 
-## Stage 1 — Queue mechanism and records (behaviour identical) (0/8)
+## Stage 1 — Queue mechanism and records (behaviour identical) (1/8)
 
 **Failing test first**
 
-- [ ] `A84-burst-single-drain` — a burst of frame signals produces exactly one drain and
+- [x] `A84-burst-single-drain` — a burst of frame signals produces exactly one drain and
       the same final geometry
 
 **Implementation**
