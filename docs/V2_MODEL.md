@@ -65,6 +65,9 @@ changes never move a window.
   Nothing is created.
 - Routing is decided **per arrival**: a second window always finds the first (a
   maximized single to split with), never a simultaneous evaluation of both.
+- **The arrival rule**: any window arriving into a workspace — routed, moved, dragged,
+  restored from minimized, or unmaximized into a pair — takes the **right** slot when
+  it is free, else the left; the window already there keeps its side.
 - Routing does not apply to hotplug, which has its own rule (§9).
 
 ## 4. Maximize, unmaximize, fullscreen, minimize
@@ -616,6 +619,11 @@ happens. All default off, deduplicated and rate-limited per event.
 
 40. **The primary is always GNOME's current primary**, re-read whenever it changes;
     adrt never assumes, stores or sets it (S10).
+
+41. **The arrival rule** (test scenario S12): a window arriving into a workspace —
+    restored from minimized, unmaximized into a pair, moved, dragged or routed —
+    takes the **right** slot when it is free, else the left, and the window already
+    there keeps its side. Restoring A onto a lone B therefore gives `B | A`.
 
 ## Deliberate non-goals
 
