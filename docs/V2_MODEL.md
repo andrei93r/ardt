@@ -811,6 +811,11 @@ never debug-gated (the deduplication and rate limits still apply).
     is read from GNOME: with `workspaces-only-on-primary` off, every screen can create
     workspaces.
 
+66. **Reconnecting a remembered screen replays it** (round scenario 7, confirmed): the
+    windows that lived there return to their remembered slots, nothing is flattened,
+    nothing floats and no workspace is created; a window opened while the screen was
+    away stays where it is, and the screen that stayed goes back to its own layout.
+
 ## Deliberate non-goals
 
 
