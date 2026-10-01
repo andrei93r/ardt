@@ -11,17 +11,18 @@
 # prompts for input and no TTY is required.
 set -uo pipefail
 
+TEST_T0="$(date +%s)"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NESTED="$ROOT/scripts/nested-shell.sh"
 AGENT_DIR="$ROOT/tests/agent"
 BASE_STATE="${ADRT_BASE_STATE:-${XDG_RUNTIME_DIR:-/tmp}/adrt}"
 FILTER="${ADRT_SCENARIOS:-}"
-# Half the cores by default: the scenarios assert geometry within a settle, and a
-# machine that is also running a live GNOME session starves them at full load.
-# ADRT_WORKERS overrides this (the monitor matrix uses more).
-DEFAULT_WORKERS=$(( ($(nproc 2>/dev/null || echo 4) * 50) / 100 ))
-[ "$DEFAULT_WORKERS" -lt 1 ] && DEFAULT_WORKERS=1
-[ "$DEFAULT_WORKERS" -gt 16 ] && DEFAULT_WORKERS=16
+# Most cores, minus headroom for the user's live session. Measured: the suite is
+# ~88% scenario time, so workers are the main lever; the shared budget below still
+# caps the total across concurrent runs. ADRT_WORKERS overrides this.
+DEFAULT_WORKERS=$(( ($(nproc 2>/dev/null || echo 4) * 75) / 100 ))
+[ "$DEFAULT_WORKERS" -lt 2 ] && DEFAULT_WORKERS=2
+[ "$DEFAULT_WORKERS" -gt 12 ] && DEFAULT_WORKERS=12
 WORKERS="${ADRT_WORKERS:-$DEFAULT_WORKERS}"
 [ "$WORKERS" -lt 1 ] && WORKERS=1
 
@@ -36,8 +37,9 @@ WORKERS="${ADRT_WORKERS:-$DEFAULT_WORKERS}"
 # pruned and whatever nested Shells it left behind are stopped.
 NPROC="$(nproc 2>/dev/null || echo 4)"
 REGISTRY="${ADRT_RUN_REGISTRY:-${XDG_RUNTIME_DIR:-/tmp}/adrt-nested-runs}"
-# Leave room for the live session: never more than 12 nested Shells in total.
-BUDGET="${ADRT_MAX_NESTED_WORKERS:-$(( NPROC > 14 ? 12 : NPROC - 2 ))}"
+# Leave room for the live session: nproc-2 nested Shells in total across runs, so
+# a second run can still get a few workers while the first keeps its own.
+BUDGET="${ADRT_MAX_NESTED_WORKERS:-$(( NPROC > 2 ? NPROC - 2 : 2 ))}"
 [ "$BUDGET" -lt 2 ] && BUDGET=2
 RUN_NS="$(printf '%s' "$(basename "$BASE_STATE")" | tr -c 'A-Za-z0-9_-' '-' | cut -c1-24)"
 WAYLAND_NS="wayland-adrt-${RUN_NS}"
@@ -147,19 +149,25 @@ run_worker() {
   fi
   bash "$NESTED" wait-adrt 60 || echo "worker ${ADRT_WORKER_INDEX}: adrt D-Bus did not appear"
 
-  local script name output rc status
+  local script name output rc status t0 t1 secs
   for script in $ADRT_SCENARIO_LIST; do
     name="$(basename "$script" .sh)"
     echo
     echo "=== $name (worker ${ADRT_WORKER_INDEX}) ==="
+    t0="$(date +%s.%N)"
     output="$(bash "$script" 2>&1)"
     rc=$?
+    t1="$(date +%s.%N)"
+    secs="$(awk "BEGIN{printf \"%.1f\", $t1 - $t0}")"
     printf '%s\n' "$output"
-    if echo "$output" | grep -q '^SKIP'; then status=SKIP
+    # FAIL wins over SKIP: a scenario that skips one part and then fails another
+    # must not be reported as a skip (that silently passed three real failures).
+    if echo "$output" | grep -q '^FAIL'; then status=FAIL
+    elif echo "$output" | grep -q '^SKIP'; then status=SKIP
     elif [ "$rc" -eq 0 ]; then status=PASS
     else status=FAIL
     fi
-    printf '%s\t%s\n' "$status" "$name" >> "$results"
+    printf '%s\t%s\t%s\n' "$status" "$name" "$secs" >> "$results"
     if ! bash "$NESTED" status >/dev/null 2>&1; then
       echo "worker ${ADRT_WORKER_INDEX}: nested Shell died during $name; restarting"
       bash "$NESTED" start >/dev/null 2>&1 || true
@@ -233,6 +241,29 @@ echo "== running ${#ALL[@]} scenarios across $WORKERS nested Shells ($(( WORKERS
 
 export ADRT_SKIP_BUILD=1
 declare -a PIDS=() LISTS=()
+
+# Order the scenarios longest-first before round-robin, so the few slow ones land
+# on different workers instead of all in one shard (measured: one shard was 108s
+# against an 86s mean, and the whole run waits on it). Durations come from the
+# last run; with no history the order is unchanged.
+DUR_CACHE="${ADRT_DURATION_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/adrt/scenario-durations.tsv}"
+declare -A DUR=()
+if [ -f "$DUR_CACHE" ]; then
+  while IFS=$'\t' read -r dname dsecs; do
+    case "${dsecs:-}" in ''|*[!0-9.]*) continue ;; esac
+    DUR["$dname"]="$dsecs"
+  done < "$DUR_CACHE"
+fi
+if [ "${#DUR[@]}" -gt 0 ]; then
+  declare -a ORDERED_ALL=()
+  while IFS=$'\t' read -r _d _f; do ORDERED_ALL+=("$_f"); done < <(
+    for f in "${ALL[@]}"; do
+      printf '%s\t%s\n' "${DUR[$(basename "$f" .sh)]:-0}" "$f"
+    done | sort -rn -s -k1,1
+  )
+  ALL=("${ORDERED_ALL[@]}")
+fi
+
 for ((i = 0; i < WORKERS; i++)); do
   shard=""
   for ((j = i; j < ${#ALL[@]}; j += WORKERS)); do
@@ -255,15 +286,19 @@ done
 
 # ------------------------------------------------------------------- merge
 
-declare -a names=() statuses=()
+declare -a names=() statuses=() timed=()
 failures=0
 skips=0
+scen_secs=0
 for ((i = 0; i < WORKERS; i++)); do
   [ -n "${LISTS[$i]:-}" ] || continue
-  while IFS=$'\t' read -r status name; do
+  while IFS=$'\t' read -r status name secs; do
     [ -z "${name:-}" ] && continue
     names+=("$name")
     statuses+=("$status")
+    case "${secs:-}" in ''|*[!0-9.]*) secs=0 ;; esac
+    timed+=("$secs $name")
+    scen_secs="$(awk "BEGIN{printf \"%.1f\", $scen_secs + $secs}")"
     [ "$status" = "FAIL" ] && failures=$((failures + 1))
     [ "$status" = "SKIP" ] && skips=$((skips + 1))
   done < "$BASE_STATE/worker-$i/results.txt"
@@ -279,6 +314,22 @@ for row in "${ORDERED[@]}"; do
 done
 echo
 echo "scenarios=${#names[@]} failures=$failures skips=$skips"
+
+# Where the wall-clock goes: the sum of scenario times against the total, and the
+# slowest scenarios (the sharding critical path). Cheap to print and the numbers
+# that tell us whether more workers or a shorter scenario helps.
+if [ "${#timed[@]}" -gt 0 ]; then
+  echo
+  echo "== timing =="
+  printf '%s\n' "${timed[@]}" | sort -rn | head -10 | awk '{printf "  %6ss  %s\n", $1, $2}'
+  echo "wall=$(( $(date +%s) - TEST_T0 ))s  scenario-sum=$(printf '%.0f' "$scen_secs")s  workers=$WORKERS  scenarios=${#names[@]}"
+  # Remember the durations so the next run can balance its shards.
+  mkdir -p "$(dirname "$DUR_CACHE")"
+  dtmp="$DUR_CACHE.$$"
+  : > "$dtmp"
+  for entry in "${timed[@]}"; do printf '%s\t%s\n' "${entry#* }" "${entry%% *}" >> "$dtmp"; done
+  mv -f "$dtmp" "$DUR_CACHE"
+fi
 
 echo
 echo "== journal scan =="

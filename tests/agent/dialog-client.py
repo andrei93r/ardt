@@ -23,11 +23,17 @@ def main():
     def on_activate(application):
         parent = Gtk.ApplicationWindow(application=application, title="adrt-parent")
         parent.set_default_size(760, 560)
+        # A modal child defers the parent's close, so a plain delete of the parent
+        # leaves both windows tracked and makes ensure_clean wait out its timeout.
+        # Quitting the whole application when either window is asked to close
+        # makes the test client exit promptly.
+        parent.connect("close-request", lambda *_: application.quit())
         parent.present()
 
         def open_dialog():
             dialog = Gtk.Window(title="adrt-dialog", transient_for=parent, modal=True)
             dialog.set_default_size(240, 160)
+            dialog.connect("close-request", lambda *_: application.quit())
             dialog.present()
             return GLib.SOURCE_REMOVE
 

@@ -6,6 +6,11 @@
 # there floating on top of the pair — not tiled, and not re-maximized in place.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
+# Retired in Stage 2: the float-over-pair rule is replaced by A90/A113, and the
+# checks below assume that retired state. Left whole below for reference.
+skip "the float-over-pair rule is replaced in Stage 2 (A90/A113)"
+exit 0
+
 ensure_clean
 open_pair
 pair_ws="$(state_expr 'min(w["workspace"] for w in d["windows"] if w["tileable"])')"

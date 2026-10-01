@@ -10,7 +10,9 @@ ensure_clean
 # A parent window that opens a transient modal dialog after a moment.
 spawn_window "python3 $ROOT_DIR/tests/agent/dialog-client.py" >/dev/null
 wait_count 2 25 || true
-wait_settled 15
+# No wait_settled here: the dialog's frame keeps changing while it is centred and
+# raised, so settling never converges and just burns the timeout. The poll below
+# waits for the condition itself, which is the real assertion.
 
 poll "the dialog is not tiled and is centred on its parent" '
 import json, sys

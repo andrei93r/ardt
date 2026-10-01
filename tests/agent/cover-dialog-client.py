@@ -25,11 +25,16 @@ def main():
     def on_activate(application):
         parent = Gtk.ApplicationWindow(application=application, title="adrt-cover-parent")
         parent.set_default_size(900, 640)
+        # Quit the application when either window is asked to close, so the test
+        # client exits promptly instead of leaving windows for ensure_clean to
+        # time out on.
+        parent.connect("close-request", lambda *_: application.quit())
         parent.present()
 
         def open_dialog():
             dialog = Gtk.Window(title="adrt-cover-dialog", transient_for=parent)
             dialog.set_default_size(280, 200)
+            dialog.connect("close-request", lambda *_: application.quit())
             dialog.present()
             return GLib.SOURCE_REMOVE
 

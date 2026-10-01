@@ -8,6 +8,11 @@
 # floating must be cleared with it (it leaked into the classifier before).
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
+# Retired in Stage 2: the auto-float pull-back and the always-on-top flag it set
+# are covered by A113/A115. Left whole below for reference (A40/A53 pattern).
+skip "the auto-float pull-back is replaced in Stage 2 (A113/A115)"
+exit 0
+
 ensure_clean
 open_pair
 ids=($(list_ids))
