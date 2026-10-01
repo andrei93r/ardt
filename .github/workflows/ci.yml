@@ -1,0 +1,120 @@
+# Adrt CI
+#
+# Jobs that run on every push and pull request:
+#   core  — install, lint, type-check, build, the deterministic core unit
+#           suite (tests/core) and the core/platform purity grep.
+#   i18n  — regenerate the gettext template and validate any po/*.po catalogue
+#           with msgfmt. Both scripts fall back to a clear no-op when gettext is
+#           not installed, so the job cannot fail merely because the optional
+#           tool is missing.
+#
+# What deliberately does NOT run here — the nested and live suites:
+#   scripts/agent-test.sh, scripts/nested-shell.sh, scripts/topology-matrix.sh,
+#   scripts/session-test.sh and scripts/keybinding-test.sh drive a real or
+#   nested headless GNOME Shell. That needs a GNOME 50 stack with a private
+#   Wayland display (Mutter's surfaceless/llvmpipe backend), `dbus-run-session`,
+#   `gdctl`, and for keybindings a real input seat with ydotool. A hosted runner
+#   has none of that, so these suites stay local-only; use
+#   scripts/setup-headless-server.sh to provision a headless host for them.
+#
+#   The `live-shell` job below is manual-only (`workflow_dispatch` + run_live)
+#   and allowed to fail: it exists to document the attempt, not to gate a merge.
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_live:
+        description: >-
+          Attempt the nested/live GNOME Shell suites. Expected to fail on a
+          hosted runner; kept for a self-hosted or pre-provisioned machine.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core (lint, types, build, unit, purity)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: Build
+        run: npm run build
+      - name: Core unit tests
+        run: npx vitest run tests/core
+      - name: Core/platform purity
+        run: bash scripts/check-core-purity.sh
+
+  i18n:
+    name: i18n (template + catalogues)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install gettext
+        # Optional: both i18n scripts degrade to a no-op message when
+        # xgettext/msgfmt/msgmerge are missing, so this cannot gate the build.
+        run: sudo apt-get update && sudo apt-get install -y gettext
+      - name: Regenerate the template
+        run: npm run i18n:update
+      - name: Validate catalogues
+        run: npm run i18n:check
+
+  # Optional, manual only, allowed to fail. See the header for why the nested and
+  # live suites cannot run on a stock runner.
+  live-shell:
+    name: Nested/live Shell (manual, expect failure on hosted runners)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live }}
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Install the Shell packages (best effort)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gnome-shell mutter gsettings-desktop-schemas dbus-x11
+      - name: Curated nested smoke
+        # Needs a private Wayland display and Mutter's surfaceless backend; this
+        # is expected to fail on a hosted runner. Use a pre-provisioned host
+        # (scripts/setup-headless-server.sh) for a real run.
+        run: npm run test:smoke

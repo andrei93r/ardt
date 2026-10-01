@@ -18,6 +18,7 @@ import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
+import { _, loadTranslations } from './i18n.js';
 import { RegistryStore } from './registry.js';
 
 /** The widget a settings row is rendered with. */
@@ -103,217 +104,217 @@ function appChoices(): AppChoice[] {
  */
 export const PREFERENCES_LAYOUT: readonly PageSpec[] = [
   {
-    title: 'Tiling',
+    title: _('Tiling'),
     icon: 'view-grid-symbolic',
     groups: [
       {
-        title: 'Gaps',
-        description: 'The default spacing on each monitor. A gap of -1 inherits the base gap.',
+        title: _('Gaps'),
+        description: _('The default spacing on each monitor. A gap of -1 inherits the base gap.'),
         rows: [
-          { key: 'gaps-base', kind: 'spin', title: 'Base gap', subtitle: 'Pixels around and between tiles.', lower: 0, upper: 200 },
-          { key: 'gaps-portrait', kind: 'spin', title: 'Portrait gap', subtitle: 'Used on monitors taller than they are wide.', lower: -1, upper: 200 },
-          { key: 'gaps-landscape', kind: 'spin', title: 'Landscape gap', subtitle: 'Used on monitors wider than they are tall.', lower: -1, upper: 200 },
+          { key: 'gaps-base', kind: 'spin', title: _('Base gap'), subtitle: _('Pixels around and between tiles.'), lower: 0, upper: 200 },
+          { key: 'gaps-portrait', kind: 'spin', title: _('Portrait gap'), subtitle: _('Used on monitors taller than they are wide.'), lower: -1, upper: 200 },
+          { key: 'gaps-landscape', kind: 'spin', title: _('Landscape gap'), subtitle: _('Used on monitors wider than they are tall.'), lower: -1, upper: 200 },
         ],
       },
       {
-        title: 'Outer and inner gaps',
-        description: 'Per-side spacing that overrides the base gap. 0 is flush; -1 inherits the base gap.',
+        title: _('Outer and inner gaps'),
+        description: _('Per-side spacing that overrides the base gap. 0 is flush; -1 inherits the base gap.'),
         rows: [
-          { key: 'gaps-left', kind: 'spin', title: 'Left gap', lower: -1, upper: 200 },
-          { key: 'gaps-right', kind: 'spin', title: 'Right gap', lower: -1, upper: 200 },
-          { key: 'gaps-top', kind: 'spin', title: 'Top gap', lower: -1, upper: 200 },
-          { key: 'gaps-bottom', kind: 'spin', title: 'Bottom gap', lower: -1, upper: 200 },
-          { key: 'gaps-between', kind: 'spin', title: 'Between windows', subtitle: 'The gap at a split.', lower: -1, upper: 200 },
+          { key: 'gaps-left', kind: 'spin', title: _('Left gap'), lower: -1, upper: 200 },
+          { key: 'gaps-right', kind: 'spin', title: _('Right gap'), lower: -1, upper: 200 },
+          { key: 'gaps-top', kind: 'spin', title: _('Top gap'), lower: -1, upper: 200 },
+          { key: 'gaps-bottom', kind: 'spin', title: _('Bottom gap'), lower: -1, upper: 200 },
+          { key: 'gaps-between', kind: 'spin', title: _('Between windows'), subtitle: _('The gap at a split.'), lower: -1, upper: 200 },
         ],
       },
       {
-        title: 'Splitting',
-        description: 'The default split, the keyboard resize step, and the apps that take the larger share.',
+        title: _('Splitting'),
+        description: _('The default split, the keyboard resize step, and the apps that take the larger share.'),
         rows: [
-          { key: 'min-size-policy', kind: 'combo', title: 'Minimum-size policy', choices: ['respect', 'ignore', 'stack'] },
-          { key: 'primary-app-ratio', kind: 'spin', title: 'Primary app share', subtitle: 'Percentage of the split (20–80%).', lower: 20, upper: 80 },
-          { key: 'primary-apps', kind: 'picker', title: 'Primary apps', subtitle: 'Apps that take the larger share of a split.' },
-          { key: 'nudge-step', kind: 'spin', title: 'Keyboard resize step', subtitle: 'Percentage moved per nudge.', lower: 1, upper: 50 },
-          { key: 'reflow-keeps-edges', kind: 'switch', title: 'Keep outer edges when reflowing' },
+          { key: 'min-size-policy', kind: 'combo', title: _('Minimum-size policy'), choices: ['respect', 'ignore', 'stack'] },
+          { key: 'primary-app-ratio', kind: 'spin', title: _('Primary app share'), subtitle: _('Percentage of the split (20–80%).'), lower: 20, upper: 80 },
+          { key: 'primary-apps', kind: 'picker', title: _('Primary apps'), subtitle: _('Apps that take the larger share of a split.') },
+          { key: 'nudge-step', kind: 'spin', title: _('Keyboard resize step'), subtitle: _('Percentage moved per nudge.'), lower: 1, upper: 50 },
+          { key: 'reflow-keeps-edges', kind: 'switch', title: _('Keep outer edges when reflowing') },
         ],
       },
     ],
   },
   {
-    title: 'Windows',
+    title: _('Windows'),
     icon: 'preferences-system-symbolic',
     groups: [
       {
-        title: 'Tiling',
-        description: 'Which windows adrt manages and how it reacts when one refuses to fit.',
+        title: _('Tiling'),
+        description: _('Which windows adrt manages and how it reacts when one refuses to fit.'),
         rows: [
-          { key: 'heuristic-modal-detect', kind: 'switch', title: 'Detect modal windows heuristically', subtitle: "Treat a 'title - parent' window as a modal dialog." },
-          { key: 'exception-apps', kind: 'picker', title: 'Never tile these apps', subtitle: 'Apps adrt always leaves floating.' },
-          { key: 'adaptation-enabled', kind: 'switch', title: 'Adapt to slow windows', subtitle: 'Learn the settle time of windows that refuse geometry.' },
-          { key: 'float-persistence', kind: 'switch', title: 'Remember floating apps', subtitle: 'A window you float stays floating next time it opens.' },
-          { key: 'clamp-windows-to-screen', kind: 'switch', title: 'Keep windows on the screen', subtitle: 'Pull a window back when its frame leaves the monitor.' },
-          { key: 'follow-moved-window', kind: 'switch', title: 'Follow a window moved to another workspace' },
+          { key: 'heuristic-modal-detect', kind: 'switch', title: _('Detect modal windows heuristically'), subtitle: _("Treat a 'title - parent' window as a modal dialog.") },
+          { key: 'exception-apps', kind: 'picker', title: _('Never tile these apps'), subtitle: _('Apps adrt always leaves floating.') },
+          { key: 'adaptation-enabled', kind: 'switch', title: _('Adapt to slow windows'), subtitle: _('Learn the settle time of windows that refuse geometry.') },
+          { key: 'float-persistence', kind: 'switch', title: _('Remember floating apps'), subtitle: _('A window you float stays floating next time it opens.') },
+          { key: 'clamp-windows-to-screen', kind: 'switch', title: _('Keep windows on the screen'), subtitle: _('Pull a window back when its frame leaves the monitor.') },
+          { key: 'follow-moved-window', kind: 'switch', title: _('Follow a window moved to another workspace') },
         ],
       },
       {
-        title: 'Session',
-        description: 'How adrt behaves while the screen is being shared.',
+        title: _('Session'),
+        description: _('How adrt behaves while the screen is being shared.'),
         rows: [
-          { key: 'pause-during-sharing', kind: 'switch', title: 'Pause tiling while screen sharing or remote desktop is active' },
+          { key: 'pause-during-sharing', kind: 'switch', title: _('Pause tiling while screen sharing or remote desktop is active') },
         ],
       },
       {
-        title: 'Pointer',
-        rows: [{ key: 'cursor-follows-focus', kind: 'switch', title: 'Move the pointer to the focused window' }],
+        title: _('Pointer'),
+        rows: [{ key: 'cursor-follows-focus', kind: 'switch', title: _('Move the pointer to the focused window') }],
       },
       {
-        title: 'Animation',
-        description: 'Transitions when tiles are created, moved or closed.',
+        title: _('Animation'),
+        description: _('Transitions when tiles are created, moved or closed.'),
         rows: [
-          { key: 'disable-animations', kind: 'switch', title: 'Disable all animations', subtitle: "Includes GNOME's own Shell animations." },
-          { key: 'animation-duration', kind: 'spin', title: 'Move duration', subtitle: 'Milliseconds.', lower: 0, upper: 1000 },
-          { key: 'close-animation-enabled', kind: 'switch', title: 'Fade a ghost when a window closes' },
-          { key: 'close-animation-duration', kind: 'spin', title: 'Close ghost duration', subtitle: 'Milliseconds.', lower: 0, upper: 1000 },
-          { key: 'gnome-animation-delay', kind: 'spin', title: 'Shell animation delay', subtitle: 'Extra wait before reading geometry after an animation.', lower: 0, upper: 1000 },
+          { key: 'disable-animations', kind: 'switch', title: _('Disable all animations'), subtitle: _("Includes GNOME's own Shell animations.") },
+          { key: 'animation-duration', kind: 'spin', title: _('Move duration'), subtitle: _('Milliseconds.'), lower: 0, upper: 1000 },
+          { key: 'close-animation-enabled', kind: 'switch', title: _('Fade a ghost when a window closes') },
+          { key: 'close-animation-duration', kind: 'spin', title: _('Close ghost duration'), subtitle: _('Milliseconds.'), lower: 0, upper: 1000 },
+          { key: 'gnome-animation-delay', kind: 'spin', title: _('Shell animation delay'), subtitle: _('Extra wait before reading geometry after an animation.'), lower: 0, upper: 1000 },
         ],
       },
     ],
   },
   {
-    title: 'Rules',
+    title: _('Rules'),
     icon: 'emblem-documents-symbolic',
     groups: [
       {
-        title: 'Rules',
-        description: 'User-authored placement rules. Enable or disable the whole rule set here.',
-        rows: [{ key: 'rules-enabled', kind: 'switch', title: 'Enable rules' }],
+        title: _('Rules'),
+        description: _('User-authored placement rules. Enable or disable the whole rule set here.'),
+        rows: [{ key: 'rules-enabled', kind: 'switch', title: _('Enable rules') }],
       },
     ],
   },
   {
-    title: 'Highlight',
+    title: _('Highlight'),
     icon: 'focus-windows-symbolic',
     groups: [
       {
-        title: 'Focus highlight',
-        description: 'The outline drawn around the focused window. Colour is a named colour such as "accent", or a hex value like #3584e4.',
+        title: _('Focus highlight'),
+        description: _('The outline drawn around the focused window. Colour is a named colour such as "accent", or a hex value like #3584e4.'),
         rows: [
-          { key: 'active-window-indicator', kind: 'switch', title: 'Show a border on the focused window' },
-          { key: 'indicator-color', kind: 'entry', title: 'Colour' },
-          { key: 'indicator-opacity', kind: 'spin', title: 'Opacity', subtitle: 'Percent.', lower: 0, upper: 100 },
-          { key: 'indicator-width', kind: 'spin', title: 'Border width', subtitle: 'Pixels.', lower: 1, upper: 20 },
-          { key: 'indicator-corner-radius', kind: 'spin', title: 'Corner radius', subtitle: 'Pixels.', lower: 0, upper: 32 },
-          { key: 'indicator-animated-pulse', kind: 'switch', title: 'Pulse the border while focused' },
-          { key: 'indicator-pulse-duration', kind: 'spin', title: 'Pulse duration', subtitle: 'Milliseconds per half of the pulse.', lower: 0, upper: 4000 },
+          { key: 'active-window-indicator', kind: 'switch', title: _('Show a border on the focused window') },
+          { key: 'indicator-color', kind: 'entry', title: _('Colour') },
+          { key: 'indicator-opacity', kind: 'spin', title: _('Opacity'), subtitle: _('Percent.'), lower: 0, upper: 100 },
+          { key: 'indicator-width', kind: 'spin', title: _('Border width'), subtitle: _('Pixels.'), lower: 1, upper: 20 },
+          { key: 'indicator-corner-radius', kind: 'spin', title: _('Corner radius'), subtitle: _('Pixels.'), lower: 0, upper: 32 },
+          { key: 'indicator-animated-pulse', kind: 'switch', title: _('Pulse the border while focused') },
+          { key: 'indicator-pulse-duration', kind: 'spin', title: _('Pulse duration'), subtitle: _('Milliseconds per half of the pulse.'), lower: 0, upper: 4000 },
         ],
       },
     ],
   },
   {
-    title: 'Gestures',
+    title: _('Gestures'),
     icon: 'input-touchpad-symbolic',
     groups: [
       {
-        title: 'Touchpad',
-        description: 'Three- and four-finger swipes and pinch on a touchpad.',
+        title: _('Touchpad'),
+        description: _('Three- and four-finger swipes and pinch on a touchpad.'),
         rows: [
-          { key: 'gesture-enabled', kind: 'switch', title: 'Enable gestures' },
-          { key: 'gesture-3-swipe-action', kind: 'combo', title: 'Three-finger horizontal', choices: SWIPE_ACTIONS },
-          { key: 'gesture-3-vertical-action', kind: 'combo', title: 'Three-finger vertical', choices: VERTICAL_ACTIONS },
-          { key: 'gesture-4-swipe-action', kind: 'combo', title: 'Four-finger horizontal', choices: SWIPE_ACTIONS },
-          { key: 'gesture-4-vertical-action', kind: 'combo', title: 'Four-finger vertical', choices: VERTICAL_ACTIONS },
-          { key: 'gesture-pinch-action', kind: 'combo', title: 'Pinch', choices: PINCH_ACTIONS },
-          { key: 'gesture-sensitivity', kind: 'spin', title: 'Sensitivity', subtitle: 'Higher triggers with less travel.', lower: 0, upper: 100 },
+          { key: 'gesture-enabled', kind: 'switch', title: _('Enable gestures') },
+          { key: 'gesture-3-swipe-action', kind: 'combo', title: _('Three-finger horizontal'), choices: SWIPE_ACTIONS },
+          { key: 'gesture-3-vertical-action', kind: 'combo', title: _('Three-finger vertical'), choices: VERTICAL_ACTIONS },
+          { key: 'gesture-4-swipe-action', kind: 'combo', title: _('Four-finger horizontal'), choices: SWIPE_ACTIONS },
+          { key: 'gesture-4-vertical-action', kind: 'combo', title: _('Four-finger vertical'), choices: VERTICAL_ACTIONS },
+          { key: 'gesture-pinch-action', kind: 'combo', title: _('Pinch'), choices: PINCH_ACTIONS },
+          { key: 'gesture-sensitivity', kind: 'spin', title: _('Sensitivity'), subtitle: _('Higher triggers with less travel.'), lower: 0, upper: 100 },
         ],
       },
     ],
   },
   {
-    title: 'Keys',
+    title: _('Keys'),
     icon: 'input-keyboard-symbolic',
     groups: [
       {
-        title: 'Focus',
+        title: _('Focus'),
         rows: [
-          { key: 'kb-focus-left', kind: 'accelerator', title: 'Focus left' },
-          { key: 'kb-focus-right', kind: 'accelerator', title: 'Focus right' },
-          { key: 'kb-focus-up', kind: 'accelerator', title: 'Focus up' },
-          { key: 'kb-focus-down', kind: 'accelerator', title: 'Focus down' },
-          { key: 'kb-focus-next', kind: 'accelerator', title: 'Focus next (cycle)' },
-          { key: 'kb-cursor-centre', kind: 'accelerator', title: 'Move pointer to the focused window' },
+          { key: 'kb-focus-left', kind: 'accelerator', title: _('Focus left') },
+          { key: 'kb-focus-right', kind: 'accelerator', title: _('Focus right') },
+          { key: 'kb-focus-up', kind: 'accelerator', title: _('Focus up') },
+          { key: 'kb-focus-down', kind: 'accelerator', title: _('Focus down') },
+          { key: 'kb-focus-next', kind: 'accelerator', title: _('Focus next (cycle)') },
+          { key: 'kb-cursor-centre', kind: 'accelerator', title: _('Move pointer to the focused window') },
         ],
       },
       {
-        title: 'Move window',
+        title: _('Move window'),
         rows: [
-          { key: 'kb-move-left', kind: 'accelerator', title: 'Move left' },
-          { key: 'kb-move-right', kind: 'accelerator', title: 'Move right' },
-          { key: 'kb-move-up', kind: 'accelerator', title: 'Move up' },
-          { key: 'kb-move-down', kind: 'accelerator', title: 'Move down' },
-          { key: 'kb-move-workspace-prev', kind: 'accelerator', title: 'Move to the previous workspace' },
-          { key: 'kb-move-workspace-next', kind: 'accelerator', title: 'Move to the next workspace' },
-          { key: 'kb-move-workspace-1', kind: 'accelerator', title: 'Move to workspace 1' },
-          { key: 'kb-move-workspace-2', kind: 'accelerator', title: 'Move to workspace 2' },
-          { key: 'kb-move-workspace-3', kind: 'accelerator', title: 'Move to workspace 3' },
-          { key: 'kb-move-workspace-4', kind: 'accelerator', title: 'Move to workspace 4' },
-          { key: 'kb-move-workspace-5', kind: 'accelerator', title: 'Move to workspace 5' },
-          { key: 'kb-move-workspace-6', kind: 'accelerator', title: 'Move to workspace 6' },
-          { key: 'kb-move-workspace-7', kind: 'accelerator', title: 'Move to workspace 7' },
-          { key: 'kb-move-workspace-8', kind: 'accelerator', title: 'Move to workspace 8' },
-          { key: 'kb-move-workspace-9', kind: 'accelerator', title: 'Move to workspace 9' },
+          { key: 'kb-move-left', kind: 'accelerator', title: _('Move left') },
+          { key: 'kb-move-right', kind: 'accelerator', title: _('Move right') },
+          { key: 'kb-move-up', kind: 'accelerator', title: _('Move up') },
+          { key: 'kb-move-down', kind: 'accelerator', title: _('Move down') },
+          { key: 'kb-move-workspace-prev', kind: 'accelerator', title: _('Move to the previous workspace') },
+          { key: 'kb-move-workspace-next', kind: 'accelerator', title: _('Move to the next workspace') },
+          { key: 'kb-move-workspace-1', kind: 'accelerator', title: _('Move to workspace 1') },
+          { key: 'kb-move-workspace-2', kind: 'accelerator', title: _('Move to workspace 2') },
+          { key: 'kb-move-workspace-3', kind: 'accelerator', title: _('Move to workspace 3') },
+          { key: 'kb-move-workspace-4', kind: 'accelerator', title: _('Move to workspace 4') },
+          { key: 'kb-move-workspace-5', kind: 'accelerator', title: _('Move to workspace 5') },
+          { key: 'kb-move-workspace-6', kind: 'accelerator', title: _('Move to workspace 6') },
+          { key: 'kb-move-workspace-7', kind: 'accelerator', title: _('Move to workspace 7') },
+          { key: 'kb-move-workspace-8', kind: 'accelerator', title: _('Move to workspace 8') },
+          { key: 'kb-move-workspace-9', kind: 'accelerator', title: _('Move to workspace 9') },
         ],
       },
       {
-        title: 'Resize',
+        title: _('Resize'),
         rows: [
-          { key: 'kb-nudge-left', kind: 'accelerator', title: 'Move the split left' },
-          { key: 'kb-nudge-right', kind: 'accelerator', title: 'Move the split right' },
-          { key: 'kb-nudge-up', kind: 'accelerator', title: 'Move the split up' },
-          { key: 'kb-nudge-down', kind: 'accelerator', title: 'Move the split down' },
+          { key: 'kb-nudge-left', kind: 'accelerator', title: _('Move the split left') },
+          { key: 'kb-nudge-right', kind: 'accelerator', title: _('Move the split right') },
+          { key: 'kb-nudge-up', kind: 'accelerator', title: _('Move the split up') },
+          { key: 'kb-nudge-down', kind: 'accelerator', title: _('Move the split down') },
         ],
       },
       {
-        title: 'Window',
+        title: _('Window'),
         rows: [
-          { key: 'kb-toggle-float', kind: 'accelerator', title: 'Float or re-tile' },
-          { key: 'kb-toggle-fullscreen', kind: 'accelerator', title: 'Toggle fullscreen' },
-          { key: 'kb-quit', kind: 'accelerator', title: 'Close the focused window' },
+          { key: 'kb-toggle-float', kind: 'accelerator', title: _('Float or re-tile') },
+          { key: 'kb-toggle-fullscreen', kind: 'accelerator', title: _('Toggle fullscreen') },
+          { key: 'kb-quit', kind: 'accelerator', title: _('Close the focused window') },
         ],
       },
       {
-        title: 'History',
-        rows: [{ key: 'kb-undo', kind: 'accelerator', title: 'Undo' }],
+        title: _('History'),
+        rows: [{ key: 'kb-undo', kind: 'accelerator', title: _('Undo') }],
       },
     ],
   },
   {
-    title: 'Advanced',
+    title: _('Advanced'),
     icon: 'preferences-other-symbolic',
     groups: [
       {
-        title: 'Safety net',
-        description: 'adrt re-checks the layout periodically in case a window misbehaves.',
-        rows: [{ key: 'scan-interval', kind: 'spin', title: 'Scan interval', subtitle: 'Milliseconds between checks.', lower: 1000, upper: 60000 }],
+        title: _('Safety net'),
+        description: _('adrt re-checks the layout periodically in case a window misbehaves.'),
+        rows: [{ key: 'scan-interval', kind: 'spin', title: _('Scan interval'), subtitle: _('Milliseconds between checks.'), lower: 1000, upper: 60000 }],
       },
       {
-        title: 'Displays',
-        description: 'Arrangements are remembered per connector and replayed when it reconnects.',
-        rows: [{ key: 'display-memory-minutes', kind: 'spin', title: 'Remember display layouts', subtitle: 'Minutes.', lower: 1, upper: 1440 }],
+        title: _('Displays'),
+        description: _('Arrangements are remembered per connector and replayed when it reconnects.'),
+        rows: [{ key: 'display-memory-minutes', kind: 'spin', title: _('Remember display layouts'), subtitle: _('Minutes.'), lower: 1, upper: 1440 }],
       },
       {
-        title: 'History',
-        description: 'An append-only log of what adrt did, written as JSONL files.',
+        title: _('History'),
+        description: _('An append-only log of what adrt did, written as JSONL files.'),
         rows: [
-          { key: 'history-enabled', kind: 'switch', title: 'Record event history' },
-          { key: 'history-retention-days', kind: 'spin', title: 'Keep history for', subtitle: 'Days.', lower: 1, upper: 3650 },
-          { key: 'history-daily-folders', kind: 'switch', title: 'Store each day in its own folder' },
-          { key: 'history-max-bytes', kind: 'spin', title: 'Rotate each file at', subtitle: 'Megabytes.', lower: 1, upper: 256, scale: 1048576 },
-          { key: 'log-workspace-reorder', kind: 'switch', title: 'Log workspace reorders' },
+          { key: 'history-enabled', kind: 'switch', title: _('Record event history') },
+          { key: 'history-retention-days', kind: 'spin', title: _('Keep history for'), subtitle: _('Days.'), lower: 1, upper: 3650 },
+          { key: 'history-daily-folders', kind: 'switch', title: _('Store each day in its own folder') },
+          { key: 'history-max-bytes', kind: 'spin', title: _('Rotate each file at'), subtitle: _('Megabytes.'), lower: 1, upper: 256, scale: 1048576 },
+          { key: 'log-workspace-reorder', kind: 'switch', title: _('Log workspace reorders') },
         ],
       },
       {
-        title: 'Integration',
-        rows: [{ key: 'dbus-enabled', kind: 'switch', title: 'Expose the D-Bus interface', subtitle: 'org.adrt.Adrt on the session bus.' }],
+        title: _('Integration'),
+        rows: [{ key: 'dbus-enabled', kind: 'switch', title: _('Expose the D-Bus interface'), subtitle: _('org.adrt.Adrt on the session bus.') }],
       },
     ],
   },
@@ -324,6 +325,7 @@ export const CUSTOM_RENDERED_KEYS: readonly string[] = ['rules-json'];
 
 export default class AdrtPreferences extends ExtensionPreferences {
   fillPreferencesWindow(window: any): void {
+    loadTranslations();
     const settings = this.getSettings();
     const pages = new Map<string, any>();
     for (const spec of PREFERENCES_LAYOUT) {
@@ -332,7 +334,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
       window.add(page);
     }
     // The rule editor is not a settings row, but lives on the Rules page.
-    pages.get('Rules')?.add(this.rulesEditorGroup(settings));
+    pages.get(_('Rules'))?.add(this.rulesEditorGroup(settings));
     window.add(this.appsPage());
     window.add(this.aboutPage(settings));
   }
@@ -398,7 +400,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
         const choice = byId.get(id);
         const child = new Adw.ActionRow({ title: choice?.name ?? id, subtitle: id });
         if (choice?.icon) child.add_prefix(new Gtk.Image({ gicon: choice.icon, pixel_size: 16 }));
-        const remove = new Gtk.Button({ icon_name: 'list-remove-symbolic', valign: Gtk.Align.CENTER, tooltip_text: 'Remove' });
+        const remove = new Gtk.Button({ icon_name: 'list-remove-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Remove') });
         remove.add_css_class('flat');
         remove.connect('clicked', () => {
           setSelected(getSelected().filter((value) => value !== id));
@@ -408,8 +410,8 @@ export default class AdrtPreferences extends ExtensionPreferences {
         row.add_row(child);
         selectionRows.push(child);
       }
-      addRow = new Adw.ActionRow({ title: 'Add application…' });
-      const menu = new Gtk.MenuButton({ icon_name: 'list-add-symbolic', valign: Gtk.Align.CENTER, tooltip_text: 'Add application' });
+      addRow = new Adw.ActionRow({ title: _('Add application…') });
+      const menu = new Gtk.MenuButton({ icon_name: 'list-add-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Add application') });
       menu.add_css_class('flat');
       menu.popover = this.buildAppPopover(byId, getSelected, (id) => {
         const selected = getSelected();
@@ -428,7 +430,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
   private buildAppPopover(byId: Map<string, AppChoice>, getSelected: () => string[], onToggle: (id: string) => void): any {
     const popover = new Gtk.Popover();
     const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6, margin_top: 6, margin_bottom: 6, margin_start: 6, margin_end: 6 });
-    const search = new Gtk.SearchEntry({ placeholder_text: 'Search applications' });
+    const search = new Gtk.SearchEntry({ placeholder_text: _('Search applications') });
     const list = new Gtk.ListBox({ selection_mode: Gtk.SelectionMode.NONE });
     list.add_css_class('boxed-list');
     const checks = new Map<string, any>();
@@ -560,7 +562,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
 
   /** The JSON rule set editor, shown below the rules switch. */
   private rulesEditorGroup(settings: any): any {
-    const group = new Adw.PreferencesGroup({ title: 'Rule set' });
+    const group = new Adw.PreferencesGroup({ title: _('Rule set') });
     const editor = new Gtk.TextView({ monospace: true, wrap_mode: Gtk.WrapMode.WORD_CHAR, top_margin: 8, bottom_margin: 8 });
     editor.buffer.text = settings.get_string('rules-json');
     editor.buffer.connect('changed', () => {
@@ -578,16 +580,16 @@ export default class AdrtPreferences extends ExtensionPreferences {
    * button that drops the entry (and returns live windows to the tiling).
    */
   private appsPage(): any {
-    const page = new Adw.PreferencesPage({ title: 'Apps', icon_name: 'view-app-grid-symbolic' });
+    const page = new Adw.PreferencesPage({ title: _('Apps'), icon_name: 'view-app-grid-symbolic' });
     const group = new Adw.PreferencesGroup({
-      title: 'App registry',
-      description: 'Every app adrt has seen. Turn on "Never tile" to keep an app floating.',
+      title: _('App registry'),
+      description: _('Every app adrt has seen. Turn on "Never tile" to keep an app floating.'),
     });
     const store = new RegistryStore();
     store.load();
     const entries = store.entries().sort((a, b) => b.lastSeen - a.lastSeen);
     if (entries.length === 0) {
-      group.add(new Adw.ActionRow({ title: 'No apps recorded yet', subtitle: 'Apps appear here as they are opened.' }));
+      group.add(new Adw.ActionRow({ title: _('No apps recorded yet'), subtitle: _('Apps appear here as they are opened.') }));
     }
     const known = new Map(appChoices().map((choice) => [choice.id, choice]));
     for (const entry of entries) {
@@ -599,7 +601,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
         store.setNeverTile(entry.appId, row.active);
         store.flush();
       });
-      const button = new Gtk.Button({ icon_name: 'user-trash-symbolic', valign: Gtk.Align.CENTER, tooltip_text: 'Forget this app' });
+      const button = new Gtk.Button({ icon_name: 'user-trash-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Forget this app') });
       button.connect('clicked', () => {
         store.forget(entry.appId);
         store.flush();
@@ -613,15 +615,15 @@ export default class AdrtPreferences extends ExtensionPreferences {
   }
 
   private aboutPage(settings: any): any {
-    const page = new Adw.PreferencesPage({ title: 'About', icon_name: 'help-about-symbolic' });
-    const group = new Adw.PreferencesGroup({ title: 'Adrt' });
-    group.add(new Adw.ActionRow({ title: 'Version', subtitle: this.metadata['version-name'] ?? '0.2.0' }));
-    group.add(new Adw.ActionRow({ title: 'GNOME UUID', subtitle: 'adrt@adrt.dev' }));
+    const page = new Adw.PreferencesPage({ title: _('About'), icon_name: 'help-about-symbolic' });
+    const group = new Adw.PreferencesGroup({ title: _('Adrt') });
+    group.add(new Adw.ActionRow({ title: _('Version'), subtitle: this.metadata['version-name'] ?? '0.2.0' }));
+    group.add(new Adw.ActionRow({ title: _('GNOME UUID'), subtitle: 'adrt@adrt.dev' }));
     const reset = new Adw.ActionRow({
-      title: 'Show the first-run notification again',
-      subtitle: 'Displayed the first time adrt starts.',
+      title: _('Show the first-run notification again'),
+      subtitle: _('Displayed the first time adrt starts.'),
     });
-    const button = new Gtk.Button({ label: 'Show', valign: Gtk.Align.CENTER });
+    const button = new Gtk.Button({ label: _('Show'), valign: Gtk.Align.CENTER });
     button.connect('clicked', () => settings.set_boolean('first-run-complete', false));
     reset.add_suffix(button);
     group.add(reset);

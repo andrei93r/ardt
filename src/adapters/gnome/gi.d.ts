@@ -14,6 +14,11 @@
 declare const global: any;
 declare const TextDecoder: any;
 declare const TextEncoder: any;
+
+/** GJS ESM modules expose `import.meta.url` (`lib` has no DOM/Node types). */
+interface ImportMeta {
+  readonly url: string;
+}
 declare const console: {
   debug(...args: unknown[]): void;
   error(...args: unknown[]): void;
@@ -64,6 +69,14 @@ declare module 'gi://Gtk' {
 declare module 'gi://Adw' {
   const Adw: any;
   export default Adw;
+}
+
+// GJS ships a built-in `gettext` module (see gjs.guide). Only the functions
+// the adapter uses are declared; messages come from the extension's `locale/`.
+declare module 'gettext' {
+  export function bindtextdomain(domain: string, dirname: string): void;
+  export function dgettext(domain: string, msgid: string): string;
+  export function dngettext(domain: string, msgid: string, msgidPlural: string, n: number): string;
 }
 
 declare module 'resource:///org/gnome/shell/extensions/extension.js' {
