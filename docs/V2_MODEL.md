@@ -55,8 +55,9 @@ changes never move a window.
 
 - **Workspace-capable screen**: the window takes the **right slot** of the active
   workspace. If a maximized single is there, it un-maximizes into the left slot and
-  the two split. If both slots are occupied, a workspace is created **to the right**,
-  the window is placed there **maximized**, and the view follows.
+  the two split. If both slots are occupied, a workspace is created **immediately to
+  the right of the active workspace** (the spare is pushed further right), the window
+  is placed there **maximized**, and the view follows.
 - **Single-workspace-capable screen**: a free slot → the pair splits; both slots
   taken → the window **floats** (§7).
 - **Fixed-workspace screen**: route to the nearest existing workspace (right first,
@@ -79,9 +80,16 @@ workspace **to the right**; on a single-workspace-capable screen it stays in pla
 It **is** recorded and restored by display memory when the window still exists (§9).
 
 **Unmaximize** tries, in order:
-1. the **left** workspace's right slot, if that workspace has a free slot;
-2. otherwise the **right** workspace's free slot;
-3. otherwise the window is **minimized and moved to the left** workspace.
+1. the **left** workspace, if it holds **exactly one** window — the result is a pair,
+   with the unmaximized window in the right slot;
+2. otherwise the **right** workspace, if it holds exactly one window;
+3. otherwise the window is **minimized and parked**: in the left workspace if one
+   exists, else in the right one, else it stays where it is.
+
+An **empty** neighbouring workspace is not a target for unmaximize: joining it would
+leave the window alone and therefore maximized again, a move that changes nothing.
+Parking into a workspace that is already full is exactly the minimize law's park
+(§4 below), and the workspace it left is reaped (§5).
 
 Any workspace emptied by the move is reaped (§5).
 
@@ -417,10 +425,19 @@ Two clarifications that follow from this:
 
 ## 20. Startup, adoption and enable-time normalisation
 
-- **On every enable, including mid-session**, each existing workspace is normalised:
-  the window with the **most visible surface** (its rect minus whatever is stacked
-  above it) is kept and **maximized**; **every other window on that workspace is
-  minimized**. If the workspace holds a single window, it is simply maximized.
+- **On every enable, including mid-session**, each existing workspace is normalised
+  from the **visible surface** of its managed windows (a rect minus whatever is
+  stacked above it). Three branches, in order:
+  - one managed window: it is **maximized** (the lone law);
+  - one window **dominates** — it covers at least **three quarters of the work
+    area** — it is **maximized** and **every other managed window on that workspace
+    is minimized**;
+  - otherwise the **two** windows with the most visible surface become the **pair**
+    (the leftmost one takes the left slot) and the rest are **minimized**.
+  Floats and dialogs are not normalised, and a **fullscreen** window is left
+  untouched at enable: it is the "does not fit" case and moves only on its own
+  transition (§16). The three-quarter threshold is a named constant so the tests can
+  vary it.
 - Otherwise, existing windows are **adopted without being moved** until the first
   drain, and the first lane-2 drain waits for `startup-complete`.
 - A window that opens on a workspace the user is **not** viewing is routed **in that
@@ -450,7 +467,8 @@ happens. All default off, deduplicated and rate-limited per event.
 | *"Undo is no longer possible: the window is gone"* | §13 (also a user-facing toast) |
 | *"Highlight suppressed: <reason>"* / *"Highlight released"* | §11 |
 | *"Screen changed: <connector> <appeared|vanished>"* | §9 |
-| *"Window adopted and normalised"* | §20 |
+| *"Normalised <n> workspaces"* (one summary, not one per workspace) | §20 |
+| *"No room next to it → parking it minimized on the neighbouring workspace"* | §4 |
 
 ## 22. Journal and instrumentation
 
@@ -518,13 +536,6 @@ happens. All default off, deduplicated and rate-limited per event.
 23. **Cleanup appetite is high**: dead code, dead settings and the duplicate float
     representations go; the settings migration is real.
 
-## Deliberate non-goals
-
-- Per-app geometry learning; "stubborn" suppression of tiling.
-- Repacking workspaces after a user reorder; removing the spare.
-- Changing the primary monitor.
-- A multi-entry or persisted undo history.
-- Any policy that runs inside a Mutter signal handler.
 24. **Classification** is ported as §16: never-managed categories stay untouched,
     always-on-top floats (reversing A61), dialogs float/centre/raise, and the escape
     for a window that does not fit is **its own workspace**, not a float.
@@ -532,12 +543,34 @@ happens. All default off, deduplicated and rate-limited per event.
     workspace change), `follow-moved-window` default on, and nudge on both axes.
 26. **`disable-animations` disables everything**, GNOME's animations included.
 27. **The queue finishes what is in it** when the session pauses; nothing is dropped.
-28. **Enable-time normalisation** runs on every enable: most-visible window maximized,
-    the rest minimized, per workspace.
+28. **Enable-time normalisation** runs on every enable with §20's two-branch rule: a
+    dominating window (at least three quarters of the work area) maximized, else the
+    top two by visible surface paired; the rest minimized.
 29. **Debug notifications** are per-decision checkboxes phrased as the decision (§21),
     and the journal is append-only per day with 30-day retention (§22).
 30. **A minimized window left alone** is relocated left, else right, else left where it
     is — and the workspace is then allowed to persist holding only minimized windows,
     because there is nowhere to put it. This is the second exception to §5's packing
     rule (the first being the spare).
+31. **Scenario review confirmed** (§3, §4, §5): a workspace created by routing is
+    inserted **immediately right of the active one**, pushing the spare right;
+    unmaximize accepts only a neighbour holding **exactly one** window (joining an
+    empty one would re-maximize the window and change nothing), and failing that
+    parks the window minimized left, else right, else in place; and a workspace
+    emptied by the last close is reaped with the view moving to the nearest
+    workspace that holds windows.
+32. **Enable-time normalisation is two-branch** (§20): a dominating window (at least
+    three quarters of the work area) is maximized with every other managed window on
+    its workspace minimized; otherwise the **two** largest by visible surface become
+    the pair and the rest are minimized. A single window is maximized, and fullscreen
+    windows and floats are left untouched at enable.
 
+## Deliberate non-goals
+
+
+
+- Per-app geometry learning; "stubborn" suppression of tiling.
+- Repacking workspaces after a user reorder; removing the spare.
+- Changing the primary monitor.
+- A multi-entry or persisted undo history.
+- Any policy that runs inside a Mutter signal handler.

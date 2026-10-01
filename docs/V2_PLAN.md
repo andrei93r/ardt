@@ -65,8 +65,10 @@ misbehaving-client path. The families the last revision added:
   the three branches of the alone-minimized rule — moved left, else moved right, else
   left in place with the workspace allowed to persist.
 - **maximize / unmaximize / fullscreen**: own workspace to the right; in place plus
-  `maximize-minimizes-others` on a single-workspace screen; unmaximize → left, else
-  right, else minimized-and-moved-left; fullscreen recorded and restored.
+  `maximize-minimizes-others` on a single-workspace screen; unmaximize joins a
+  neighbour only when that neighbour holds **exactly one** window (left first, then
+  right), and otherwise parks the window minimized (left, else right, else in place);
+  fullscreen recorded and restored.
 - **resize / refusal ladder**: the sibling follows an inner-edge drag; a refusing client
   keeps its size and the sibling adapts; the sibling cannot adapt → own workspace,
   size clamped to [1/6, full screen]; on a single-workspace screen the clamped size stays.
@@ -213,8 +215,9 @@ Failing scenarios first (all fail on today's build for the intended reason):
 - [ ] `A85-right-slot-and-split` · `A86-create-right-and-maximise` ·
       `A87-nothing-is-evicted` · `A88-maximise-owns-a-workspace` ·
       `A89-maximise-in-place-minimises-others` (single-workspace via
-      `dynamic-workspaces=false` + `num-workspaces=1`) · `A90-unmaximise-joins-left-and-deletes`
-      · `A91-unmaximise-full-left-minimises` · `A92-single-workspace-split-then-float`
+      `dynamic-workspaces=false` + `num-workspaces=1`) · `A90-unmaximise-joins-pair-forming-left`
+      · `A91-unmaximise-parks-when-no-neighbour-can-pair` (both neighbours full or
+      empty) · `A92-single-workspace-split-then-float`
       · `A93-empty-workspace-reaped` · `A106-no-cross-monitor-exile` (the observed bug).
 
 Implementation:
@@ -292,8 +295,11 @@ Implementation (pure modules parallelisable):
       extended to switch off GNOME's animations too, and the `debug` notification
       checkboxes; `undo-stack-size`, `workspace-auto-name`,
       `workspace-move-grace-seconds` and `respect-user-workspace-move` are removed.
-- [ ] **Enable-time normalisation** (§20): per workspace, the most-visible window is
-      maximized and the rest minimized, on every enable including mid-session.
+- [ ] **Enable-time normalisation** (§20): per workspace, three branches — a single
+      window maximized; a window covering at least three quarters of the work area
+      maximized with the rest minimized; otherwise the top two by visible surface
+      paired and the rest minimized — on every enable including mid-session, with
+      floats and fullscreen windows untouched.
 - [ ] Pure tests: identity per packaging format (incl. AppImage ancestors, Chromium's
       zeroed environment), re-keying, precedence, migration, ordinals (~20).
 
