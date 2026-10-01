@@ -21,7 +21,8 @@ import { displayPlan } from '../../core/displays.js';
 import { normalizePlan } from '../../core/normalize.js';
 import type { NormalizeWindow } from '../../core/normalize.js';
 import {
-  dropPlacement, escapeSize, maximizeWindow, routeNewWindow, unmaximizeWindow, windowCount,
+  dropPlacement, escapeSize, impossibleSplit, maximizeWindow, refusalLadder, routeNewWindow,
+  unmaximizeWindow, windowCount,
 } from '../../core/placement.js';
 import type { Axis, Env, Placement, ScreenClass, State, Win, Ws } from '../../core/placement.js';
 import { reapPlan } from '../../core/workspaces.js';
@@ -33,7 +34,7 @@ const MAINTENANCE_SETTLE_MS = 200;
 import { checkPlan } from '../../core/invariants.js';
 import { SignatureCache, planSignature } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
-import { computePlans, ratioKey, screenArea } from '../../core/tiler.js';
+import { computePlans, effectiveGap, ratioKey, screenArea } from '../../core/tiler.js';
 import type { FocusDirection } from '../../core/focus.js';
 import { cycleOrder, pickDirectional } from '../../core/focus.js';
 import type { CycleEntry } from '../../core/focus.js';
@@ -1362,15 +1363,28 @@ export class WindowSession {
         // maximize property no longer needs to be enforced for it.
         tileables[0].maximizeRequested = false;
       }
-      // §10 step 3/§16: a client that insists on a minimum wider than its share
-      // cannot be split. It takes its own workspace (or keeps the single screen,
-      // §10 step 4); the window it was paired with keeps the screen.
+      // §10 steps 2-3: a client that insists on a minimum wider than its share
+      // is refused a split. The sibling adapts first (the tiler's ratio is
+      // clamped to its own minimum); only when the sibling cannot adapt either
+      // does the pair cease to exist — the trigger keeps the screen and the
+      // reactor gives way (own workspace, or minimized on a single screen).
       if (tileables.length > 1) {
         const refusing = tileables.find((t) => this.doesNotFit(t, this.placementEnv(t.surface.screenId)));
         if (refusing !== undefined) {
-          this.escapeTracked(refusing);
-          this.scheduleRetile(workspaceId, 'escape-refusal');
-          continue;
+          const sibling = tileables.find((t) => t.id !== refusing.id);
+          const screen = this.screenFor(refusing.surface.screenId);
+          if (
+            sibling !== undefined &&
+            screen !== null &&
+            this.refusalEscapes(refusing, sibling, screen, this.placementEnv(refusing.surface.screenId))
+          ) {
+            this.escapeRefusal(refusing, sibling);
+            this.scheduleRetile(workspaceId, 'escape-refusal');
+            continue;
+          }
+          // Step 2: the sibling adapts, so the pair stays. The tiler's clamp
+          // below gives the refusing window its minimum and the sibling the
+          // remainder; nothing is created, floated or minimized.
         }
       }
       // §4: a lone visible managed window is always maximized.
@@ -2252,6 +2266,44 @@ export class WindowSession {
     this.signatures.clearAll();
     this.scheduleReconcile('escape');
   }
+
+  /**
+   * §10 step 2: whether the refusing window's sibling can adapt to the
+   * remainder. `escaped` false means the pair still exists, so the tiler's
+   * ratio clamp is left to give the refusing window its minimum and the
+   * sibling the rest; true means the pair cannot exist and step 3 applies.
+   */
+  private refusalEscapes(refusing: TrackedWindow, sibling: TrackedWindow, screen: Screen, env: Env): boolean {
+    const area = screenArea(screen);
+    const gap = effectiveGap(this.tilerConfig(), screen);
+    const extent = env.axis === 'vertical' ? area.height : area.width;
+    const split = Math.max(0, extent - gap);
+    const axis: 'width' | 'height' = env.axis === 'vertical' ? 'height' : 'width';
+    const keep = this.toTilerWindow(refusing).min[axis];
+    const siblingMinimum = this.toTilerWindow(sibling).min[axis];
+    return refusalLadder(keep, siblingMinimum, split).escaped;
+  }
+
+  /**
+   * §10 steps 3-4: the pair cannot exist, so the trigger keeps the screen and
+   * the reactor gives way. The refusing window is the one whose own demand
+   * broke the split: on a workspace-capable screen it is the one that escapes
+   * to its own workspace; on a single-workspace screen it keeps the screen
+   * maximized and the sibling is minimized.
+   */
+  private escapeRefusal(refusing: TrackedWindow, sibling: TrackedWindow): void {
+    const env = this.placementEnv(refusing.surface.screenId);
+    const single = env.screen === 'single';
+    const trigger = single ? refusing : sibling;
+    const reactor = single ? sibling : refusing;
+    const outcome = impossibleSplit(env, { id: trigger.id }, { id: reactor.id });
+    if (outcome.giveWayTo === 'minimized') {
+      this.maximizeInPlace(this.windows.get(outcome.keep) ?? trigger);
+      return;
+    }
+    this.escapeTracked(this.windows.get(outcome.giveWay) ?? reactor);
+  }
+
 
   /**
    * §4/§5: minimize releases the slot; the pure reaper relocates a workspace

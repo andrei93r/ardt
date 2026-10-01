@@ -297,3 +297,22 @@ export function impossibleSplit(env: Env, trigger: Win, reactor: Win): SplitOutc
 export function escapeSize(screen: number, requested: number): number {
   return Math.min(Math.max(requested, Math.round(screen / 6)), screen);
 }
+
+/**
+ * §10 step 2: a client refuses the requested split, so the **sibling adapts** —
+ * the refusing window keeps the size it insists on (`keepSize`) and the sibling
+ * takes the remainder, clamped to its own minimum (`siblingMinimum`). `escaped`
+ * is true only when the sibling cannot adapt either, so the pair cannot exist
+ * and step 3's `impossibleSplit` decides who gives way. `screen` is the split
+ * extent available to the pair (work area minus the gaps).
+ */
+export function refusalLadder(
+  keepSize: number,
+  siblingMinimum: number,
+  screen: number,
+): { sibling: number; escaped: boolean } {
+  const sibling = Math.min(Math.max(screen - keepSize, siblingMinimum), screen);
+  if (keepSize + sibling <= screen) return { sibling, escaped: false };
+  return { sibling: screen, escaped: true };
+}
+

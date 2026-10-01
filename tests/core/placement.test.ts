@@ -5,7 +5,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  dropPlacement, escapeSize, freeSlot, impossibleSplit, minimizeRelocation, routeNewWindow, sideSlot, unmaximizeWindow,
+  dropPlacement, escapeSize, freeSlot, impossibleSplit, minimizeRelocation, refusalLadder, routeNewWindow,
+  sideSlot, unmaximizeWindow,
 } from '../../src/core/placement.js';
 import type { State, Win, Ws } from '../../src/core/placement.js';
 
@@ -190,6 +191,22 @@ describe('impossibleSplit (the trigger wins, §10 step 3-4)', () => {
   it('on a single-workspace screen the reactor is minimized', () => {
     expect(impossibleSplit({ screen: 'single', axis: 'horizontal' }, win(1), win(2)))
       .toMatchObject({ keep: 1, giveWay: 2, giveWayTo: 'minimized' });
+  });
+});
+
+describe('refusalLadder (the sibling adapts first, §10 step 2)', () => {
+  it('lets the sibling adapt to the remainder', () => {
+    expect(refusalLadder(700, 200, 1280)).toEqual({ sibling: 580, escaped: false });
+  });
+  it('gives the sibling at least its minimum when the remainder is smaller', () => {
+    // The remainder would be 380, below the sibling's 500 minimum: it refuses.
+    expect(refusalLadder(900, 500, 1280)).toMatchObject({ escaped: true });
+  });
+  it('hands the whole remainder to a sibling that can use it', () => {
+    expect(refusalLadder(100, 200, 1280)).toEqual({ sibling: 1180, escaped: false });
+  });
+  it('escapes when the refusing window alone exceeds the split', () => {
+    expect(refusalLadder(2000, 100, 1280)).toMatchObject({ escaped: true });
   });
 });
 
