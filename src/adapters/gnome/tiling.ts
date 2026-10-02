@@ -9,7 +9,7 @@
 
 import GLib from 'gi://GLib';
 
-import { ratioKey, screenArea } from '../../core/tiler.js';
+import { ratioKey, remapRatiosAfterReap, sanitizeRatios, screenArea } from '../../core/tiler.js';
 import type { SplitAxis } from '../../core/tiler.js';
 import { clamp, rectEquals } from '../../core/types.js';
 import type { Placement, Rect, Screen, TilePlan } from '../../core/types.js';
@@ -100,7 +100,9 @@ export class Tiling {
 
   loadRatios(ratios: Record<string, number>, swapPairs: string[]): void {
     this.ratios.clear();
-    for (const [key, value] of Object.entries(ratios)) this.ratios.set(key, value);
+    // §23: an old state file keyed ratios by app pair; drop those legacy keys
+    // rather than carry state that can never be applied.
+    for (const [key, value] of Object.entries(sanitizeRatios(ratios))) this.ratios.set(key, value);
     this.swapPairs.clear();
     for (const key of swapPairs) this.swapPairs.add(key);
   }
@@ -138,7 +140,7 @@ export class Tiling {
     const pair = this.pairFor(focusedId);
     if (pair === null) return false;
     const { first, second, axis } = pair;
-    const key = ratioKey(first.surface.appId, second.surface.appId, axis);
+    const key = ratioKey(pair.screen.index, first.surface.workspaceId, axis);
     const current = this.getRatio(key);
     const delta = (stepPercent / 100) * (direction === 'left' || direction === 'up' ? -1 : 1);
     return this.setRatioForPair(first, second, axis, current + delta);
@@ -161,7 +163,7 @@ export class Tiling {
       const pair = this.pairFor(tracked.id);
       if (pair === null || pair.axis !== axis) continue;
       if (pair.screen.connector !== connector) continue;
-      return this.getRatio(ratioKey(pair.first.surface.appId, pair.second.surface.appId, axis));
+      return this.getRatio(ratioKey(pair.screen.index, workspaceId, axis));
     }
     return 0.5;
   }
@@ -387,14 +389,28 @@ export class Tiling {
     return { first, second, axis: portrait ? 'vertical' : 'horizontal', screen };
   }
 
-  private setRatioForPair(first: TrackedWindow, second: TrackedWindow, axis: SplitAxis, ratio: number): boolean {
+  private setRatioForPair(first: TrackedWindow, _second: TrackedWindow, axis: SplitAxis, ratio: number): boolean {
     this.rememberRatiosBeforeChange();
-    const key = ratioKey(first.surface.appId, second.surface.appId, axis);
+    const key = ratioKey(first.surface.screenId, first.surface.workspaceId, axis);
     const clamped = clamp(ratio, 0.05, 0.95);
     this.ratios.set(key, clamped);
     this.deps.onRatiosChanged();
     this.deps.history.log('split_resize', { axis, ratio: clamped, pair: key });
     return true;
+  }
+
+  /**
+   * §10/§5: a reaped workspace drops its ratio, and every workspace to its
+   * right shifts down one index, so their ratios move with them. Without this a
+   * stale key would be misapplied to whatever workspace later reuses the
+   * vacated index (and a shift could point a ratio at the wrong workspace).
+   */
+  reindexRatiosAfterReap(reaped: readonly number[]): void {
+    if (reaped.length === 0) return;
+    const next = remapRatiosAfterReap(this.getRatios(), reaped);
+    this.ratios.clear();
+    for (const [key, value] of Object.entries(next)) this.ratios.set(key, value);
+    this.deps.onRatiosChanged();
   }
 
   /**
@@ -409,7 +425,7 @@ export class Tiling {
   /** §15: restore the split ratios an undo entry was captured with. */
   restoreRatios(ratios: Record<string, number>): void {
     this.ratios.clear();
-    for (const [key, value] of Object.entries(ratios)) this.ratios.set(key, value);
+    for (const [key, value] of Object.entries(sanitizeRatios(ratios))) this.ratios.set(key, value);
     this.deps.onRatiosChanged();
   }
 

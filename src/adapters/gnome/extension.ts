@@ -24,6 +24,7 @@ import { SessionMachine } from '../../core/session.js';
 import type { SessionMode } from '../../core/session.js';
 import { ChangeLog } from '../../core/undo.js';
 import type { SplitAxis } from '../../core/tiler.js';
+import { ratioKey } from '../../core/tiler.js';
 import type { MemoryEntry } from '../../core/displays.js';
 import { NoticeGate, isAlwaysNotice, noticeTitle } from '../../core/notify.js';
 import { clamp, Layer } from '../../core/types.js';
@@ -2513,9 +2514,8 @@ export default class AdrtExtension extends Extension {
     const screen = this.host.screens().find((s) => s.index === first.surface.screenId);
     if (screen === undefined) return false;
     const axis = screen.geometry.width >= screen.geometry.height ? 'horizontal' : 'vertical';
-    const key = [first.surface.appId, second.surface.appId].sort();
     this.session.capturePairChange(a, b);
-    this.tiling.setRatio(`${key[0]}|${key[1]}|${axis}`, ratio);
+    this.tiling.setRatio(ratioKey(screen.index, first.surface.workspaceId, axis), ratio);
     this.session.clearSignatures();
     this.session.retile(first.surface.workspaceId, 'simulate-resize');
     if (this.settings.boolean('dry-run-mode', false)) this.history.log('dry_run', { ratio });

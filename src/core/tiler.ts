@@ -35,7 +35,10 @@ export interface TilerConfig {
   primaryApps: readonly string[];
   /** 0..1, clamped to 0.2–0.8 when applied. */
   primaryAppRatio: number;
-  /** Ratio keyed by `appA|appB|axis`, fraction belonging to the sorted-first app. */
+  /**
+   * §10 ratios keyed by `screen:workspace:axis` (see `ratioKey`), fraction
+   * belonging to the sorted-first app of the pair.
+   */
   ratios: Readonly<Record<string, number>>;
   /** Pair keys (`min|max`) whose sides are swapped. */
   swapPairs: ReadonlySet<string>;
@@ -83,12 +86,69 @@ export function pairKey(a: number, b: number): string {
 }
 
 /**
- * Ratio keys are order-independent: app ids are sorted so the same pair is
- * recognised regardless of which window opened first or sits on which side.
+ * §10: ratios are per workspace (per pair). A pair lives on one screen, and two
+ * screens can show the same workspace, so the key is `screen:workspace:axis`.
+ * The old key was the app pair (`appA|appB|axis`), which leaked a ratio the user
+ * set on one pair to every later pair of the same apps — decision 14 says there
+ * is no app-pair ratio learning. The fraction stored is the sorted-first app's
+ * share (see `resolveRatio`), so the pair is recognised regardless of which
+ * window opened first or sits on which side.
  */
-export function ratioKey(appA: string, appB: string, axis: SplitAxis): string {
-  const [first, second] = appA <= appB ? [appA, appB] : [appB, appA];
-  return `${first}|${second}|${axis}`;
+export function ratioKey(screenId: number, workspaceId: number, axis: SplitAxis): string {
+  return `${screenId}:${workspaceId}:${axis}`;
+}
+
+export interface RatioKeyParts {
+  screenId: number;
+  workspaceId: number;
+  axis: SplitAxis;
+}
+
+/** Parse a `screen:workspace:axis` ratio key; null for a legacy app-pair key. */
+export function parseRatioKey(key: string): RatioKeyParts | null {
+  const match = /^(\d+):(\d+):(horizontal|vertical)$/.exec(key);
+  if (match === null) return null;
+  return { screenId: Number(match[1]), workspaceId: Number(match[2]), axis: match[3] as SplitAxis };
+}
+
+/**
+ * §23 migration: state persisted before ratios were workspace-scoped keyed them
+ * by app pair (`appA|appB|axis`). Such a key can never be applied under the new
+ * scheme, but leaving it in the map leaves dead state; drop everything that is
+ * not a valid workspace key so an old file is handled without crashing and is
+ * never misapplied.
+ */
+export function sanitizeRatios(raw: Readonly<Record<string, number>>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (parseRatioKey(key) !== null && Number.isFinite(value)) out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * §10/§5: after the workspaces in `reaped` are removed, a reaped workspace
+ * drops its ratio and every workspace to its right shifts down one index, so
+ * its ratio moves with it. Without this a stale key would be misapplied to
+ * whatever workspace later reuses the vacated index. Legacy app-pair keys are
+ * dropped. Pure, so the shift is unit-testable.
+ */
+export function remapRatiosAfterReap(
+  ratios: Readonly<Record<string, number>>,
+  reaped: readonly number[],
+): Record<string, number> {
+  if (reaped.length === 0) return { ...ratios };
+  const removed = new Set(reaped);
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(ratios)) {
+    const parts = parseRatioKey(key);
+    if (parts === null) continue;
+    if (removed.has(parts.workspaceId)) continue;
+    let workspaceId = parts.workspaceId;
+    for (const index of reaped) if (index < workspaceId) workspaceId -= 1;
+    out[ratioKey(parts.screenId, workspaceId, parts.axis)] = value;
+  }
+  return out;
 }
 
 export function isPortrait(screen: Screen): boolean {
@@ -263,7 +323,7 @@ function isPrimary(appId: string, primaryApps: readonly string[]): boolean {
 
 /** Fraction of the split that belongs to window index 0. */
 function resolveRatio(w0: TilerWindow, w1: TilerWindow, axis: SplitAxis, config: TilerConfig): number {
-  const saved = config.ratios[ratioKey(w0.appId, w1.appId, axis)];
+  const saved = config.ratios[ratioKey(w0.screenId, w0.workspaceId, axis)];
   if (saved !== undefined) {
     const w0First = w0.appId <= w1.appId;
     return w0First ? saved : 1 - saved;
