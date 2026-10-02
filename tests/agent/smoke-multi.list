@@ -8,6 +8,8 @@
 # aborts the run by name.
 #
 #   per-screen axis (each screen tiles on its own)   A105-per-screen-axis
+#   a newcomer pairs on its own screen, not the       A157-per-screen-slots
+#     other screen's slots
 #   a window on a second screen is not exiled        A106-no-cross-monitor-exile
 #   cross-screen drag takes the free slot / swaps    A107-cross-monitor-drag-takes-the-free-slot-or-swaps
 #   a maximised drag stays maximised at the drop     A108-maximised-drag-still-maximised-at-drop
@@ -24,6 +26,7 @@
 
 A105-per-screen-axis
 A106-no-cross-monitor-exile
+A157-per-screen-slots
 A107-cross-monitor-drag-takes-the-free-slot-or-swaps
 A108-maximised-drag-still-maximised-at-drop
 A109-disconnect-routes

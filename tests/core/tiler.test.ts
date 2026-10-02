@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { checkPlan } from '../../src/core/invariants.js';
 import type { TilerConfig } from '../../src/core/tiler.js';
-import { computePlans, layoutAll, pairKey, ratioKey, resolveGaps } from '../../src/core/tiler.js';
+import { computePlans, layoutAll, pairKey, parseRatioKey, ratioKey, remapRatiosAfterReap, resolveGaps, sanitizeRatios } from '../../src/core/tiler.js';
 import { SurfaceKind } from '../../src/core/types.js';
 import { rect, screen, size, window } from './helpers.js';
 
@@ -113,8 +113,8 @@ describe('computePlans — landscape pair', () => {
     expect(plan.placements[0].rect.width).toBeCloseTo(1920 * 0.7, 1);
   });
 
-  it('uses a saved ratio keyed by app pair and axis', () => {
-    const key = ratioKey('term', 'browser', 'horizontal');
+  it('uses a saved ratio keyed by the workspace pair and axis', () => {
+    const key = ratioKey(0, 0, 'horizontal');
     const plan = computePlans([window({ id: 1, appId: 'term' }), window({ id: 2, appId: 'browser' })], landscape, config({ ratios: { [key]: 0.25 } }));
     // The saved fraction belongs to the sorted-first app ("browser", surface 2).
     expect(plan.placements[1].rect.width).toBeCloseTo(1920 * 0.25, 1);
@@ -126,7 +126,7 @@ describe('computePlans — landscape pair', () => {
     // so `split * ratio` is fractional, e.g. 1912 * 0.7578125 = 1448.9375. The
     // plan must reach Mutter as whole logical pixels, or Mutter truncates each
     // argument on its own and the pair can read a sub-pixel seam.
-    const key = ratioKey('term', 'browser', 'horizontal');
+    const key = ratioKey(0, 0, 'horizontal');
     const plan = computePlans(
       [window({ id: 1, appId: 'term' }), window({ id: 2, appId: 'browser' })],
       landscape,
@@ -150,6 +150,62 @@ describe('computePlans — landscape pair', () => {
     // Swapping exchanges the two windows' sides.
     expect(rectFor(plan, 1)).toEqual(rectFor(normal, 2));
     expect(rectFor(plan, 2)).toEqual(rectFor(normal, 1));
+  });
+});
+
+describe('computePlans — ratio scope (§10, decision 14)', () => {
+  it('keys a ratio by the screen, workspace and axis', () => {
+    expect(ratioKey(0, 0, 'horizontal')).toBe('0:0:horizontal');
+    expect(ratioKey(1, 0, 'horizontal')).not.toBe(ratioKey(0, 0, 'horizontal'));
+    expect(ratioKey(0, 1, 'horizontal')).not.toBe(ratioKey(0, 0, 'horizontal'));
+    expect(ratioKey(0, 0, 'vertical')).not.toBe(ratioKey(0, 0, 'horizontal'));
+  });
+
+  it('applies a ratio only to the pair it was set in', () => {
+    // The window the user set the ratio on was on screen 0, workspace 0.
+    const key = ratioKey(0, 0, 'horizontal');
+    const saved = config({ ratios: { [key]: 0.25 } });
+    const apps = [window({ id: 1, appId: 'chrome' }), window({ id: 2, appId: 'chrome' })];
+    const widths = (c: TilerConfig, overrides: Partial<ReturnType<typeof window>> = {}) => {
+      const plan = computePlans(apps.map((w) => ({ ...w, ...overrides })), landscape, c);
+      return [plan.placements[0].rect.width, plan.placements[1].rect.width];
+    };
+    // Same pair: the saved 25/75 applies.
+    expect(widths(saved)[0]).toBeCloseTo(1920 * 0.25, 1);
+    // A different workspace, a different screen, or the other axis: 50/50.
+    for (const overrides of [{ workspaceId: 1 }, { screenId: 1 }]) {
+      const [left, right] = widths(saved, overrides);
+      expect(left).toBeCloseTo(1920 * 0.5, 1);
+      expect(right).toBeCloseTo(1920 * 0.5, 1);
+    }
+  });
+
+  it('parses a workspace key and rejects a legacy app-pair key', () => {
+    expect(parseRatioKey('2:3:vertical')).toEqual({ screenId: 2, workspaceId: 3, axis: 'vertical' });
+    expect(parseRatioKey('google-chrome|google-chrome|horizontal')).toBeNull();
+  });
+
+  it('drops legacy app-pair keys from persisted state (§23 migration)', () => {
+    const ratios = {
+      'google-chrome|google-chrome|horizontal': 0.2390625,
+      [ratioKey(1, 0, 'horizontal')]: 0.3,
+    };
+    expect(sanitizeRatios(ratios)).toEqual({ [ratioKey(1, 0, 'horizontal')]: 0.3 });
+  });
+
+  it('drops a reaped workspace ratio and shifts the ones to its right (§10)', () => {
+    const ratios = {
+      [ratioKey(0, 0, 'horizontal')]: 0.2,
+      [ratioKey(0, 1, 'horizontal')]: 0.3,
+      [ratioKey(0, 2, 'horizontal')]: 0.4,
+      [ratioKey(1, 2, 'horizontal')]: 0.6,
+    };
+    // Workspace 1 is reaped: its ratio goes, workspace 2 becomes 1.
+    expect(remapRatiosAfterReap(ratios, [1])).toEqual({
+      [ratioKey(0, 0, 'horizontal')]: 0.2,
+      [ratioKey(0, 1, 'horizontal')]: 0.4,
+      [ratioKey(1, 1, 'horizontal')]: 0.6,
+    });
   });
 });
 

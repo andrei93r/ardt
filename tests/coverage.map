@@ -27,6 +27,7 @@ gaps | A139-gaps
 
 # ------------------------------------------------------------- routing / arrival
 routing-arrival | A02-third-window A41-same-app-second-window-splits A85-right-slot-and-split A86-create-right-and-maximise A87-nothing-is-evicted A117-arrival-side-rule A124-screen-side-rule A126-third-maximized-arrival A129-opened-maximized-pairs A44-focus-direction-fallback
+per-screen-slots | A157-per-screen-slots
 
 # --------------------------------------------------------------------- focus
 focus | A06-focus-follows A44-focus-direction-fallback A46-finish-focus-nearest-left-or-right A57-keyboard-focus-system A121-focus-cycle-order A133-cursor-follows-focus
@@ -35,7 +36,7 @@ focus | A06-focus-follows A44-focus-direction-fallback A46-finish-focus-nearest-
 move-and-swap | A08-pair-swap A10-nudge-split A31-swap-keyboard A32-swap-drag A54-overview-move-onto-pair A55-overview-move-pair-member A73-lost-drag-release A77-clamped-drop-swaps A94-overview-drop-onto-full-floats A97-drop-onto-single-maximised-splits A107-cross-monitor-drag-takes-the-free-slot-or-swaps A108-maximised-drag-still-maximised-at-drop A127-swap-is-invertible
 
 # --------------------------------------------------------- resize and undo
-resize-and-undo | A07-inner-edge-drag A09-undo A15-adaptation A29-frame-timing A51-prune-safety A52-adaptation-no-bogus-min A56-coherence-sweep A101-undo-restores-instance-and-config A102-undo-toasts-when-impossible A113-trigger-wins-and-trades A150-real-inner-edge-drag
+resize-and-undo | A07-inner-edge-drag A09-undo A15-adaptation A29-frame-timing A51-prune-safety A52-adaptation-no-bogus-min A56-coherence-sweep A101-undo-restores-instance-and-config A102-undo-toasts-when-impossible A113-trigger-wins-and-trades A150-real-inner-edge-drag A156-ratio-scope
 
 # ------------------------------------------------- maximize / unmaximize
 maximize-unmaximize | A03-lone-maximize A04-maximized-window A05-unmaximize A40-unmaximize-float-over-pair A45-maximize-right-return-left A50-unmaximize-returns-left-floating A53-no-floating-leftover A58-lone-window-maximized A59-auto-float-pulled-back A88-maximise-owns-a-workspace A89-maximise-in-place-minimises-others A90-unmaximise-joins-pair-forming-left A91-unmaximise-parks-when-no-neighbour-can-pair A114-fullscreen-in-place-minimises A126-third-maximized-arrival A129-opened-maximized-pairs

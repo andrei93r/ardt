@@ -24,6 +24,8 @@
 #   move (toward, onto a full        A127-swap-is-invertible,
 #     workspace -> float)            A54-overview-move-onto-pair
 #   resize ratio + undo              A09-undo
+#   ratios are per workspace, not    A156-ratio-scope
+#     per app pair
 #   swap (invertible) + undo         A127-swap-is-invertible (invertible),
 #                                    A101-undo-restores-instance-and-config
 #                                    (undo of a drag-swap / un-float)
@@ -89,6 +91,8 @@ A127-swap-is-invertible
 A54-overview-move-onto-pair
 # --- resize + undo ---
 A09-undo
+# --- ratios are per workspace, not per app pair (§10) ---
+A156-ratio-scope
 # --- maximize / unmaximize ladders ---
 A04-maximized-window
 A90-unmaximise-joins-pair-forming-left

@@ -58,7 +58,10 @@ adrt SimulateScreens "$fixture" >/dev/null
 poll_decisions "the plan rescues the pair onto a fresh workspace on the primary" '
 import json, sys
 entries = json.load(sys.stdin)
-moves = [e for e in entries if e.get("ev") == "display_move" and e.get("create") is not None]
+# Only this pair: the decision log is shared with earlier scenarios on the same
+# worker (e.g. A145 leaves its own rescue moves), so filter by id.
+ids = {int("'"$A"'"), int("'"$B"'")}
+moves = [e for e in entries if e.get("ev") == "display_move" and e.get("create") is not None and e.get("id") in ids]
 if len(moves) < 2:
     print("no rescue moves", len(moves)); sys.exit(1)
 if any(m.get("screen") != 0 for m in moves):

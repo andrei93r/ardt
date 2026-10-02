@@ -506,7 +506,7 @@ export class WindowSession {
     const rightAppId = leftIsTracked ? sibling.surface.appId : tracked.surface.appId;
     const sortedFirstIsLeft = leftAppId <= rightAppId;
     const axis = horizontal ? 'horizontal' : 'vertical';
-    const key = ratioKey(tracked.surface.appId, sibling.surface.appId, axis);
+    const key = ratioKey(screen.index, tracked.surface.workspaceId, axis);
     this.captureChange([tracked.id, sibling.id]);
     this.deps.tiling.setRatio(key, sortedFirstIsLeft ? ratioLeft : 1 - ratioLeft);
     this.deps.history.log('split_resize', { pair: key, ratio: ratioLeft, reason: 'drag' });
@@ -728,14 +728,23 @@ export class WindowSession {
     return { screen: this.screenClass(screenId), axis: this.axisFor(screenId) };
   }
 
-  /** §3: per workspace, the two visible slot occupants plus hidden windows. */
-  private buildPlacementState(excludeId: number | null = null): State {
+  /**
+   * §3: per workspace, the two visible slot occupants plus hidden windows.
+   *
+   * `screenId` limits the view to the windows on one screen: the tiler tiles
+   * per screen, so a window on another screen must not occupy a slot that
+   * belongs to this screen's pair. Reaping still asks for the global view (no
+   * `screenId`), because a workspace is empty only when no screen holds a
+   * window in it.
+   */
+  private buildPlacementState(excludeId: number | null = null, screenId: number | null = null): State {
     const manager = global.workspace_manager;
     const count = manager.get_n_workspaces();
     const workspaces: Ws[] = [];
     for (let index = 0; index < count; index++) workspaces.push({ id: index, slots: [null, null], minimized: [], floats: [] });
     for (const tracked of [...this.windows.values()].sort((a, b) => a.id - b.id)) {
       if (tracked.id === excludeId) continue;
+      if (screenId !== null && tracked.surface.screenId !== screenId) continue;
       // A newcomer whose placement is still pending holds no slot yet: its
       // routing is derived from live state in the drain (§3/§11).
       if (tracked.routePending) continue;
@@ -795,7 +804,7 @@ export class WindowSession {
       max: tracked.maxSize,
     });
     const env = this.placementEnv(tracked.surface.screenId);
-    const state = this.buildPlacementState(tracked.id);
+    const state = this.buildPlacementState(tracked.id, tracked.surface.screenId);
     if (this.doesNotFit(tracked, env)) {
       // §16: the escape rule — its own workspace, sized to itself.
       this.escapeTracked(tracked);
@@ -2546,7 +2555,7 @@ export class WindowSession {
     this.capturePlane([tracked.surface.workspaceId], tracked.surface.screenId);
     const own = tracked.surface.workspaceId;
     const env = this.placementEnv(tracked.surface.screenId);
-    const state = this.buildPlacementState();
+    const state = this.buildPlacementState(null, tracked.surface.screenId);
     this.applyPlacement(tracked, maximizeWindow(state, env, own), own === state.viewed, 'maximize');
     this.deps.onModelEvent?.('window-maximized', { id: tracked.id, workspace: own });
   }
@@ -2557,7 +2566,7 @@ export class WindowSession {
     const own = tracked.surface.workspaceId;
     this.capturePlane([own - 1, own, own + 1], tracked.surface.screenId);
     const env = this.placementEnv(tracked.surface.screenId);
-    const state = this.buildPlacementState();
+    const state = this.buildPlacementState(null, tracked.surface.screenId);
     const placement = unmaximizeWindow(state, env, own, tracked.id);
     // §4: there is no un-maximized lone window. When the ladder leaves the
     // window where it is (no neighbour holds windows), it is alone and the lone
@@ -2580,7 +2589,7 @@ export class WindowSession {
     if (fullscreen) {
       const own = tracked.surface.workspaceId;
       const env = this.placementEnv(tracked.surface.screenId);
-      const state = this.buildPlacementState();
+      const state = this.buildPlacementState(null, tracked.surface.screenId);
       this.applyPlacement(tracked, maximizeWindow(state, env, own), own === state.viewed, 'fullscreen');
       return;
     }
@@ -2619,7 +2628,7 @@ export class WindowSession {
       return;
     }
     const own = tracked.surface.workspaceId;
-    const state = this.buildPlacementState();
+    const state = this.buildPlacementState(null, tracked.surface.screenId);
     const created = this.createWorkspaceRight(own);
     if (created === null) {
       this.deps.tiling.applyFrame(tracked, rect, screen, false, 'escape-clamped', 0);
@@ -2773,6 +2782,7 @@ export class WindowSession {
       const target = this.nearestIndexHoldingWindows(state, manager.get_active_workspace_index(), reapSet);
       if (target >= 0) this.activateWorkspace(target);
     }
+    const removed: number[] = [];
     for (const index of [...plan.reap].sort((a, b) => b - a)) {
       if (manager.get_n_workspaces() <= 1) break;
       const workspace = manager.get_workspace_by_index(index);
@@ -2781,8 +2791,12 @@ export class WindowSession {
       if (workspace.list_windows().length > 0) continue;
       if (manager.get_active_workspace_index() === index) continue;
       manager.remove_workspace(workspace, global.get_current_time());
+      removed.push(index);
       this.deps.history.log('ws_removed', { workspaceId: index, reason: 'reaped' });
     }
+    // §10: a reaped workspace's ratio goes with it, and the workspaces to its
+    // right shift down an index, so their ratios move too.
+    this.deps.tiling.reindexRatiosAfterReap(removed);
     this.realignWorkspaces();
     this.signatures.clearAll();
   }
@@ -2940,7 +2954,7 @@ export class WindowSession {
     }
     const crossed = this.crossedWindow(tracked);
     const env = this.placementEnv(tracked.surface.screenId);
-    const state = this.buildPlacementState(tracked.id);
+    const state = this.buildPlacementState(tracked.id, tracked.surface.screenId);
     const result = dropPlacement(state, env, tracked.id, tracked.surface.workspaceId, from, crossed);
     this.applyDropResult(tracked, result);
   }
@@ -3292,7 +3306,7 @@ export class WindowSession {
     }
     const crossed = samePlane ? this.crossedWindow(tracked) : null;
     return dragOutcome({
-      state: this.buildPlacementState(tracked.id),
+      state: this.buildPlacementState(tracked.id, tracked.surface.screenId),
       env: this.placementEnv(tracked.surface.screenId),
       id: tracked.id,
       workspace: tracked.surface.workspaceId,
