@@ -13,3 +13,30 @@
   border-radius: 8px;
   background-color: rgba(246, 211, 45, 0.15);
 }
+
+/* The bug-recorder observation prompt (§22 extension). */
+.adrt-recording-overlay {
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+.adrt-recording-body {
+  background-color: #2b2b2b;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  padding: 18px;
+  min-width: 360px;
+}
+
+.adrt-recording-title {
+  color: #ffffff;
+  font-weight: bold;
+}
+
+.adrt-recording-hint {
+  color: #b0b0b0;
+  font-size: 0.9em;
+}
+
+.adrt-recording-buttons {
+  padding-top: 6px;
+}

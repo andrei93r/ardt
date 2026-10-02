@@ -43,6 +43,7 @@ import { GnomeIndicator } from './indicator.js';
 import { EventJournal } from './journal.js';
 import { AdrtPanel } from './panel.js';
 import { Recorder } from './recorder.js';
+import { RecordingPrompt } from './recording-prompt.js';
 import { RegistryStore } from './registry.js';
 import { WindowSession } from './session.js';
 import type { TrackedWindow } from './tracked-window.js';
@@ -136,6 +137,8 @@ export default class AdrtExtension extends Extension {
   private panel: AdrtPanel | null = null;
   /** The start/stop bug recorder; inert until a `StartRecording` request. */
   private recorder: Recorder | null = null;
+  /** The observation prompt shown after a user stop; null outside `enable()`. */
+  private recordingPrompt: RecordingPrompt | null = null;
   /** A mode injected by the test trigger, overriding the live session mode. */
   private injectedMode: SessionMode | null = null;
 
@@ -311,6 +314,9 @@ export default class AdrtExtension extends Extension {
       snapshot: () => this.recordSnapshot(),
       onChanged: () => this.syncPanel(),
     });
+    // §22 extension: the observation prompt. Built empty; `show()` is lazy so
+    // no Shell chrome exists until a user stop actually needs it.
+    this.recordingPrompt = new RecordingPrompt();
 
     // §1: the on-screen presence. Built after the session so its callbacks can
     // read the live pause predicate; it owns no state of its own.
@@ -446,6 +452,10 @@ export default class AdrtExtension extends Extension {
     });
     this.teardown('dbus', () => {
       if (this.dbus !== undefined) this.dbus.unexpose();
+    });
+    this.teardown('recording-prompt', () => {
+      this.recordingPrompt?.close();
+      this.recordingPrompt = null;
     });
     this.teardown('recorder', () => {
       this.recorder?.destroy('disable');
@@ -1357,6 +1367,7 @@ export default class AdrtExtension extends Extension {
   private keybindingSettingNames(): string[] {
     return [
       'kb-undo',
+      'kb-recording-toggle',
       'kb-focus-next',
       'kb-focus-left',
       'kb-focus-right',
@@ -1415,6 +1426,11 @@ export default class AdrtExtension extends Extension {
     switch (name) {
       case 'kb-undo':
         this.session.undo();
+        break;
+      case 'kb-recording-toggle':
+        // The hotkey goes through the same one action as the panel row and the
+        // D-Bus trigger, so all three always agree.
+        this.toggleRecording();
         break;
       case 'kb-focus-next':
         this.session.focusCycle();
@@ -1992,6 +2008,8 @@ export default class AdrtExtension extends Extension {
       StartRecording: (maxSeconds) => this.startRecording(maxSeconds),
       StopRecording: () => this.stopRecording(),
       RecordingStatus: () => this.recordingStatus(),
+      ToggleRecording: () => this.toggleRecordingState(),
+      SubmitRecordingNote: (text) => this.submitRecordingNote(text),
       SetSetting: (key, value) => this.writeSetting('org.gnome.shell.extensions.adrt', key, value),
       SetSchemaSetting: (schema, key, value) => this.writeSetting(schema, key, value),
       MinimizeWindow: (id) => {
@@ -2123,11 +2141,16 @@ export default class AdrtExtension extends Extension {
     }
   }
 
-  /** Stop the bug recorder; returns its file path or a clear error string. */
+  /**
+   * Stop the bug recorder (a user stop). Returns the path; the footer is
+   * deferred so the observation prompt can write a note first.
+   */
   private stopRecording(): string {
     if (this.recorder === null) return 'error: recorder unavailable';
     try {
-      return this.recorder.stop('user');
+      const path = this.recorder.stop('user', true);
+      if (!path.startsWith('error:')) this.showRecordingPrompt();
+      return path;
     } catch (error) {
       this.reportError('stop-recording', error);
       return `error: ${(error as Error).message}`;
@@ -2135,14 +2158,56 @@ export default class AdrtExtension extends Extension {
   }
 
   private recordingStatus(): string {
-    return this.recorder?.status() ?? '{"recording":false,"path":null,"elapsedMs":0,"bytes":0,"events":0,"snapshots":0}';
+    if (this.recorder === null) {
+      return '{"recording":false,"path":null,"elapsedMs":0,"bytes":0,"events":0,"snapshots":0,"stopReason":null,"promptOpen":false,"note":"","promptMechanism":null}';
+    }
+    // `promptMechanism` is the extension's view of the prompt UI (`modal` or
+    // `overlay`), add-only so a test can prove the prompt actually exists.
+    return JSON.stringify({ ...this.recorder.describe(), promptMechanism: this.recordingPrompt?.kind ?? null });
   }
 
-  /** The panel's one action: flip recording on/off in place. */
+  /**
+   * The one action shared by the hotkey, the panel row and the D-Bus
+   * `ToggleRecording` trigger: flip recording on/off in place. Stopping shows
+   * the observation prompt; starting closes any prompt left from a previous
+   * stop so its file is closed with no note.
+   */
   private toggleRecording(): void {
     if (this.recorder === null) return;
-    if (this.recorder.isRecording) this.recorder.stop('user');
-    else this.recorder.start(0);
+    if (this.recorder.isRecording) {
+      this.stopRecording();
+      return;
+    }
+    this.recordingPrompt?.close();
+    this.recorder.start(0);
+  }
+
+  /** The D-Bus `ToggleRecording` trigger: toggle, then return the new status. */
+  private toggleRecordingState(): string {
+    this.toggleRecording();
+    return this.recordingStatus();
+  }
+
+  /** Show the observation prompt for a deferred user stop. */
+  private showRecordingPrompt(): void {
+    if (this.recordingPrompt === null) return;
+    this.recordingPrompt.show({
+      onSubmit: (text) => this.submitRecordingNote(text),
+      onCancel: () => {
+        this.recorder?.cancelNote();
+      },
+    });
+  }
+
+  /**
+   * D-Bus `SubmitRecordingNote` and the prompt's Save: close the deferred stop
+   * with the note. Returns false when no stop is awaiting one.
+   */
+  private submitRecordingNote(text: string): boolean {
+    if (this.recorder === null || !this.recorder.isAwaitingNote) return false;
+    this.recordingPrompt?.close();
+    const path = this.recorder.finalizeNote(text);
+    return !path.startsWith('error:');
   }
 
   /**
@@ -2242,6 +2307,9 @@ export default class AdrtExtension extends Extension {
         bytes: 0,
         events: 0,
         snapshots: 0,
+        stopReason: null,
+        promptOpen: false,
+        note: '',
       },
       workspaceMode: this.readWorkspaceModeSettings(),
       errors: this.errorCount,

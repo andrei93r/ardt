@@ -10,12 +10,18 @@
  *   {"kind":"header", ...}  the build, environment, monitors, settings
  *   {"kind":"event",  ...}  every journal record as it is written
  *   {"kind":"state",  ...}  a ~20 Hz snapshot, deduped while the screen is still
- *   {"kind":"footer", ...}  why it stopped and its totals
+ *   {"kind":"note",   ...}  what the user observed (user stops only)
+ *   {"kind":"footer", ...}  why it stopped, its totals and the note
  *
  * It is inert when off: no journal sink and no timer of its own. The
  * extension's existing motion tick drives `tick()`; the journal drives
  * `onJournal()`. The pure decisions (name, caps, rotation, cadence, formats)
  * live in `core/recording.ts`.
+ *
+ * A *user* stop defers the footer: the sink is detached and the file is left
+ * open so the observation prompt can write a `note` line first. `finalizeNote`
+ * (submit or cancel) writes the footer; a `cap`/`disable` stop writes it at
+ * once and never prompts.
  */
 
 import Gio from 'gi://Gio';
@@ -29,6 +35,8 @@ import {
   footerRecord,
   headerRecord,
   MAX_RECORDING_FILES,
+  normalizeNote,
+  noteRecord,
   recordingFileName,
   recordingsToDelete,
   sampleDue,
@@ -76,6 +84,10 @@ export interface RecordingStatus {
   maxMs: number;
   maxBytes: number;
   stopReason: string | null;
+  /** True while a user stop is waiting for the observation prompt. */
+  promptOpen: boolean;
+  /** The note recorded so far (empty until a submit). */
+  note: string;
 }
 
 /** UTF-8 encode one line; `TextEncoder` is present in the GJS GNOME ships. */
@@ -105,11 +117,20 @@ export class Recorder {
   private maxMs = 0;
   private maxBytes = DEFAULT_MAX_BYTES;
   private stopReason: StopReason | null = null;
+  /** A user stop whose footer waits for the observation prompt. */
+  private awaitingNote = false;
+  private pendingReason: StopReason | null = null;
+  private lastNote = '';
 
   constructor(private readonly deps: RecorderDeps) {}
 
   get isRecording(): boolean {
     return this.recording;
+  }
+
+  /** True while a user stop is waiting for the observation prompt. */
+  get isAwaitingNote(): boolean {
+    return this.awaitingNote;
   }
 
   /**
@@ -118,9 +139,12 @@ export class Recorder {
    */
   start(maxSeconds?: number): string {
     if (this.recording) return `error: already recording to ${this.path ?? '?'}`;
+    // A pending note from a previous user stop would otherwise strand a file
+    // without a footer; close it with no note before opening a new one.
+    if (this.awaitingNote) this.finalizeNote('');
     const now = new Date();
     this.rotate();
-    this.path = `${recordingDir()}/${recordingFileName(now)}`;
+    this.path = this.freePath(now);
     this.startedAtMs = now.getTime();
     this.elapsedAtStop = 0;
     this.bytes = 0;
@@ -130,6 +154,9 @@ export class Recorder {
     this.lastSampleMs = 0;
     this.lastKey = '';
     this.stopReason = null;
+    this.awaitingNote = false;
+    this.pendingReason = null;
+    this.lastNote = '';
     this.maxMs = clampMaxSeconds(maxSeconds);
     this.maxBytes = DEFAULT_MAX_BYTES;
     this.recording = true;
@@ -143,8 +170,12 @@ export class Recorder {
     return this.path;
   }
 
-  /** End the recording with `reason`. Returns the path (or a not-recording error). */
-  stop(reason: StopReason): string {
+  /**
+   * End the recording with `reason`. Returns the path (or a not-recording
+   * error). `deferFooter` is the user-stop path: the file stays open so the
+   * observation prompt can write a `note` line before the footer.
+   */
+  stop(reason: StopReason, deferFooter = false): string {
     if (!this.recording || this.path === null) return 'error: not recording';
     const path = this.path;
     const at = Date.now();
@@ -153,18 +184,36 @@ export class Recorder {
     this.stopReason = reason;
     this.elapsedAtStop = at - this.startedAtMs;
     this.bytesAtStop = this.bytes;
-    this.writeLine(
-      footerRecord(at, {
-        reason,
-        durationMs: this.elapsedAtStop,
-        events: this.events,
-        snapshots: this.snapshots,
-        bytes: this.bytesAtStop,
-        path,
-      }),
-    );
+    if (deferFooter) {
+      this.awaitingNote = true;
+      this.pendingReason = reason;
+    } else {
+      this.writeFooter(reason, '');
+    }
     this.deps.onChanged();
     return path;
+  }
+
+  /**
+   * Resolve a deferred user stop: write the note (when non-empty) and then the
+   * footer. `finalizeNote('')` is the cancel path and records no note. Returns
+   * the path, or an error when nothing is awaiting one.
+   */
+  finalizeNote(text: string): string {
+    if (!this.awaitingNote || this.path === null) return 'error: no recording awaiting a note';
+    const note = normalizeNote(text);
+    this.lastNote = note;
+    if (note.length > 0) this.writeLine(noteRecord(Date.now(), note));
+    this.writeFooter(this.pendingReason ?? 'user', note);
+    this.awaitingNote = false;
+    this.pendingReason = null;
+    this.deps.onChanged();
+    return this.path;
+  }
+
+  /** Cancel a deferred note: close the file with an empty note. */
+  cancelNote(): string {
+    return this.finalizeNote('');
   }
 
   /**
@@ -202,6 +251,8 @@ export class Recorder {
       maxMs: this.maxMs,
       maxBytes: this.maxBytes,
       stopReason: this.stopReason,
+      promptOpen: this.awaitingNote,
+      note: this.lastNote,
     };
   }
 
@@ -209,10 +260,31 @@ export class Recorder {
     return JSON.stringify(this.describe());
   }
 
-  /** Stop cleanly on `disable()` (or any other reason) and detach the sink. */
+  /**
+   * Stop cleanly on `disable()` (or any other reason) and detach the sink. A
+   * deferred user note is closed with no note first, so no file is ever left
+   * without a footer; `disable` never opens the prompt (the caller never does).
+   */
   destroy(reason: StopReason = 'disable'): void {
+    if (this.awaitingNote) this.finalizeNote('');
     if (this.recording) this.stop(reason);
     this.deps.journal.setSink(null);
+  }
+
+  /** Write the footer for the totals already captured by `stop`. */
+  private writeFooter(reason: StopReason, note: string): void {
+    if (this.path === null) return;
+    this.writeLine(
+      footerRecord(Date.now(), {
+        reason,
+        durationMs: this.elapsedAtStop,
+        events: this.events,
+        snapshots: this.snapshots,
+        bytes: this.bytesAtStop,
+        note,
+        path: this.path,
+      }),
+    );
   }
 
   private headerFields(): Record<string, unknown> {
@@ -247,6 +319,24 @@ export class Recorder {
     return true;
   }
 
+  /**
+   * The first `rec-YYYYMMDD-HHMMSS[-N].jsonl` under the recordings dir that does
+   * not already exist. Two sessions in the same second must never append to the
+   * same file; the suffix keeps the timestamped name and stays unique.
+   */
+  private freePath(now: Date): string {
+    const dir = recordingDir();
+    for (let occurrence = 1; occurrence <= 999; occurrence += 1) {
+      const candidate = `${dir}/${recordingFileName(now, occurrence)}`;
+      try {
+        if (!Gio.File.new_for_path(candidate).query_exists(null)) return candidate;
+      } catch {
+        return candidate;
+      }
+    }
+    return `${dir}/${recordingFileName(now)}`;
+  }
+
   /** Keep only the newest files, leaving room for the one about to start. */
   private rotate(): void {
     try {
@@ -260,7 +350,7 @@ export class Recorder {
       let info: any;
       while ((info = enumerator.next_file(null)) !== null) {
         const name: string = info.get_name();
-        if (/^rec-\d{8}-\d{6}\.jsonl$/.test(name)) names.push(name);
+        if (/^rec-\d{8}-\d{6}(-\d+)?\.jsonl$/.test(name)) names.push(name);
       }
       for (const name of recordingsToDelete(names, MAX_RECORDING_FILES - 1)) {
         try {

@@ -27,9 +27,29 @@ export const SNAPSHOT_INTERVAL_MS = 50;
 /** Bounds on the start trigger's optional `maxSeconds` cap. */
 export const MIN_CAP_SECONDS = 1;
 export const MAX_CAP_SECONDS = 60 * 60;
+/** The note a user types when a recording stops is bounded too (§22 extension). */
+export const NOTE_MAX_LENGTH = 2000;
 
 /** Why a recording stopped. `user` and `disable` are explicit; `cap` is a bound. */
 export type StopReason = 'user' | 'cap' | 'disable';
+
+/**
+ * Clean a user note: normalise line endings, drop other control characters
+ * (keeping tab and newline), trim the edges and cap the length. The note is
+ * untrusted text headed for a JSONL file and the shell, so this is the one
+ * place it is made safe; JSON escaping itself is `JSON.stringify`'s job.
+ */
+export function normalizeNote(text: string): string {
+  const normalized = text.replace(/\r\n?/g, '\n');
+  let cleaned = '';
+  for (const character of normalized) {
+    const code = character.codePointAt(0) ?? 0;
+    const control = code === 0x7f || (code < 0x20 && character !== '\n' && character !== '\t');
+    cleaned += control ? ' ' : character;
+  }
+  const trimmed = cleaned.trim();
+  return trimmed.length > NOTE_MAX_LENGTH ? trimmed.slice(0, NOTE_MAX_LENGTH) : trimmed;
+}
 
 function pad2(value: number): string {
   return value < 10 ? `0${value}` : `${value}`;
@@ -38,12 +58,18 @@ function pad2(value: number): string {
 /**
  * `rec-YYYYMMDD-HHMMSS.jsonl` from a local-time timestamp. One file per
  * recording session, so the newest is always the one a user just produced.
+ *
+ * `occurrence` disambiguates a second recording that starts in the *same*
+ * second: 1 is the plain name, 2 is `rec-…-2.jsonl`, and so on. The adapter
+ * picks the first name whose file does not exist, so two sessions in one second
+ * never interleave into one file.
  */
-export function recordingFileName(date: Date): string {
+export function recordingFileName(date: Date, occurrence = 1): string {
   const stamp =
     `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}` +
     `-${pad2(date.getHours())}${pad2(date.getMinutes())}${pad2(date.getSeconds())}`;
-  return `rec-${stamp}.jsonl`;
+  const suffix = occurrence > 1 ? `-${Math.floor(occurrence)}` : '';
+  return `rec-${stamp}${suffix}.jsonl`;
 }
 
 /**
@@ -126,6 +152,16 @@ export function eventRecord(t: number, entry: Record<string, unknown>): Record<s
 /** One `state` line: the periodic snapshot, inlined under the line timestamp. */
 export function stateRecord(t: number, snapshot: Record<string, unknown>): Record<string, unknown> {
   return { ...snapshot, kind: 'state', t };
+}
+
+/**
+ * One `note` line: what the user observed, written *before* the footer after a
+ * user-initiated stop. Add-only, so a reader that does not know it can ignore
+ * it; the footer also carries the same text so the file is self-contained from
+ * its last line alone.
+ */
+export function noteRecord(t: number, text: string): Record<string, unknown> {
+  return { kind: 'note', t, text };
 }
 
 /** One `footer` line: why and when the recording ended, and its totals. */

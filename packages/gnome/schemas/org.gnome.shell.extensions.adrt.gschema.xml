@@ -341,6 +341,11 @@
       <summary>Undo</summary>
       <description>Undo the last retile.</description>
     </key>
+    <key name="kb-recording-toggle" type="as">
+      <default>['&lt;Super&gt;&lt;Shift&gt;r']</default>
+      <summary>Record a bug</summary>
+      <description>Start a bug recording, or stop it and ask what you observed.</description>
+    </key>
     <key name="kb-focus-next" type="as">
       <default>['&lt;Super&gt;grave']</default>
       <summary>Focus next</summary>

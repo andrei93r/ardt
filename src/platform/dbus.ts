@@ -49,6 +49,8 @@ export interface DbusHandlers {
   StartRecording(maxSeconds: number): string;
   StopRecording(): string;
   RecordingStatus(): string;
+  ToggleRecording(): string;
+  SubmitRecordingNote(text: string): boolean;
   /* §40.4 test-only settings writers (gated on ADRT_TEST_TRIGGERS=1). */
   SetSetting(key: string, value: string): boolean;
   SetSchemaSetting(schema: string, key: string, value: string): boolean;
