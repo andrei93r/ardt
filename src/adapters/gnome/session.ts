@@ -28,6 +28,7 @@ import {
 import type { Axis, Env, Placement, ScreenClass, State, Win, Ws } from '../../core/placement.js';
 import { dragOutcome } from '../../core/drag.js';
 import type { DragOutcome } from '../../core/drag.js';
+import { dragIsWindowMove } from '../../core/windowmove.js';
 import { reapPlan } from '../../core/workspaces.js';
 import type { Change, ChangeLog, InstanceConfig, LiveInstance } from '../../core/undo.js';
 import { validateChange } from '../../core/undo.js';
@@ -35,6 +36,11 @@ import { validateChange } from '../../core/undo.js';
 /** §10: how long a maintenance pass waits for the surface to settle (struts are
  * set asynchronously by the Shell; internal safety, not a frame cadence). */
 const MAINTENANCE_SETTLE_MS = 200;
+/** §11/§35: the clamp pass treats an apply this recent as in flight. Matches the
+ * window `planMismatch` already uses to leave a landing apply alone, so the
+ * clamp and the tiler agree on when a transition has finished. Internal timing,
+ * not a frame cadence. */
+const CLAMP_DEFER_MS = 500;
 import { checkPlan } from '../../core/invariants.js';
 import { SignatureCache, planSignature, shouldApplyPlan } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
@@ -158,6 +164,12 @@ export class WindowSession {
    * no drop interpretation.
    */
   private clientInteracting = false;
+  /**
+   * §6/§11: the in-flight grab began on a window adrt had not placed yet (a
+   * Chrome tab tear-off creating its own window). Such a gesture is not a window
+   * move: `endDrag` interprets no drop and only routes the newcomer once.
+   */
+  private dragTearOff = false;
   private dragStartRect: Rect | null = null;
   /** The window being dragged, so the preview overlay can follow it (§6/§11). */
   private dragId: number | null = null;
@@ -330,6 +342,18 @@ export class WindowSession {
     const tracked = this.windows.get(id);
     if (tracked === undefined) return false;
     if (this.dragging) return true;
+    // §6/§11: a grab on a window adrt has not placed yet is a tab tear-off, not
+    // a window move. The app created the window during the gesture (Chrome,
+    // VS Code) and is moving it itself; it has no slot to swap out of, so its
+    // drop must not be interpreted. Freeze reflow while the gesture owns the
+    // geometry and route the newcomer once at the end.
+    if (!dragIsWindowMove({ ready: tracked.ready, routePending: tracked.routePending })) {
+      this.dragTearOff = true;
+      this.clientInteracting = true;
+      this.deps.onDragChanged(true);
+      return true;
+    }
+    this.dragTearOff = false;
     // A real Meta grab supersedes a client-interaction freeze: the move is now
     // adrt's to follow and its drop to interpret.
     this.clientInteracting = false;
@@ -358,6 +382,7 @@ export class WindowSession {
 
   private abandonDrag(reason: string): void {
     this.dragging = false;
+    this.dragTearOff = false;
     this.dragId = null;
     this.dragLastActivityMs = 0;
     this.dragStartRect = null;
@@ -377,12 +402,22 @@ export class WindowSession {
     const tracked = this.windows.get(id);
     if (tracked === undefined) return false;
     const wasDragging = this.dragging;
+    const wasTearOff = this.dragTearOff;
     this.dragging = false;
+    this.dragTearOff = false;
     this.clientInteracting = false;
     this.dragId = null;
     this.dragLastActivityMs = 0;
     this.deps.onDragChanged(false);
-    if (!wasDragging) return true;
+    if (!wasDragging) {
+      // §6/§11: a tab tear-off interprets no drop. The freeze lifts and the
+      // next drain routes the newcomer exactly once.
+      if (wasTearOff) {
+        this.signatures.clearAll();
+        this.scheduleReconcile('tear-off');
+      }
+      return true;
+    }
 
     tracked.refreshFrame();
     this.dropPending.set(id, { mode: this.adjustMode(tracked), start: this.dragStartRect });
@@ -3505,11 +3540,14 @@ export class WindowSession {
   }
 
   /**
-   * Keep every tracked window inside its own monitor's **full geometry** (the
-   * whole screen surface, not the work area). A property re-derived by the
-   * lane-2 drain and the periodic coherence sweep, never a one-shot reaction to
-   * a move, so a window dragged out of bounds is clamped on the next pass after
-   * the drag ends and dragging still feels free.
+   * Keep every tracked window inside its own monitor's **work area** (the
+   * surface minus struts), the same reference the tiler plans against. Using
+   * the full geometry instead pulled a window under the top bar — `y=679` where
+   * the tiler wanted the work-area top `y=711` — so the clamp and the tiler
+   * wrote two different rects forever. A property re-derived by the lane-2 drain
+   * and the periodic coherence sweep, never a one-shot reaction to a move, so a
+   * window dragged out of bounds is clamped on the next pass after the drag ends
+   * and dragging still feels free.
    *
    * Fullscreen windows (they own the screen) and minimized windows (Mutter
    * manages their frame) are skipped. A tiled/maximized window is already inside
@@ -3522,12 +3560,19 @@ export class WindowSession {
     if (!this.deps.settings.boolean('clamp-windows-to-screen', true)) return;
     // No clamping mid-drag: the user owns the geometry until the gesture ends.
     if (this.dragging || this.adjustId !== null) return;
+    // §11/§35: an apply the tiler has in flight is an intermediate frame, not an
+    // off-screen float. Clamping it writes a rect derived from that frame and
+    // races the animation; worse, its own apply resets the "recently moved"
+    // clock, so `planMismatch` keeps returning false and the next drain clamps
+    // again — an unbounded loop. Defer until the transition has landed. A
+    // skipping app (Chrome/VS Code) never animates, so the recent-apply window
+    // is what catches it there.
+    const settling = this.deps.tiling.activeAnimations > 0 || Date.now() - this.deps.tiling.lastApplyAtMs < CLAMP_DEFER_MS;
     for (const tracked of this.windows.values()) {
       const flags = tracked.surface.flags;
-      // A window that has not been adopted or routed yet, or that reports a
-      // degenerate frame, is not an off-screen float: clamping it would place a
-      // zero-sized rect at the work-area origin and race the tile apply that is
-      // routing it (the visible jump/tear). See `shouldClampWindow`.
+      // A window that has not been adopted or routed yet, that reports a
+      // degenerate frame, or that the tiler is mid-transition for is not an
+      // off-screen float. See `shouldClampWindow`.
       if (
         !shouldClampWindow({
           ready: tracked.ready,
@@ -3535,6 +3580,7 @@ export class WindowSession {
           fullscreen: flags.fullscreen,
           minimized: flags.minimized,
           stubborn: tracked.stubborn,
+          settling,
           frame: tracked.surface.frame,
         })
       ) {
@@ -3545,7 +3591,7 @@ export class WindowSession {
       if (screen === null) continue;
       tracked.refreshFrame();
       const current = tracked.surface.frame;
-      const clamped = clampRectToArea(current, screen.geometry);
+      const clamped = clampRectToArea(current, screenArea(screen));
       if (rectEquals(current, clamped)) {
         tracked.clamped = false;
         continue;

@@ -29,6 +29,27 @@ sys.exit(0 if r['x'] >= g['x'] and r['y'] >= g['y']
          and r['y'] + r['height'] <= g['y'] + g['height'] else 1)"
 }
 
+# $1 = window id; succeeds when its rect lies fully inside its own monitor's
+# *work area* (the surface minus struts). The clamp must target the same area
+# the tiler plans against; the full geometry pulls a window under the top bar.
+inside_workarea() {
+  local id="$1"
+  wait_python "${2:-15}" "
+import json, sys
+d = json.load(sys.stdin)
+w = next((x for x in d['windows'] if x['id'] == $id), None)
+if not w:
+    sys.exit(1)
+m = next((m for m in d['monitors'] if m['index'] == w['monitor']), None)
+if m is None:
+    sys.exit(1)
+a = m.get('workArea') or m['geometry']
+r = w['rect']
+sys.exit(0 if r['x'] >= a['x'] and r['y'] >= a['y']
+         and r['x'] + r['width'] <= a['x'] + a['width']
+         and r['y'] + r['height'] <= a['y'] + a['height'] else 1)"
+}
+
 # $1 = window id; succeeds when its rect is NOT fully inside its monitor.
 outside_geometry() {
   local id="$1"
@@ -119,6 +140,20 @@ print('window', (w or {}).get('rect'), 'counter', d.get('counters', {}).get('cla
 sys.exit(1)"
 fi
 
+# The clamp reference is the work area, not the full geometry: a window larger
+# than the monitor is shrunk to the work area (under the top bar would leave the
+# window partly hidden and disagree with the tiler's own plan forever).
+if inside_workarea "$float" 5; then
+  pass "the clamped float is inside the work area (not just the geometry)"
+else
+  check_python "the clamped float is inside the work area (not just the geometry)" "
+import json, sys
+d = json.load(sys.stdin)
+w = next((x for x in d['windows'] if x['id'] == $float), None)
+print('window', (w or {}).get('rect'), 'monitors', [(m['index'], m['geometry'], m.get('workArea')) for m in d['monitors']])
+sys.exit(1)"
+fi
+
 # DumpState must expose that a clamp was applied (add-only field).
 assert_num "the clamp counter grew" ">" "$(counter clampsApplied)" "$clamps_before"
 
@@ -151,5 +186,39 @@ else
 fi
 
 set_setting clamp-windows-to-screen true
+
+# 5. The clamp defers to an in-flight tile apply. A *tiled* window moved off its
+# slot is the tiler's to pull back; a clamp that fires while the reflow is
+# animating reads the intermediate frame, writes a clamped rect and races the
+# animation (the live Chrome/VS Code "jump/tear"). The pass must not run while
+# an animation is live or an apply just landed. Un-float the float so the pair
+# is tiled again, then shove the tile off its monitor.
+adrt ToggleFloat "$float" >/dev/null
+wait_settled 15
+clamps_before="$(counter clampsApplied)"
+adrt MoveWindow "$tile" -400 -300 500 400 >/dev/null
+if inside_geometry "$tile" 15; then
+  pass "a tiled window moved off its slot is re-tiled inside the monitor"
+else
+  fail "a tiled window was left outside its monitor after an off-slot move"
+fi
+if [ "$(counter clampsApplied)" = "$clamps_before" ]; then
+  pass "the clamp does not fire during an in-flight tile apply"
+else
+  fail "the clamp fired while the tile apply was in flight ($clamps_before -> $(counter clampsApplied))"
+fi
+# A clamp that fights the apply drives the retry ladder to a `stubborn` record
+# (the live Chrome/VS Code escalation). The deferral must leave none.
+check_python "the off-slot move did not make the tile stubborn" '
+import json,sys
+d = json.load(sys.stdin)
+w = next((x for x in d["windows"] if x["id"] == int("'"$tile"'")), None)
+if w is None:
+    print("window gone"); sys.exit(1)
+if w.get("stubborn"):
+    print("stubborn set", w.get("rect")); sys.exit(1)
+print("not stubborn")
+'
+
 ensure_clean
 summary

@@ -179,6 +179,10 @@ export default class AdrtExtension extends Extension {
   /** Set only if adrt ever writes GNOME's animation state (never today). */
   private animationsMutated = false;
   private occluded = false;
+  /** Last `(visible,id,rect)` the border was drawn at, so `border focus` logs only on change (§22). */
+  private lastBorderDraw = '';
+  /** Last drop-assist overlay, so `preview_show`/`preview_hide` log only on change (§22). */
+  private lastPreviewDraw = '';
   private wsSwitchEvents = 0;
   private motionSuppressions = 0;
   private settingWatchers: (() => void)[] = [];
@@ -1056,10 +1060,25 @@ export default class AdrtExtension extends Extension {
       this.border.updateRect(focused.surface.frame);
     }
     const snapshot = this.border.snapshot();
-    if (snapshot.visible && snapshot.rect !== null && !this.isPaused() && !overview.visible) {
+    const visible = snapshot.visible && snapshot.rect !== null && !this.isPaused() && !overview.visible;
+    if (visible && snapshot.rect !== null) {
       this.indicator.show(snapshot.rect);
     } else {
       this.indicator.hide();
+    }
+    // §22: record where the highlight is actually drawn, not only when it is
+    // suppressed. A highlight at the wrong rect or on the wrong screen leaves no
+    // other trace. One line per `(visible, id, rect)` change; nothing when the
+    // redraw does not move it.
+    const rect = visible ? snapshot.rect : null;
+    const key = rect === null ? 'hidden' : `${this.border.focusedId}:${rect.x},${rect.y},${rect.width},${rect.height}`;
+    if (key !== this.lastBorderDraw) {
+      this.lastBorderDraw = key;
+      this.journal.record('border', 'focus', {
+        id: visible ? this.border.focusedId : null,
+        rect,
+        monitor: rect === null ? null : (this.screenIndexForRect(rect) ?? null),
+      });
     }
   }
 
@@ -1082,11 +1101,32 @@ export default class AdrtExtension extends Extension {
    */
   private syncPreview(): void {
     const target = this.session.isDragging ? this.session.previewTarget() : null;
-    if (target === null || this.isPaused() || overview.visible) {
+    const hidden = target === null || this.isPaused() || overview.visible;
+    if (hidden) {
       this.indicator.hidePreview();
-      return;
+    } else {
+      this.indicator.showPreview(target.rect);
     }
-    this.indicator.showPreview(target.rect);
+    // §22: the drop-assist overlay leaves no other trace, so log where it is
+    // shown (and that it went away) on transitions only — a stale overlay after
+    // the gesture ends is then visible in the journal.
+    const drag = this.session.dragState();
+    const id = drag.dragId ?? drag.adjustId;
+    const key = hidden
+      ? 'hidden'
+      : `${id}:${target.kind}:${target.rect.x},${target.rect.y},${target.rect.width},${target.rect.height}`;
+    if (key === this.lastPreviewDraw) return;
+    this.lastPreviewDraw = key;
+    if (hidden) {
+      this.journal.record('border', 'preview_hide', { id });
+    } else if (target !== null) {
+      this.journal.record('border', 'preview_show', {
+        id,
+        kind: target.kind,
+        rect: target.rect,
+        monitor: this.screenIndexForRect(target.rect) ?? null,
+      });
+    }
   }
 
   /**
