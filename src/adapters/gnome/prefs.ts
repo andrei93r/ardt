@@ -282,6 +282,10 @@ export const PREFERENCES_LAYOUT: readonly PageSpec[] = [
         ],
       },
       {
+        title: _('Recording'),
+        rows: [{ key: 'kb-recording-toggle', kind: 'accelerator', title: _('Record a bug') }],
+      },
+      {
         title: _('History'),
         rows: [{ key: 'kb-undo', kind: 'accelerator', title: _('Undo') }],
       },

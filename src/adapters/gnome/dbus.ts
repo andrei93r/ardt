@@ -95,6 +95,8 @@ const INTERFACE_XML = `
     <method name="StartRecording"><arg type="i" direction="in"/><arg type="s" direction="out"/></method>
     <method name="StopRecording"><arg type="s" direction="out"/></method>
     <method name="RecordingStatus"><arg type="s" direction="out"/></method>
+    <method name="ToggleRecording"><arg type="s" direction="out"/></method>
+    <method name="SubmitRecordingNote"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
 
     <!-- Stage 4/5: the app registry and the display fixtures. -->
     <method name="GetRegistry"><arg type="s" direction="out"/></method>

@@ -15,6 +15,9 @@ import {
   MAX_CAP_SECONDS,
   MAX_RECORDING_FILES,
   MIN_CAP_SECONDS,
+  NOTE_MAX_LENGTH,
+  normalizeNote,
+  noteRecord,
   recordingFileName,
   recordingsToDelete,
   sampleDue,
@@ -32,6 +35,13 @@ describe('recordingFileName', () => {
 
   it('zero-pads every component', () => {
     expect(recordingFileName(new Date(2026, 0, 1, 0, 0, 0))).toBe('rec-20260101-000000.jsonl');
+  });
+
+  it('disambiguates a second session in the same second', () => {
+    const date = new Date(2026, 9, 2, 3, 4, 5);
+    expect(recordingFileName(date, 1)).toBe('rec-20261002-030405.jsonl');
+    expect(recordingFileName(date, 2)).toBe('rec-20261002-030405-2.jsonl');
+    expect(recordingFileName(date, 11)).toBe('rec-20261002-030405-11.jsonl');
   });
 });
 
@@ -138,5 +148,36 @@ describe('line formats', () => {
       reason: 'user',
       events: 2,
     });
+    // The footer carries the note too, so the file is self-contained from its
+    // last line; the note line is written before it.
+    const note = noteRecord(11, 'drag did not land');
+    const footer = footerRecord(12, { reason: 'user', note: 'drag did not land' });
+    expect(note).toEqual({ kind: 'note', t: 11, text: 'drag did not land' });
+    expect(footer.note).toBe(note.text);
+  });
+});
+
+describe('normalizeNote', () => {
+  it('trims and normalises line endings', () => {
+    expect(normalizeNote('  a\r\nb  ')).toBe('a\nb');
+    expect(normalizeNote('\r')).toBe('');
+    expect(normalizeNote('one line')).toBe('one line');
+  });
+
+  it('keeps tabs and newlines but replaces other control characters', () => {
+    expect(normalizeNote('a\tb')).toBe('a\tb');
+    expect(normalizeNote('a\u0007b\u007fc')).toBe('a b c');
+  });
+
+  it('caps the note length', () => {
+    const long = 'x'.repeat(NOTE_MAX_LENGTH + 500);
+    expect(normalizeNote(long)).toHaveLength(NOTE_MAX_LENGTH);
+  });
+
+  it('escapes safely when serialised into a JSONL line', () => {
+    const text = 'quote " and \\ and\nnewline';
+    const line = JSON.stringify(noteRecord(7, normalizeNote(text)));
+    expect(JSON.parse(line)).toEqual({ kind: 'note', t: 7, text: 'quote " and \\ and\nnewline' });
+    expect(line.includes('\n')).toBe(false);
   });
 });

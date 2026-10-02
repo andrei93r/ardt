@@ -98,6 +98,7 @@ declare module 'resource:///org/gnome/shell/ui/main.js' {
   export const wm: any;
   export const panel: any;
   export const stage: any;
+  export const uiGroup: any;
   export const messageTray: any;
   export function notify(title: string, message: string): void;
   export function pushModal(actor: any): void;
