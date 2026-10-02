@@ -61,6 +61,13 @@ export class GnomeSettings implements SettingsStore {
     return readVariant(this.settings, key);
   }
 
+  /** Every key's current value: the recorder's header snapshot, diagnostics. */
+  snapshot(): Record<string, SettingValue | undefined> {
+    const out: Record<string, SettingValue | undefined> = {};
+    for (const key of this.keys()) out[key] = this.read(key);
+    return out;
+  }
+
   write(key: string, value: unknown): boolean {
     const ok = writeVariant(this.settings, key, value);
     this.invalidateConfig();

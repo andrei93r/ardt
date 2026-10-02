@@ -64,6 +64,11 @@ export class EventJournal {
   private readonly decisions: JournalEntry[] = [];
   private written = 0;
   private maxBytes: number;
+  /**
+   * Optional sink for every written entry (the bug recorder, §22 extension).
+   * Null when nothing is recording, so the funnel costs one null check.
+   */
+  private sink: ((entry: JournalEntry) => void) | null = null;
 
   constructor(
     private readonly retentionDays = 30,
@@ -78,6 +83,15 @@ export class EventJournal {
 
   get entriesWritten(): number {
     return this.written;
+  }
+
+  /**
+   * Watch every entry as it is written, in order (the bug recorder). Pass null
+   * to detach. The sink runs before the file write and is never allowed to
+   * break logging.
+   */
+  setSink(sink: ((entry: JournalEntry) => void) | null): void {
+    this.sink = sink;
   }
 
   /** Record one raw platform event. Returns the entry, sequence assigned. */
@@ -170,6 +184,13 @@ export class EventJournal {
   }
 
   private writeLine(entry: JournalEntry): void {
+    if (this.sink !== null) {
+      try {
+        this.sink(entry);
+      } catch {
+        /* recording must never break logging */
+      }
+    }
     const base = `${journalDir()}/${dayString(new Date())}.jsonl`;
     let path = base;
     if (shouldRotate(this.sizeOf(base), this.maxBytes)) path = this.rotate(base);

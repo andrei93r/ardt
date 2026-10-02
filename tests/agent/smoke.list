@@ -146,6 +146,8 @@ A28-screen-sharing
 A148-sharing-opt-in
 # --- top-bar panel affordance: pause / highlight / preferences (§1) ---
 A147-panel
+# --- bug recorder: start/stop writes one bounded, timestamped log (§22 extension) ---
+A154-recording
 # --- workspace-mode settings re-derive at once (§1) ---
 A149-workspace-mode
 # --- error boundary: a caught throw does not take adrt down (§36) ---

@@ -41,6 +41,7 @@ import { History } from './history.js';
 import { GnomeIndicator } from './indicator.js';
 import { EventJournal } from './journal.js';
 import { AdrtPanel } from './panel.js';
+import { Recorder } from './recorder.js';
 import { RegistryStore } from './registry.js';
 import { WindowSession } from './session.js';
 import type { TrackedWindow } from './tracked-window.js';
@@ -132,6 +133,8 @@ export default class AdrtExtension extends Extension {
   private sessionMachine = new SessionMachine();
   /** The top-bar panel affordance; null until `enable()` builds it. */
   private panel: AdrtPanel | null = null;
+  /** The start/stop bug recorder; inert until a `StartRecording` request. */
+  private recorder: Recorder | null = null;
   /** A mode injected by the test trigger, overriding the live session mode. */
   private injectedMode: SessionMode | null = null;
 
@@ -291,6 +294,19 @@ export default class AdrtExtension extends Extension {
       isAnimating: () => this.animator.activeCount > 0,
     });
 
+    // §22 extension: the bug recorder. Constructed inert: it attaches no
+    // journal sink and arms no timer until `StartRecording`.
+    this.recorder = new Recorder({
+      journal: this.journal,
+      build: () => ({ version: RELEASE_VERSION, dirMtimeMs: this.buildDirMtimeMs }),
+      mode: () => this.sessionMachine.state.mode,
+      paused: () => this.isPaused(),
+      monitors: () => this.host.screens().map((screen) => ({ ...screen })),
+      settings: () => this.settings.snapshot(),
+      snapshot: () => this.recordSnapshot(),
+      onChanged: () => this.syncPanel(),
+    });
+
     // §1: the on-screen presence. Built after the session so its callbacks can
     // read the live pause predicate; it owns no state of its own.
     this.panel = new AdrtPanel({
@@ -298,6 +314,8 @@ export default class AdrtExtension extends Extension {
       setPaused: (paused) => this.setTilingPaused(paused),
       indicatorEnabled: () => this.settings.boolean('active-window-indicator', true),
       setIndicatorEnabled: (enabled) => this.settings.write('active-window-indicator', enabled),
+      recording: () => this.recorder?.isRecording ?? false,
+      toggleRecording: () => this.toggleRecording(),
       openPreferences: () => this.openPreferences(),
     });
 
@@ -423,6 +441,10 @@ export default class AdrtExtension extends Extension {
     });
     this.teardown('dbus', () => {
       if (this.dbus !== undefined) this.dbus.unexpose();
+    });
+    this.teardown('recorder', () => {
+      this.recorder?.destroy('disable');
+      this.recorder = null;
     });
     this.teardown('panel', () => {
       this.panel?.destroy();
@@ -817,6 +839,10 @@ export default class AdrtExtension extends Extension {
   }
 
   private onMotionTick(): boolean {
+    // §22 extension: the recorder's ~20 Hz state sample rides this existing tick
+    // (a no-op with no recording). It runs before the pause/park returns below so
+    // a still recording still sees the state that changed.
+    this.recorder?.tick();
     if (this.isPaused()) {
       this.stopMotionWatch();
       return GLib.SOURCE_REMOVE;
@@ -1922,6 +1948,9 @@ export default class AdrtExtension extends Extension {
         this.animator.stopRecording();
         return true;
       },
+      StartRecording: (maxSeconds) => this.startRecording(maxSeconds),
+      StopRecording: () => this.stopRecording(),
+      RecordingStatus: () => this.recordingStatus(),
       SetSetting: (key, value) => this.writeSetting('org.gnome.shell.extensions.adrt', key, value),
       SetSchemaSetting: (schema, key, value) => this.writeSetting(schema, key, value),
       MinimizeWindow: (id) => {
@@ -2040,6 +2069,76 @@ export default class AdrtExtension extends Extension {
     }
   }
 
+  // -------------------------------------------- bug recorder (§22 extension)
+
+  /** Start the bug recorder; returns its file path or a clear error string. */
+  private startRecording(maxSeconds: number): string {
+    if (this.recorder === null) return 'error: recorder unavailable';
+    try {
+      return this.recorder.start(maxSeconds);
+    } catch (error) {
+      this.reportError('start-recording', error);
+      return `error: ${(error as Error).message}`;
+    }
+  }
+
+  /** Stop the bug recorder; returns its file path or a clear error string. */
+  private stopRecording(): string {
+    if (this.recorder === null) return 'error: recorder unavailable';
+    try {
+      return this.recorder.stop('user');
+    } catch (error) {
+      this.reportError('stop-recording', error);
+      return `error: ${(error as Error).message}`;
+    }
+  }
+
+  private recordingStatus(): string {
+    return this.recorder?.status() ?? '{"recording":false,"path":null,"elapsedMs":0,"bytes":0,"events":0,"snapshots":0}';
+  }
+
+  /** The panel's one action: flip recording on/off in place. */
+  private toggleRecording(): void {
+    if (this.recorder === null) return;
+    if (this.recorder.isRecording) this.recorder.stop('user');
+    else this.recorder.start(0);
+  }
+
+  /**
+   * The model subset one `state` line carries: every window, the focused id, the
+   * border, the drop preview, the drag state, the monitors and the counters.
+   * Deliberately not the full `dumpState()` (z-order, registry, …), which would
+   * be written 20 times a second.
+   */
+  private recordSnapshot(): Record<string, unknown> {
+    const windows = [...this.session.windows.values()].map((tracked) => {
+      tracked.surface.refresh();
+      return {
+        id: tracked.id,
+        appId: tracked.surface.appId,
+        monitor: tracked.surface.screenId,
+        workspace: tracked.surface.workspaceId,
+        rect: { ...tracked.surface.frame },
+        layer: tracked.surface.layer,
+        minimized: tracked.surface.flags.minimized,
+        maximized: tracked.surface.flags.maximized,
+        fullscreen: tracked.surface.flags.fullscreen,
+        tileable: this.session.classify(tracked).tileable,
+      };
+    });
+    const preview = this.indicator.describePreview();
+    const target = this.session.isDragging ? this.session.previewTarget() : null;
+    return {
+      windows,
+      focused: this.session.focused()?.id ?? null,
+      border: this.border.snapshot(),
+      preview: { visible: preview.visible, rect: preview.rect, kind: target?.kind ?? null },
+      drag: this.session.dragState(),
+      monitors: this.host.screens().map((screen) => ({ ...screen })),
+      counters: this.session.counters(),
+    };
+  }
+
   private dumpState(): string {
     const monitors = this.host.screens().map((screen) => ({ ...screen }));
     const windows = [...this.session.windows.values()].map((tracked) => {
@@ -2090,8 +2189,18 @@ export default class AdrtExtension extends Extension {
         present: false,
         paused: this.isPaused(),
         indicatorEnabled: this.settings.boolean('active-window-indicator', true),
+        recording: false,
         pauseLabel: '',
         indicatorLabel: '',
+        recordLabel: '',
+      },
+      recording: this.recorder?.describe() ?? {
+        recording: false,
+        path: null,
+        elapsedMs: 0,
+        bytes: 0,
+        events: 0,
+        snapshots: 0,
       },
       workspaceMode: this.readWorkspaceModeSettings(),
       errors: this.errorCount,
