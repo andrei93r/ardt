@@ -91,6 +91,11 @@ const INTERFACE_XML = `
     <method name="StartFrameRecording"><arg type="b" direction="out"/></method>
     <method name="StopFrameRecording"><arg type="b" direction="out"/></method>
 
+    <!-- §22 extension: the start/stop bug recorder. maxSeconds 0 means the default. -->
+    <method name="StartRecording"><arg type="i" direction="in"/><arg type="s" direction="out"/></method>
+    <method name="StopRecording"><arg type="s" direction="out"/></method>
+    <method name="RecordingStatus"><arg type="s" direction="out"/></method>
+
     <!-- Stage 4/5: the app registry and the display fixtures. -->
     <method name="GetRegistry"><arg type="s" direction="out"/></method>
     <method name="SetNeverTile"><arg type="s" direction="in"/><arg type="b" direction="in"/><arg type="b" direction="out"/></method>

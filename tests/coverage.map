@@ -101,6 +101,7 @@ shell-lifecycle | A25-settings-change A26-shell-restart A80-platform-probe | ful
 
 # ------------------------------------------------- diagnostics / scheduling
 diagnostics-journal-perf | A29-frame-timing A30-memory-bounds A63-client-text-bounded A65-logging-and-rotation A66-performance-counters A82-event-journal A103-record-trace-shape A104-queue-depth-returns-to-zero
+recording | A154-recording
 scheduling-burst | A84-burst-single-drain A104-queue-depth-returns-to-zero | full-only: burst coalescing is a correctness backstop asserted by the full suite.
 adaptation | A15-adaptation A52-adaptation-no-bogus-min | full-only: refusal/adaptation timing is exercised by the full suite.
 reconcile-coherence | A33-reconcile-all A48-periodic-retile A56-coherence-sweep A58-lone-window-maximized

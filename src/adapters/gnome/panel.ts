@@ -27,6 +27,10 @@ export interface PanelCallbacks {
   indicatorEnabled(): boolean;
   /** Toggle the active-window highlight (`active-window-indicator`). */
   setIndicatorEnabled(enabled: boolean): void;
+  /** Whether a bug recording is in progress (the recorder's own state). */
+  recording(): boolean;
+  /** Start a bug recording if off, stop it if on. */
+  toggleRecording(): void;
   /** Open the extension's preferences window. */
   openPreferences(): void;
 }
@@ -36,8 +40,10 @@ export interface PanelDescription {
   present: boolean;
   paused: boolean;
   indicatorEnabled: boolean;
+  recording: boolean;
   pauseLabel: string;
   indicatorLabel: string;
+  recordLabel: string;
 }
 
 const ROLE = 'adrt';
@@ -46,6 +52,7 @@ export class AdrtPanel {
   private readonly button: any;
   private readonly pauseItem: any;
   private readonly indicatorItem: any;
+  private readonly recordItem: any;
   /**
    * True while `sync()` writes the widgets: `PopupSwitchMenuItem.setToggleState`
    * emits `toggled`, so without this the programmatic redraw would be mistaken
@@ -76,6 +83,17 @@ export class AdrtPanel {
     });
     this.button.menu.addMenuItem(this.indicatorItem);
 
+    // §22 extension: start/stop a bounded bug recording. The switch reflects the
+    // recorder's own state, not a setting, so a recording stopped by its cap
+    // still snaps the row back off through `sync()`.
+    this.recordItem = new PopupMenu.PopupSwitchMenuItem('Record a bug', false);
+    this.recordItem.connect('toggled', (_item: any, _state: boolean) => {
+      if (this.syncing) return;
+      this.callbacks.toggleRecording();
+      this.sync();
+    });
+    this.button.menu.addMenuItem(this.recordItem);
+
     this.button.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
     this.button.menu.addAction('Preferences…', () => this.callbacks.openPreferences());
 
@@ -100,6 +118,9 @@ export class AdrtPanel {
       const indicator = this.callbacks.indicatorEnabled();
       this.indicatorItem.setToggleState(indicator);
       this.indicatorItem.label.text = indicator ? 'Hide active-window highlight' : 'Show active-window highlight';
+      const recording = this.callbacks.recording();
+      this.recordItem.setToggleState(recording);
+      this.recordItem.label.text = recording ? 'Stop recording' : 'Record a bug';
     } catch (error) {
       console.error(`[adrt] panel sync failed: ${(error as Error).message}`);
     } finally {
@@ -120,6 +141,9 @@ export class AdrtPanel {
       case 'indicator':
         this.indicatorItem.toggle();
         return true;
+      case 'record':
+        this.recordItem.toggle();
+        return true;
       case 'preferences':
         try {
           this.callbacks.openPreferences();
@@ -136,9 +160,11 @@ export class AdrtPanel {
   describe(): PanelDescription {
     let paused = false;
     let indicator = false;
+    let recording = false;
     try {
       paused = this.callbacks.isPaused();
       indicator = this.callbacks.indicatorEnabled();
+      recording = this.callbacks.recording();
     } catch {
       /* report the widget's own flags below */
     }
@@ -146,8 +172,10 @@ export class AdrtPanel {
       present: true,
       paused,
       indicatorEnabled: indicator,
+      recording,
       pauseLabel: this.pauseItem?.label?.text ?? '',
       indicatorLabel: this.indicatorItem?.label?.text ?? '',
+      recordLabel: this.recordItem?.label?.text ?? '',
     };
   }
 

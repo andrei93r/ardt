@@ -45,6 +45,10 @@ export interface DbusHandlers {
   InjectKey(keyval: number, pressed: boolean): boolean;
   SimulateNotice(key: string, subject: string): boolean;
   SimulateBurst(count: number, reason: string): number;
+  /* §22 extension: the start/stop bug recorder. */
+  StartRecording(maxSeconds: number): string;
+  StopRecording(): string;
+  RecordingStatus(): string;
   /* §40.4 test-only settings writers (gated on ADRT_TEST_TRIGGERS=1). */
   SetSetting(key: string, value: string): boolean;
   SetSchemaSetting(schema: string, key: string, value: string): boolean;
