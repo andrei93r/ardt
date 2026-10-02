@@ -121,6 +121,27 @@ describe('computePlans — landscape pair', () => {
     expect(plan.placements[0].rect.width).toBeCloseTo(1920 * 0.75, 1);
   });
 
+  it('rounds a fractional saved ratio to whole pixels at an integer scale', () => {
+    // A drag saves the pointer fraction (the live Chrome ratio was 0.2421875),
+    // so `split * ratio` is fractional, e.g. 1912 * 0.7578125 = 1448.9375. The
+    // plan must reach Mutter as whole logical pixels, or Mutter truncates each
+    // argument on its own and the pair can read a sub-pixel seam.
+    const key = ratioKey('term', 'browser', 'horizontal');
+    const plan = computePlans(
+      [window({ id: 1, appId: 'term' }), window({ id: 2, appId: 'browser' })],
+      landscape,
+      config({ gapBase: 8, ratios: { [key]: 0.2421875 } }),
+    );
+    const a = plan.placements[0].rect;
+    const b = plan.placements[1].rect;
+    for (const value of [a.x, a.y, a.width, a.height, b.x, b.y, b.width, b.height]) {
+      expect(Number.isInteger(value)).toBe(true);
+    }
+    // The pair meets at the rounded boundary plus the gap and ends flush.
+    expect(b.x).toBe(a.x + a.width + 8);
+    expect(b.x + b.width).toBe(landscape.geometry.width);
+  });
+
   it('honours the pair-swap flag', () => {
     const swapped = new Set([pairKey(1, 2)]);
     const plan = computePlans([window({ id: 1 }), window({ id: 2, appId: 'b' })], landscape, config({ swapPairs: swapped }));

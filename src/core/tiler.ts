@@ -219,7 +219,24 @@ function splitAt(avail: Rect, gap: number, axis: SplitAxis, ratio: number, scale
     axis === 'horizontal'
       ? { x: avail.x + first + gap, y: avail.y, width: second, height: avail.height }
       : { x: avail.x, y: avail.y + first + gap, width: avail.width, height: second };
-  if (scale <= 1 || Number.isInteger(scale)) return { rect0, rect1 };
+  if (scale <= 1 || Number.isInteger(scale)) {
+    // A whole-number scale stores integer logical pixels, but a saved ratio can
+    // be fractional — a drag writes the pointer fraction, e.g.
+    // `2552 * 0.2421875 = 618.0625`. `snap`/`snapRect` deliberately leave a
+    // whole-number scale byte-identical, so the fraction reached the plan and
+    // Mutter truncated each argument on its own. Round the shared boundary once
+    // and measure both tiles from it, so the pair still meets exactly (§25).
+    const start = axis === 'horizontal' ? 'x' : 'y';
+    const size = axis === 'horizontal' ? 'width' : 'height';
+    const boundary = Math.round(first);
+    const out0: Rect = { ...rect0, [size]: boundary };
+    const out1: Rect = {
+      ...rect1,
+      [start]: avail[start] + boundary + gap,
+      [size]: Math.max(0, extent - boundary - gap),
+    };
+    return { rect0: out0, rect1: out1 };
+  }
   return reconcileSplit(rect0, rect1, avail, gap, axis, scale);
 }
 

@@ -133,6 +133,8 @@ A136-clamp-to-screen
 A138-os-timing
 # --- a transition animates once per window (no overshoot-then-correct) ---
 A152-animation-single-transition
+# --- a grab on a window adrt has not placed yet is a tear-off, not a move ---
+A153-grab-on-unplaced-window-is-not-a-move
 # --- preferences / options: rows match the schema, a few toggles observed ---
 A140-prefs-options
 # --- topology: every screen keeps its own axis, gated by signature ---

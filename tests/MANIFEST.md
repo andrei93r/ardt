@@ -88,6 +88,7 @@ Totals: 144 agent scenarios, 23 session scenarios.
 | `A150-real-inner-edge-drag` | headless | — | — | BeginDrag, EndDrag, MoveWindow, ToggleFloat |
 | `A151-app-dnd-is-not-a-window-move` | headless | input injection | A150 app DnD: the shell was not started with ADRT_INJECT=1 | InjectPointerButton, MoveWindow |
 | `A152-animation-single-transition` | headless | — | — | MaximizeWindow, SimulateResize, StartFrameRecording, StopFrameRecording, UnmaximizeWindow |
+| `A153-grab-on-unplaced-window-is-not-a-move` | headless | — | — | ActivatePanelItem, BeginDrag, EndDrag, MoveWindow, SpawnWindow |
 | `A16-config-export` | headless | — | — |  |
 | `A17-config-import` | headless | — | — | ImportConfig |
 | `A18-gesture-3-horizontal` | headless | — | — | ActivateWorkspace, SimulateGesture |
