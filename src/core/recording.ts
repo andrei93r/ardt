@@ -13,6 +13,8 @@
  * never touches IO, the compositor or the clock beyond a `Date` it is handed.
  */
 
+import type { Rect, Size } from './types.js';
+
 /** Identifies a recording stream in its header, so a reader can tell it apart. */
 export const RECORDING_FORMAT = 'adrt.recording';
 export const RECORDING_VERSION = 1;
@@ -53,6 +55,21 @@ export function normalizeNote(text: string): string {
 
 function pad2(value: number): string {
   return value < 10 ? `0${value}` : `${value}`;
+}
+
+/**
+ * Centre `content` inside `container`, as the on-screen rect the prompt's
+ * content box should occupy. Both sizes are rounded and the result is clamped
+ * to the container's top-left so a content larger than the screen still starts
+ * on-screen instead of at a negative offset. Pure, so the prompt's layout can
+ * be asserted without a Shell.
+ */
+export function centerRect(container: Size, content: Size): Rect {
+  const width = Math.max(0, Math.round(Number.isFinite(content.width) ? content.width : 0));
+  const height = Math.max(0, Math.round(Number.isFinite(content.height) ? content.height : 0));
+  const x = Math.max(0, Math.round((container.width - width) / 2));
+  const y = Math.max(0, Math.round((container.height - height) / 2));
+  return { x, y, width, height };
 }
 
 /**

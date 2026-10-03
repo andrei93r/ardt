@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   capReason,
+  centerRect,
   clampMaxSeconds,
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_MS,
@@ -154,6 +155,44 @@ describe('line formats', () => {
     const footer = footerRecord(12, { reason: 'user', note: 'drag did not land' });
     expect(note).toEqual({ kind: 'note', t: 11, text: 'drag did not land' });
     expect(footer.note).toBe(note.text);
+  });
+});
+
+describe('centerRect', () => {
+  it('centres the content in the container', () => {
+    expect(centerRect({ width: 1280, height: 800 }, { width: 400, height: 200 })).toEqual({
+      x: 440,
+      y: 300,
+      width: 400,
+      height: 200,
+    });
+  });
+
+  it('rounds fractional sizes and offsets', () => {
+    expect(centerRect({ width: 100, height: 100 }, { width: 51, height: 31 })).toEqual({
+      x: 25,
+      y: 35,
+      width: 51,
+      height: 31,
+    });
+  });
+
+  it('clamps to the top-left when the content is larger than the container', () => {
+    expect(centerRect({ width: 100, height: 80 }, { width: 300, height: 200 })).toEqual({
+      x: 0,
+      y: 0,
+      width: 300,
+      height: 200,
+    });
+  });
+
+  it('treats a non-finite content size as empty', () => {
+    expect(centerRect({ width: 100, height: 80 }, { width: Number.NaN, height: 40 })).toEqual({
+      x: 50,
+      y: 20,
+      width: 0,
+      height: 40,
+    });
   });
 });
 

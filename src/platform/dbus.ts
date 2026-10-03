@@ -51,6 +51,10 @@ export interface DbusHandlers {
   RecordingStatus(): string;
   ToggleRecording(): string;
   SubmitRecordingNote(text: string): boolean;
+  /* Drive the real prompt widgets, as a user would (test-only). */
+  PromptSetText(text: string): boolean;
+  PromptPressSave(): boolean;
+  PromptPressCancel(): boolean;
   /* §40.4 test-only settings writers (gated on ADRT_TEST_TRIGGERS=1). */
   SetSetting(key: string, value: string): boolean;
   SetSchemaSetting(schema: string, key: string, value: string): boolean;

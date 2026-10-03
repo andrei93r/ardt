@@ -56,8 +56,25 @@ if [ "$needs_build" -eq 1 ]; then
 fi
 
 # 3. Install ---------------------------------------------------------------
-echo "install: removing any previous install at $INSTALL_DIR"
-rm -rf "$INSTALL_DIR"
+# Back up an existing install *outside* the extensions directory. A sibling
+# `adrt@adrt.dev.pre-*` directory is discovered by the Shell as a second
+# extension UUID, so it tries to load it and logs an error on every login.
+BACKUP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/adrt/backups"
+if [ -d "$INSTALL_DIR" ]; then
+  mkdir -p "$BACKUP_DIR"
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  while [ -e "$BACKUP_DIR/$UUID.$stamp" ]; do
+    stamp="$stamp.$$"
+  done
+  if mv "$INSTALL_DIR" "$BACKUP_DIR/$UUID.$stamp"; then
+    echo "install: backed up the previous install to $BACKUP_DIR/$UUID.$stamp"
+  else
+    echo "install: could not back up $INSTALL_DIR; removing it"
+    rm -rf "$INSTALL_DIR"
+  fi
+else
+  echo "install: no previous install at $INSTALL_DIR"
+fi
 mkdir -p "$INSTALL_DIR/schemas"
 
 cp -r "$ROOT/dist/." "$INSTALL_DIR/"

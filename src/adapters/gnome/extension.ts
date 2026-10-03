@@ -2010,6 +2010,9 @@ export default class AdrtExtension extends Extension {
       RecordingStatus: () => this.recordingStatus(),
       ToggleRecording: () => this.toggleRecordingState(),
       SubmitRecordingNote: (text) => this.submitRecordingNote(text),
+      PromptSetText: (text) => this.recordingPrompt?.setText(text) ?? false,
+      PromptPressSave: () => this.recordingPrompt?.pressSave() ?? false,
+      PromptPressCancel: () => this.recordingPrompt?.pressCancel() ?? false,
       SetSetting: (key, value) => this.writeSetting('org.gnome.shell.extensions.adrt', key, value),
       SetSchemaSetting: (schema, key, value) => this.writeSetting(schema, key, value),
       MinimizeWindow: (id) => {
@@ -2159,11 +2162,17 @@ export default class AdrtExtension extends Extension {
 
   private recordingStatus(): string {
     if (this.recorder === null) {
-      return '{"recording":false,"path":null,"elapsedMs":0,"bytes":0,"events":0,"snapshots":0,"stopReason":null,"promptOpen":false,"note":"","promptMechanism":null}';
+      return '{"recording":false,"path":null,"elapsedMs":0,"bytes":0,"events":0,"snapshots":0,"stopReason":null,"promptOpen":false,"note":"","promptMechanism":null,"promptGrab":false,"promptFocus":false,"promptRect":null}';
     }
-    // `promptMechanism` is the extension's view of the prompt UI (`modal` or
-    // `overlay`), add-only so a test can prove the prompt actually exists.
-    return JSON.stringify({ ...this.recorder.describe(), promptMechanism: this.recordingPrompt?.kind ?? null });
+    // The prompt fields are the extension's view of the UI (add-only), so a test
+    // can prove the modal grab, the key focus and the on-screen rect are real.
+    return JSON.stringify({
+      ...this.recorder.describe(),
+      promptMechanism: this.recordingPrompt?.kind ?? null,
+      promptGrab: this.recordingPrompt?.hasGrab ?? false,
+      promptFocus: this.recordingPrompt?.hasKeyFocus ?? false,
+      promptRect: this.recordingPrompt?.contentRect ?? null,
+    });
   }
 
   /**

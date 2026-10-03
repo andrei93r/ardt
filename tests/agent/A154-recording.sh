@@ -12,6 +12,17 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 rec_status() { adrt RecordingStatus | python3 "$PARSE"; }
 status_field() { rec_status | python3 -c "import json,sys; print(json.load(sys.stdin)['$1'])"; }
+# Block until a python predicate over RecordingStatus succeeds (the prompt
+# fields are deliberately on RecordingStatus, not DumpState).
+wait_recording() {
+  local timeout="$1" code="$2"
+  local deadline=$((SECONDS + timeout))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if rec_status | python3 -c "$code" >/dev/null 2>&1; then return 0; fi
+    sleep 0.5
+  done
+  return 1
+}
 footer_reason() {
   python3 -c '
 import json, sys
@@ -89,11 +100,44 @@ case "$(status_field promptMechanism)" in
   modal|overlay) pass "the observation prompt is a Shell-native $(status_field promptMechanism)" ;;
   *) fail "the observation prompt has no UI mechanism" ;;
 esac
-assert_true "SubmitRecordingNote accepts the text" "$(adrt SubmitRecordingNote "$note_one" | python3 "$PARSE")"
-if wait_python 10 'import json,sys; sys.exit(0 if not json.load(sys.stdin)["recording"]["promptOpen"] else 1)'; then
-  pass "the prompt closes after the note is submitted"
+
+# The prompt must hold a modal grab and focus the entry, otherwise typing goes
+# to the focused window; and it must be centred on a monitor, not pinned at 0,0
+# under the top bar.
+if wait_recording 10 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["promptGrab"] and d["promptFocus"] else 1)'; then
+  pass "the prompt holds a modal grab and the entry has key focus"
 else
-  fail "the prompt did not close after the note was submitted"
+  fail "the prompt has no grab or key focus ($(rec_status))"
+fi
+rect_json="$(rec_status | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["promptRect"]))')"
+if dump | python3 -c '
+import json, sys
+rect = json.loads(sys.argv[1])
+if not isinstance(rect, dict):
+    print("no promptRect", rect); sys.exit(1)
+if rect["width"] <= 0 or rect["height"] <= 0:
+    print("empty promptRect", rect); sys.exit(1)
+if rect["x"] == 0 and rect["y"] == 0:
+    print("prompt pinned at 0,0", rect); sys.exit(1)
+mons = json.load(sys.stdin)["monitors"]
+cx, cy = rect["x"] + rect["width"] / 2, rect["y"] + rect["height"] / 2
+if not any(m["geometry"]["x"] <= cx <= m["geometry"]["x"] + m["geometry"]["width"]
+           and m["geometry"]["y"] <= cy <= m["geometry"]["y"] + m["geometry"]["height"] for m in mons):
+    print("prompt not on a monitor", rect, mons); sys.exit(1)
+print("promptRect", rect)
+' "$rect_json"; then
+  pass "the prompt is centred on a monitor, not under the top bar"
+else
+  fail "the prompt is not positioned on a monitor"
+fi
+
+# Drive the real widgets exactly as a user would: type, then press Save.
+assert_true "PromptSetText types into the real entry" "$(adrt PromptSetText "$note_one" | python3 "$PARSE")"
+assert_true "PromptPressSave presses the real Save button" "$(adrt PromptPressSave | python3 "$PARSE")"
+if wait_python 10 'import json,sys; sys.exit(0 if not json.load(sys.stdin)["recording"]["promptOpen"] else 1)'; then
+  pass "the prompt closes after the real Save is pressed"
+else
+  fail "the prompt did not close after Save"
 fi
 assert_eq "RecordingStatus reports the note text" "$note_one" "$(status_field note)"
 
@@ -221,6 +265,33 @@ sys.exit(0 if rows and rows[-1]["kind"] == "footer" and rows[-1]["reason"] == "u
   pass "the ToggleRecording file carries the note and a user footer"
 else
   fail "the ToggleRecording file did not carry the note"
+fi
+
+# 8b. The real Cancel button closes the recording with no note.
+adrt ToggleRecording >/dev/null 2>&1 || true
+cancel_path="$(status_field path)"
+adrt ToggleRecording >/dev/null 2>&1 || true
+if wait_recording 10 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["promptOpen"] and d["promptGrab"] else 1)'; then
+  pass "the second stop opens the prompt for a cancel"
+else
+  fail "the second stop did not open the prompt"
+fi
+assert_true "PromptPressCancel presses the real Cancel button" "$(adrt PromptPressCancel | python3 "$PARSE")"
+if wait_python 10 'import json,sys; sys.exit(0 if not json.load(sys.stdin)["recording"]["promptOpen"] else 1)'; then
+  pass "Cancel closes the prompt"
+else
+  fail "Cancel did not close the prompt"
+fi
+if [ -f "$cancel_path" ] && python3 -c '
+import json, sys
+rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf8") if line.strip()]
+kinds = [r["kind"] for r in rows]
+sys.exit(0 if rows and rows[-1]["kind"] == "footer" and rows[-1]["reason"] == "user"
+         and "note" not in kinds and rows[-1].get("note") == "" else 1)
+' "$cancel_path"; then
+  pass "Cancel writes a user footer with no note"
+else
+  fail "Cancel did not close with a note-free user footer"
 fi
 
 # 9. The time cap auto-stops silently: no prompt, footer reason cap.
