@@ -89,7 +89,7 @@ Totals: 149 agent scenarios, 23 session scenarios.
 | `A151-app-dnd-is-not-a-window-move` | headless | input injection | A150 app DnD: the shell was not started with ADRT_INJECT=1 | InjectPointerButton, MoveWindow |
 | `A152-animation-single-transition` | headless | — | — | MaximizeWindow, SimulateResize, StartFrameRecording, StopFrameRecording, UnmaximizeWindow |
 | `A153-unmanaged-drag-no-preview` | headless | — | — | BeginDrag, EndDrag, MoveWindow, SimulateAbove |
-| `A154-recording` | headless | — | — | ActivatePanelItem, ActivateWindow, MoveWindow, RecordingStatus, StartRecording, StopRecording… |
+| `A154-recording` | headless | — | — | ActivatePanelItem, ActivateWindow, MoveWindow, PromptPressCancel, PromptPressSave, PromptSetText… |
 | `A155-grab-on-unplaced-window-is-not-a-move` | headless | — | — | ActivatePanelItem, BeginDrag, EndDrag, MoveWindow |
 | `A156-ratio-scope` | headless | — | — | SimulateResize |
 | `A157-per-screen-slots` | headless | any monitor count | A157 needs a non-primary screen; A157 needs two screens (this harness has $screens) | ActivateWindow |
