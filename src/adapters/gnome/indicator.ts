@@ -8,13 +8,13 @@
  */
 
 import Clutter from 'gi://Clutter';
-import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import St from 'gi://St';
 import { layoutManager, messageTray } from 'resource:///org/gnome/shell/ui/main.js';
 
 import type { Rect } from '../../core/types.js';
 import type { IndicatorBackend } from '../../platform/indicator.js';
+import { SignalRegistry, TimeoutRegistry } from './lifecycle.js';
 import type { GnomeSettings } from './settings.js';
 import type { GnomeTiming } from './timing.js';
 
@@ -38,7 +38,9 @@ export class GnomeIndicator implements IndicatorBackend {
   private readonly widget: any;
   private readonly preview: any;
   private readonly ghosts = new Set<any>();
-  private readonly closeSources = new Set<number>();
+  /** Ghost fade timers, drained in `destroy()` (§36). */
+  private readonly timers = new TimeoutRegistry();
+  private ghostSeq = 0;
   private pulseActive = false;
   private interfaceSettings: any = null;
   /** The last rect handed to `showPreview`, for `DumpState` and diagnostics. */
@@ -52,7 +54,8 @@ export class GnomeIndicator implements IndicatorBackend {
   private destroyed = false;
   private readonly goneActors = new WeakSet<any>();
   private stageGone = false;
-  private stageDestroyId = 0;
+  /** Stage-lifetime subscription, drained in `destroy()` (§36). */
+  private readonly signals = new SignalRegistry();
 
   constructor(
     private readonly settings: GnomeSettings,
@@ -63,11 +66,11 @@ export class GnomeIndicator implements IndicatorBackend {
     this.widget.connect('destroy', () => this.goneActors.add(this.widget));
     this.preview.connect('destroy', () => this.goneActors.add(this.preview));
     try {
-      this.stageDestroyId = global.stage.connect('destroy', () => {
+      this.signals.add('stage', global.stage, 'destroy', () => {
         this.stageGone = true;
       });
     } catch {
-      this.stageDestroyId = 0;
+      /* no stage in this shell: nothing to watch */
     }
     this.applyStyle();
     this.applyPreviewStyle();
@@ -154,35 +157,21 @@ export class GnomeIndicator implements IndicatorBackend {
     });
     this.ghosts.add(ghost);
 
-    let sourceId = 0;
+    const name = `ghost-${(this.ghostSeq += 1)}`;
     const cleanup = () => {
       if (!this.ghosts.has(ghost)) return;
       this.ghosts.delete(ghost);
-      if (sourceId !== 0) {
-        // Removing a source from inside its own callback is legal (it is still
-        // attached); this also keeps `closeSources` honest so `destroy()` never
-        // removes an already-fired id ("Source ID ... was not found").
-        this.closeSources.delete(sourceId);
-        GLib.source_remove(sourceId);
-        sourceId = 0;
-      }
       this.removeChrome(ghost);
       this.destroyActor(ghost);
     };
 
     // A frame-clock-less compositor may never complete the ease; a few frames
     // past the duration guarantees the ghost is destroyed either way. The
-    // callback drops its own id first, so `destroy()` never tries to remove an
-    // already-fired source, whatever state the ghost is in by then.
-    sourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, durationMs + this.timing.sampleIntervalMs(3), () => {
-      if (sourceId !== 0) {
-        this.closeSources.delete(sourceId);
-        sourceId = 0;
-      }
+    // registry drops the entry when it fires, so `destroy()` never tries to
+    // remove an already-fired timer, whatever state the ghost is in by then.
+    this.timers.add(name, durationMs + this.timing.sampleIntervalMs(3), () => {
       cleanup();
-      return GLib.SOURCE_REMOVE;
     });
-    this.closeSources.add(sourceId);
     ghost.ease({
       opacity: 0,
       duration: durationMs,
@@ -201,8 +190,8 @@ export class GnomeIndicator implements IndicatorBackend {
     if (this.destroyed) return;
     this.destroyed = true;
     this.stopPulse();
-    for (const id of this.closeSources) GLib.source_remove(id);
-    this.closeSources.clear();
+    this.timers.clearAll();
+    this.signals.disconnect();
     for (const ghost of this.ghosts) {
       this.removeChrome(ghost);
       this.destroyActor(ghost);
@@ -213,14 +202,6 @@ export class GnomeIndicator implements IndicatorBackend {
     this.previewRect = null;
     this.destroyActor(this.widget);
     this.destroyActor(this.preview);
-    if (this.stageDestroyId !== 0) {
-      try {
-        global.stage.disconnect(this.stageDestroyId);
-      } catch {
-        /* the stage is gone */
-      }
-      this.stageDestroyId = 0;
-    }
   }
 
   /**

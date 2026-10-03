@@ -11,13 +11,13 @@
 
 import { layoutManager } from 'resource:///org/gnome/shell/ui/main.js';
 import Gio from 'gi://Gio';
-import GLib from 'gi://GLib';
 
 import { Layer } from '../../core/types.js';
 import type { Rect, Screen, Size, Surface } from '../../core/types.js';
 import type { PlatformEvent } from '../../platform/events.js';
 import type { PlatformHost } from '../../platform/host.js';
 import * as compat from './compat.js';
+import { SignalRegistry, TimeoutRegistry } from './lifecycle.js';
 import { GnomeSurface } from './surface.js';
 import { VersionDetector } from './version.js';
 
@@ -25,11 +25,6 @@ type Listener = (payload: unknown) => void;
 
 /** If `startup-complete` never arrives, unblock the first drain after this long. */
 const STARTUP_FALLBACK_MS = 1500;
-
-interface Connection {
-  object: any;
-  id: number;
-}
 
 function frameOf(win: any): Rect {
   const rect = win.get_frame_rect();
@@ -45,10 +40,12 @@ export class GnomeHost implements PlatformHost {
   private readonly onError: (context: string, error: unknown) => void;
 
   private readonly listeners = new Map<string, Set<Listener>>();
-  private readonly connections: Connection[] = [];
+  /** Compositor/shell signals and timers, drained in `disable()` (§36). */
+  private readonly signals = new SignalRegistry();
+  private readonly timers = new TimeoutRegistry();
   private readonly surfaceCache = new Map<number, GnomeSurface>();
-  /** Per-window signal connections for the event journal (§22). */
-  private readonly windowSignals = new Map<number, { win: any; ids: number[] }>();
+  /** Windows already watched for the event journal (§22). */
+  private readonly watched = new Set<number>();
   private screensCache: Screen[] = [];
   /** `org.gnome.mutter`: whether workspaces exist only on the primary monitor. */
   private mutter: any = null;
@@ -65,7 +62,6 @@ export class GnomeHost implements PlatformHost {
   private readonly simulatedWorkAreas = new Map<string, Rect>();
   /** §20: whether the shell has finished starting up. */
   private startupComplete = false;
-  private startupFallback = 0;
   /** Where the last refresh-rate reading came from (for the platform probe). */
   private refreshSource = 'fallback';
 
@@ -127,48 +123,41 @@ export class GnomeHost implements PlatformHost {
     }
     // §20: the first layout drain waits for the shell to finish starting up.
     try {
-      this.connect(layoutManager, 'startup-complete', this.guard('startup-complete', () => this.markStartupComplete()));
+      this.signals.add('host', layoutManager, 'startup-complete', this.guard('startup-complete', () => this.markStartupComplete()));
     } catch {
       this.startupComplete = true;
     }
-    this.startupFallback = GLib.timeout_add(GLib.PRIORITY_DEFAULT, STARTUP_FALLBACK_MS, () => {
-      this.startupFallback = 0;
+    this.timers.add('startup-fallback', STARTUP_FALLBACK_MS, () => {
       try {
         this.markStartupComplete();
       } catch (error) {
         this.onError('host:startup-fallback', error);
       }
-      return GLib.SOURCE_REMOVE;
     });
-    this.connect(global.display, 'window-created', this.guard('window-created', (_display: any, win: any) => {
+    this.signals.add('host', global.display, 'window-created', this.guard('window-created', (_display: any, win: any) => {
       this.emit({ type: 'surface-created', surface: this.ensureSurface(win) });
     }));
-    this.connect(global.display, 'notify::focus-window', this.guard('focus-window', () => {
+    this.signals.add('host', global.display, 'notify::focus-window', this.guard('focus-window', () => {
       this.emit({ type: 'focus-changed', id: global.display.get_focus_window()?.get_id() ?? null });
     }));
-    this.connect(global.window_manager, 'switch-workspace', this.guard('switch-workspace', (_wm: any, from: number, to: number) => {
+    this.signals.add('host', global.window_manager, 'switch-workspace', this.guard('switch-workspace', (_wm: any, from: number, to: number) => {
       this.emit({ type: 'workspace-switched', from, to, phase: 'active' });
     }));
-    this.connect(layoutManager, 'monitors-changed', this.guard('monitors-changed', () => {
+    this.signals.add('host', layoutManager, 'monitors-changed', this.guard('monitors-changed', () => {
       this.refreshScreens();
       this.emit({ type: 'screens-changed' });
     }));
     // Panels, docks and autohide change the usable area without changing monitors.
-    this.connect(global.display, 'workareas-changed', this.guard('workareas-changed', () => {
+    this.signals.add('host', global.display, 'workareas-changed', this.guard('workareas-changed', () => {
       this.refreshScreens();
       this.emit({ type: 'screens-changed' });
     }));
   }
 
   disable(): void {
-    if (this.startupFallback !== 0) {
-      GLib.source_remove(this.startupFallback);
-      this.startupFallback = 0;
-    }
-    for (const connection of this.connections.splice(0)) {
-      connection.object.disconnect(connection.id);
-    }
-    for (const id of [...this.windowSignals.keys()]) this.forgetWindow(id);
+    this.timers.clear('startup-fallback');
+    this.signals.disconnect('host');
+    for (const id of [...this.watched]) this.forgetWindow(id);
     this.surfaceCache.clear();
     this.listeners.clear();
   }
@@ -179,43 +168,33 @@ export class GnomeHost implements PlatformHost {
    * disconnected with `unmanaged` (§22: the per-window `on()` helper).
    */
   private watchWindow(win: any, id: number): void {
-    if (this.windowSignals.has(id)) return;
-    const ids: number[] = [];
+    if (this.watched.has(id)) return;
+    this.watched.add(id);
+    const group = `window:${id}`;
     const byUser = (): boolean => this.userGrabInProgress();
-    ids.push(win.connect('notify::frame-rect', this.guard('window:frame-rect', () => {
+    this.signals.add(group, win, 'notify::frame-rect', this.guard('window:frame-rect', () => {
       this.emit({ type: 'surface-frame-changed', id, frame: frameOf(win), byUser: byUser() });
-    })));
-    ids.push(win.connect('notify::monitor', this.guard('window:monitor', () => {
+    }));
+    this.signals.add(group, win, 'notify::monitor', this.guard('window:monitor', () => {
       this.emit({ type: 'surface-screen-changed', id, screenId: win.get_monitor() });
-    })));
-    ids.push(win.connect('workspace-changed', this.guard('window:workspace-changed', () => {
+    }));
+    this.signals.add(group, win, 'workspace-changed', this.guard('window:workspace-changed', () => {
       this.emit({ type: 'surface-workspace-changed', id, workspaceId: win.get_workspace()?.index() ?? 0, byUser: byUser() });
-    })));
-    ids.push(win.connect('notify::minimized', this.guard('window:minimized', () => {
+    }));
+    this.signals.add(group, win, 'notify::minimized', this.guard('window:minimized', () => {
       this.emit({ type: 'surface-flags-changed', id, flags: { minimized: win.minimized === true } });
-    })));
-    ids.push(win.connect('notify::wm-class', this.guard('window:wm-class', () => {
+    }));
+    this.signals.add(group, win, 'notify::wm-class', this.guard('window:wm-class', () => {
       this.emit({ type: 'surface-flags-changed', id, flags: {} });
-    })));
-    ids.push(win.connect('unmanaged', this.guard('window:unmanaged', () => {
+    }));
+    this.signals.add(group, win, 'unmanaged', this.guard('window:unmanaged', () => {
       this.forgetWindow(id);
       this.emit({ type: 'surface-closed', id });
-    })));
-    this.windowSignals.set(id, { win, ids });
+    }));
   }
 
   private forgetWindow(id: number): void {
-    const entry = this.windowSignals.get(id);
-    if (entry !== undefined) {
-      for (const signal of entry.ids) {
-        try {
-          entry.win.disconnect(signal);
-        } catch {
-          /* window already gone */
-        }
-      }
-      this.windowSignals.delete(id);
-    }
+    if (this.watched.delete(id)) this.signals.disconnect(`window:${id}`);
     this.surfaceCache.delete(id);
   }
 
@@ -488,10 +467,6 @@ export class GnomeHost implements PlatformHost {
       if (win.get_id() === id) return win;
     }
     return null;
-  }
-
-  private connect(object: any, signal: string, cb: (...args: any[]) => void): void {
-    this.connections.push({ object, id: object.connect(signal, cb) });
   }
 
   private refreshScreens(): void {
