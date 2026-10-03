@@ -359,3 +359,37 @@ stays out.
 > still says `0.1.0`. Use the `dirMtimeMs` to match the running module to the
 > install; the three version numbers are tracked separately (reported, not fixed
 > here).
+
+---
+
+## 13. Tab tear-off (manual; the live-only drag/menu path)
+
+A real tab tear-off is a pointer drag on a tab strip (Chrome, Firefox, Zed) or a
+menu action (VS Code), neither of which has a stable headless form. The *decision*
+is covered automatically by `A155` (a compositor grab on a window adrt has not
+placed yet is a tear-off, not a move), and the per-app no-swap/no-storm
+assertions run in `A158`–`A160`. The real drag is this manual check.
+
+For each app, open it, start a pair (a second window that tiles as a 50/50 pair),
+then tear a tab out:
+
+- [ ] **Chrome.** Drag a tab out of the tab strip and release it on the desktop.
+- [ ] **Firefox.** Drag a tab out of the tab strip and release it on the desktop.
+- [ ] **Zed.** Drag an editor tab out of the window.
+- [ ] **VS Code.** Command Palette → **Move Editor into New Window**.
+
+Expected for every row:
+
+- The torn-off window is the newcomer on its own workspace, **maximised**, or it
+  joins the pair and tiles — never left stacked on top of a tile.
+- `DumpDecisions` contains **no `swap`** carrying the newcomer's id, and **no
+  `stubborn`** for its app id.
+- No `clamp_to_screen` / `resize_retry` storm: a handful at most, not a repeating
+  stream for the same window.
+- The layout settles (two or three identical `DumpState` geometry samples) with no
+  oscillation.
+
+Automate the watch with the recorder or `ADRT_TEAROFF_TEST=1 bash
+scripts/session-test.sh S27`, which watches the decision journal for 30 s while
+you drive the detach. A row that cannot be driven by hand on this machine stays
+an unticked manual item, not a flaky automated test.

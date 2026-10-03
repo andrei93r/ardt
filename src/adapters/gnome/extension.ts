@@ -78,6 +78,49 @@ const NORMALIZE_ON_ENABLE_MS = 400;
 /** §23.2: a workspace-switch animation still running after this is torn down. */
 const SWITCH_WATCHDOG_MS = 1500;
 
+/**
+ * Parse the `SpawnWindow` argv argument. A JSON array is the supported form; a
+ * plain string keeps the original single-string trigger working (split on
+ * spaces, no shell — exactly the old behaviour).
+ */
+function parseSpawnArgv(argvJson: string): string[] {
+  const text = argvJson.trim();
+  if (text.startsWith('[')) {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (Array.isArray(parsed)) return parsed.map((part) => String(part)).filter((part) => part.length > 0);
+    } catch {
+      /* fall through to the legacy split */
+    }
+  }
+  return text.split(' ').filter((part) => part.length > 0);
+}
+
+/**
+ * Parse the `SpawnWindow` env argument: a JSON object of `KEY: value`, or a
+ * JSON array of `KEY=value` strings. Empty / `null` / `[]` means inherit only.
+ */
+function parseSpawnEnv(envJson: string): [string, string][] {
+  const text = envJson.trim();
+  if (text.length === 0 || text === 'null' || text === '{}' || text === '[]') return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  const out: [string, string][] = [];
+  if (Array.isArray(parsed)) {
+    for (const item of parsed) {
+      const equals = String(item).indexOf('=');
+      if (equals > 0) out.push([String(item).slice(0, equals), String(item).slice(equals + 1)]);
+    }
+  } else if (parsed !== null && typeof parsed === 'object') {
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) out.push([key, String(value)]);
+  }
+  return out;
+}
+
 interface ExtraHandlers {
   ActivateWindow(id: number): boolean;
   ActivateWorkspace(index: number): boolean;
@@ -88,7 +131,6 @@ interface ExtraHandlers {
   FocusDirection(direction: string): boolean;
   FocusCycle(): boolean;
   MoveToward(direction: string): boolean;
-  SpawnWindow(command: string): number;
   CloseWindow(id: number): boolean;
   BeginDrag(id: number): boolean;
   EndDrag(id: number): boolean;
@@ -1976,7 +2018,7 @@ export default class AdrtExtension extends Extension {
         this.session.moveToward(direction);
         return true;
       },
-      SpawnWindow: (command) => this.spawnWindow(command),
+      SpawnWindow: (argvJson, envJson) => this.spawnWindow(argvJson, envJson),
       CloseWindow: (id) => this.closeWindow(id),
       BeginDrag: (id) => this.session.beginDrag(id),
       EndDrag: (id) => this.session.endDrag(id),
@@ -2047,12 +2089,23 @@ export default class AdrtExtension extends Extension {
     };
   }
 
-  /** Test trigger (§40.4): open a client window from inside the shell. */
-  private spawnWindow(command: string): number {
-    const parts = command.split(' ').filter((part) => part.length > 0);
-    if (parts.length === 0) return 0;
+  /**
+   * Test trigger (§40.4): open a client window from inside the shell.
+   *
+   * `argvJson` is a JSON array (or a legacy space-separated command string) and
+   * `envJson` is a JSON object/array of extra environment variables. The
+   * launcher inherits the Shell's environment (the nested Wayland socket, the
+   * private session bus and the isolated XDG tree) and overlays the requested
+   * entries, so a flatpak/snap/AppImage or an Electron client can be launched
+   * with the flags it needs.
+   */
+  private spawnWindow(argvJson: string, envJson: string): number {
+    const argv = parseSpawnArgv(argvJson);
+    if (argv.length === 0) return 0;
     try {
-      const process = Gio.Subprocess.new(parts, Gio.SubprocessFlags.NONE);
+      const launcher = Gio.SubprocessLauncher.new(Gio.SubprocessFlags.NONE);
+      for (const [key, value] of parseSpawnEnv(envJson)) launcher.setenv(key, value, true);
+      const process = launcher.spawnv(argv);
       const identifier = process.get_identifier();
       return identifier === null ? 0 : Number.parseInt(identifier, 10);
     } catch (e) {

@@ -11,8 +11,9 @@ third the window title:
 
     refusing-client.py 1700 400 "stubborn"
 
-Used by the refusal-ladder scenarios (A15, A113-A116) through
-`adrt SpawnWindow "python3 tests/support/refusing-client.py 1700 400 stubborn"`.
+Used by the refusal-ladder scenarios (A15, A113-A116) through the legacy
+single-string `SpawnWindow` form, which splits on spaces:
+`adrt SpawnWindow "python3 tests/support/refusing-client.py 1700 400 stubborn" '{}'`.
 
 Exit codes: 0 on a clean window close, 2 on a usage error.
 """

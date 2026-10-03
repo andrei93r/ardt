@@ -23,6 +23,14 @@
 #   the four-monitor matrix                          A81-four-monitors
 #   every configured screen (1 to 4), any arrangement, keeps its own axis and
 #   contains its windows, gated by topology signature          #   the same, gated by an exact declared signature so it can be driven
+#   application compatibility (GTK4/GTK3/Chromium)          A158-app-matrix
+#   application compatibility (Electron)                    A159-app-matrix-electron
+#   application compatibility (Qt/flatpak/AppImage)         A160-app-matrix-foreign
+
+# --- application compatibility: the same checklist per app, gated per app -----
+A158-app-matrix
+A159-app-matrix-electron
+A160-app-matrix-foreign
 
 A105-per-screen-axis
 A106-no-cross-monitor-exile

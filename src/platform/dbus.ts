@@ -34,6 +34,14 @@ export interface DbusHandlers {
   SimulateGesture(kind: string, deltaX: number, deltaY: number, touchPoints: number): boolean;
   InjectSignal(type: string, payload: string): boolean;
   SimulateSessionMode(mode: string): boolean;
+  /**
+   * §40.4 test trigger: open a client from a JSON argv array plus a JSON env
+   * object/array. The argv/env split is what lets the harness launch flatpak,
+   * snap, AppImage and Electron clients (and pass `--ozone-platform` and the
+   * matching env) instead of relying on `command.split(' ')` with no shell.
+   * `argvJson` may also be a plain command string (legacy convenience).
+   */
+  SpawnWindow(argvJson: string, envJson: string): number;
 
   /* Stage 0 additions: capability probe, the event journal, real input. */
   ProbePlatform(): string;

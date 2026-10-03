@@ -14,6 +14,8 @@ PARSE="$ROOT_DIR/tests/agent/parse.py"
 
 # shellcheck source=tests/lib/common.sh
 source "$ROOT_DIR/tests/lib/common.sh"
+# shellcheck source=tests/lib/appcheck.sh
+source "$ROOT_DIR/tests/lib/appcheck.sh"
 
 # Test clients. Plain nautilus/chrome are single-instance and silently reuse an
 # existing window, so always ask for a new one. gnome-text-editor is excluded:
@@ -143,9 +145,52 @@ spawn() {
     cmd="${CLIENTS[$((SPAWN_INDEX % ${#CLIENTS[@]}))]}"
     SPAWN_INDEX=$((SPAWN_INDEX + 1))
   fi
-  adrt SpawnWindow "$cmd" >/dev/null
+  # The SpawnWindow trigger now takes a JSON argv array plus a JSON env object;
+  # a plain command string is still accepted, but build the array here so the
+  # shared appcheck hooks use one form everywhere.
+  local argv_json
+  argv_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1].split()))' "$cmd")"
+  adrt SpawnWindow "$argv_json" '{}' >/dev/null
   sleep 1
 }
+
+# --- the shared app-compatibility checklist's runner hooks (tests/lib/appcheck.sh)
+
+# Close every test window and return to the sandbox workspace, so each app row
+# starts from the same clean slate the nested runner's ensure_clean gives it.
+appcheck_reset() {
+  close_tests
+  local deadline=$((SECONDS + 15))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    [ "$(count_tests)" -eq 0 ] && break
+    sleep 0.5
+  done
+  adrt ActivateWorkspace "${START_WS:-0}" >/dev/null 2>&1 || true
+}
+
+# Open a real client over D-Bus and block until it is tracked. Prints the new
+# window id, or "" when none appeared.
+appcheck_spawn() { # env-json argv-json [timeout]
+  local env_json="$1" argv_json="$2" timeout="${3:-30}" before new
+  local deadline
+  before="$(test_ids)"
+  adrt SpawnWindow "$argv_json" "$env_json" >/dev/null
+  deadline=$((SECONDS + timeout))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    new="$(test_ids | python3 -c "
+import sys
+base = set('$before'.split())
+now = [w for w in sys.stdin.read().split() if w]
+new = [w for w in now if w not in base]
+print(new[0] if new else '')")"
+    [ -n "$new" ] && { echo "$new"; return 0; }
+    sleep 0.5
+  done
+  echo ""
+  return 1
+}
+
+appcheck_close() { adrt CloseWindow "$1" >/dev/null 2>&1 || true; }
 
 count_tests() { test_ids | tr ' ' '\n' | grep -c . || true; }
 
