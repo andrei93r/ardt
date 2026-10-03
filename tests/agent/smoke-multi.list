@@ -45,3 +45,5 @@ A122-rescue-side-and-order
 A145-float-restore-exact
 A124-screen-side-rule
 A81-four-monitors
+# --- shell stability: a real unplug must not assert on a stale monitor index ---
+A162-monitor-removal

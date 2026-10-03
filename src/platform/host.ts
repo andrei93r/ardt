@@ -20,6 +20,14 @@ export interface PlatformHost {
   screens(): Screen[];
   activeWorkspaceId(): number;
 
+  /**
+   * Whether a monitor index still exists in the live compositor monitor list.
+   * Index-based Mutter calls (`move_to_monitor`, work-area reads) must be
+   * skipped when it does not — an out-of-range index asserts in the compositor
+   * (§ shell stability, a monitor removed mid-transition).
+   */
+  isLiveMonitorIndex(index: number): boolean;
+
   applyFrame(id: number, rect: Rect): void;
   applyLayer(id: number, layer: Layer, order: number): void;
   applyWorkspace(id: number, workspaceId: number): void;

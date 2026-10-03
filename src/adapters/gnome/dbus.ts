@@ -88,6 +88,9 @@ const INTERFACE_XML = `
     <method name="CursorToCentre"><arg type="b" direction="out"/></method>
     <method name="ActivatePanelItem"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
     <method name="InjectFault"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
+    <!-- §Shell stability: destroy adrt's chrome actors the way a Shell session
+         end does, so a scenario can disable() against already-destroyed chrome. -->
+    <method name="SimulateChromeTeardown"><arg type="b" direction="out"/></method>
     <!-- Bounded animation-frame sampler (DumpState.animRecords); never on by default. -->
     <method name="StartFrameRecording"><arg type="b" direction="out"/></method>
     <method name="StopFrameRecording"><arg type="b" direction="out"/></method>

@@ -158,3 +158,5 @@ A154-recording
 A149-workspace-mode
 # --- error boundary: a caught throw does not take adrt down (§36) ---
 A146-error-boundary
+# --- shell stability: teardown is dispose-safe; enable/disable churn (§36) ---
+A161-shell-teardown

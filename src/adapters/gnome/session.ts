@@ -1153,6 +1153,15 @@ export class WindowSession {
   ): void {
     const tracked = this.windows.get(move.id);
     if (tracked === undefined) return;
+    // §Shell stability: re-read the window's *live* monitor at use, never trust
+    // the cached screenId. While Mutter is still migrating a window off a
+    // removed monitor, `get_monitor()` reports the stale index, and any Mutter
+    // window call here (change_workspace, maximize, move_to_monitor) makes the
+    // compositor re-derive the work area for a monitor that no longer exists —
+    // which asserts in C, outside anything JS can catch. Skip the whole move:
+    // Mutter migrates the window itself and the next screens-changed pass
+    // re-plans it.
+    if (!this.deps.host.isLiveMonitorIndex(this.liveMonitorOf(tracked.win))) return;
     let workspaceIndex = move.workspace ?? tracked.surface.workspaceId;
     let targetConnector: string | undefined;
     if (move.create !== undefined) {
@@ -1181,10 +1190,16 @@ export class WindowSession {
         targetConnector = target.connector;
         tracked.surface.screenId = target.index;
         this.deps.tiling.noteSelfApply();
-        try {
-          tracked.win.move_to_monitor?.(target.index);
-        } catch {
-          /* simulated screen: the policy move still stands */
+        // §Shell stability: the plan's screen comes from the (possibly raced)
+        // screen list; never pass an out-of-range index to Mutter. A window on
+        // a removed monitor stays on its compositor monitor until Mutter
+        // migrates it — the policy move above still stands either way.
+        if (this.deps.host.isLiveMonitorIndex(target.index)) {
+          try {
+            tracked.win.move_to_monitor?.(target.index);
+          } catch {
+            /* simulated screen: the policy move still stands */
+          }
         }
       }
     }
@@ -1222,7 +1237,23 @@ export class WindowSession {
     this.recordPlacement(tracked, targetConnector, move.slot);
   }
 
-  /** §9: the workspaces a screen displays (the primary shows them all). */
+  /**
+   * §Shell stability: the window's monitor index read from the compositor at
+   * this very moment, or -1 when the window is gone. Never the cached
+   * `surface.screenId`, which can name a monitor that was just removed.
+   */
+  private liveMonitorOf(win: any): number {
+    try {
+      const index: unknown = win.get_monitor?.();
+      return typeof index === 'number' ? index : -1;
+    } catch {
+      return -1;
+    }
+  }
+
+  /**
+   * §9: the workspaces a screen displays (the primary shows them all).
+   */
   private workspacesForScreen(screen: Screen): number[] {
     const manager = global.workspace_manager;
     const count = manager.get_n_workspaces();
@@ -2874,6 +2905,10 @@ export class WindowSession {
   private moveToAdjacentMonitor(tracked: TrackedWindow, direction: string): void {
     const target = this.adjacentScreen(tracked, direction);
     if (target === null) return;
+    // §Shell stability: the screen was chosen from the cached list; only make
+    // the Mutter call while its index still exists in the live monitor list.
+    // An index that vanished mid-transition asserts inside the compositor.
+    if (!this.deps.host.isLiveMonitorIndex(target.index)) return;
     this.captureChange([tracked.id]);
     tracked.win.move_to_monitor(target.index);
     tracked.userMovedAtMs = Date.now();

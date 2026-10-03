@@ -485,13 +485,18 @@ export class GnomeHost implements PlatformHost {
     this.primaryMonitorIndex = layoutManager.primaryIndex ?? 0;
     const workspace = global.workspace_manager.get_active_workspace();
     const stageRate = this.stageRefreshRate();
+    // §Shell stability: the live logical-monitor count, re-read here rather than
+    // derived from `layoutManager.monitors`. During a removal the layout list
+    // can lag the monitor manager by one entry, and an index read from the
+    // former would make `get_work_area_for_monitor` assert.
+    const liveCount = this.liveMonitorCount();
     let sawLayout = false;
     let sawBackend = false;
     this.screensCache = monitors.map((monitor, position) => {
       // The real Mutter index, never the array position: a reordered monitor
       // list must not move the connector or the primary flag.
       const monitorIndex = monitor.index ?? position;
-      const work = workspace === null ? null : workspace.get_work_area_for_monitor(monitorIndex);
+      const work = this.workAreaFor(workspace, monitorIndex, liveCount);
       // Newer Shells put `refreshRate` on the layout monitor; older ones need
       // the Mutter mode. Neither may be assumed to exist, and a virtual monitor
       // reports a fixed rate while a real VRR panel changes at runtime.
@@ -519,6 +524,54 @@ export class GnomeHost implements PlatformHost {
       };
     });
     this.refreshSource = sawLayout ? 'layout' : sawBackend ? 'backend' : stageRate > 0 ? 'stage' : 'fallback';
+  }
+
+  /**
+   * The work area of one monitor, read only while the index is inside the live
+   * monitor list. A monitor removed mid-transition leaves a window — and for a
+   * moment the layout list — pointing at an index the workspace no longer
+   * holds; `get_work_area_for_monitor` asserts on that. Skip (never call) when
+   * the index is out of range, and treat a raced read as "no work area yet".
+   */
+  private workAreaFor(workspace: any, monitorIndex: number, liveCount: number): any | null {
+    if (workspace === null || workspace === undefined) return null;
+    if (liveCount < 0) liveCount = this.liveMonitorCount();
+    if (monitorIndex < 0 || monitorIndex >= liveCount) return null;
+    try {
+      return workspace.get_work_area_for_monitor(monitorIndex);
+    } catch {
+      return null;
+    }
+  }
+
+  /** The live logical-monitor count, or -1 when the manager is unreachable. */
+  private liveMonitorCount(): number {
+    try {
+      const manager = global.backend.get_monitor_manager();
+      // The logical monitor list is what index-based calls (work-area reads,
+      // `move_to_monitor`) resolve against. The physical list can still hold a
+      // monitor whose logical entry was just removed, so bounding against it
+      // would let a stale index through and assert.
+      if (typeof manager.get_logical_monitors === 'function') {
+        return manager.get_logical_monitors().length;
+      }
+      if (typeof manager.get_n_monitors === 'function') return manager.get_n_monitors();
+      return manager.get_monitors().length;
+    } catch {
+      return -1;
+    }
+  }
+
+  /**
+   * §Shell stability: whether a Mutter monitor index still exists in the live
+   * monitor manager. Index-based Mutter calls (`move_to_monitor`,
+   * `get_work_area_for_monitor`) must be skipped when it does not — the
+   * alternative is a C assertion inside the compositor.
+   */
+  isLiveMonitorIndex(index: number): boolean {
+    if (!Number.isInteger(index)) return false;
+    const count = this.liveMonitorCount();
+    return count > 0 && index >= 0 && index < count;
   }
 
   /**

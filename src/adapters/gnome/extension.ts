@@ -153,6 +153,7 @@ interface ExtraHandlers {
   CursorToCentre(): boolean;
   ActivatePanelItem(name: string): boolean;
   InjectFault(context: string): boolean;
+  SimulateChromeTeardown(): boolean;
   StartFrameRecording(): boolean;
   StopFrameRecording(): boolean;
 }
@@ -200,6 +201,9 @@ export default class AdrtExtension extends Extension {
   private layoutSignals: number[] = [];
   private motionSource: number | null = null;
   private coherenceSource: number | null = null;
+  /** §Shell stability: the enable-time normalisation timer, removed on disable
+   * so a queued callback never runs against a torn-down session. */
+  private normalizeSource = 0;
   /** What build is actually running (set at enable). */
   private buildDirMtimeMs = 0;
   private motionLastX = Number.NaN;
@@ -394,7 +398,8 @@ export default class AdrtExtension extends Extension {
     // §20: every enable normalises the existing workspaces. Adoption finishes on
     // the first ready timeout, so normalisation is deferred just past it; the
     // pass itself is idempotent.
-    GLib.timeout_add(GLib.PRIORITY_DEFAULT, NORMALIZE_ON_ENABLE_MS, () => {
+    this.normalizeSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, NORMALIZE_ON_ENABLE_MS, () => {
+      this.normalizeSource = 0;
       this.guard('normalize-enable', () => this.session?.normalizeOnEnable())();
       return GLib.SOURCE_REMOVE;
     });
@@ -464,6 +469,12 @@ export default class AdrtExtension extends Extension {
         this.coherenceSource = null;
       }
     });
+    this.teardown('normalize', () => {
+      if (this.normalizeSource !== 0) {
+        GLib.source_remove(this.normalizeSource);
+        this.normalizeSource = 0;
+      }
+    });
     this.teardown('session-mode', () => {
       if (this.sessionModeId !== 0) {
         sessionMode.disconnect(this.sessionModeId);
@@ -475,7 +486,16 @@ export default class AdrtExtension extends Extension {
       this.overviewSignals = [];
     });
     this.teardown('workspace-actors', () => {
-      for (const entry of this.workspaceActorSignals) entry.actor.disconnect(entry.id);
+      // §Shell stability: a workspace actor can already be destroyed at session
+      // end; a disconnect against a disposed emitter must be skipped, not
+      // logged (and never turned into a g_closure_unref assertion).
+      for (const entry of this.workspaceActorSignals) {
+        try {
+          entry.actor.disconnect(entry.id);
+        } catch {
+          /* the actor is gone */
+        }
+      }
       this.workspaceActorSignals = [];
     });
     this.teardown('workspace-animation', () => this.disconnectWorkspaceAnimation());
@@ -575,6 +595,20 @@ export default class AdrtExtension extends Extension {
       throw new Error(`injected fault (${context})`);
     }, '[adrt] guard-test')();
     return this.errorCount > before;
+  }
+
+  /**
+   * §Shell-stability test trigger: destroy the chrome actors exactly the way
+   * the Shell's session end does, then leave the extension running, so a
+   * scenario can disable/reload against chrome the Shell has already torn
+   * down. Gated on `ADRT_TEST_TRIGGERS=1`: never reachable in a production
+   * session.
+   */
+  private simulateChromeTeardown(): boolean {
+    if (GLib.getenv('ADRT_TEST_TRIGGERS') !== '1') return false;
+    this.indicator?.destroyChromeActors();
+    this.panel?.destroyChromeActors();
+    return true;
   }
 
   // ---------------------------------------------------------------- session
@@ -1188,7 +1222,15 @@ export default class AdrtExtension extends Extension {
    * position is therefore a precise, focus-independent transition signal.
    */
   private refreshWorkspaceActors(): void {
-    for (const entry of this.workspaceActorSignals) entry.actor.disconnect(entry.id);
+    // §Shell stability: an actor that vanished since the last pass must be
+    // disconnected from without raising (the emitter is already disposed).
+    for (const entry of this.workspaceActorSignals) {
+      try {
+        entry.actor.disconnect(entry.id);
+      } catch {
+        /* the actor is gone */
+      }
+    }
     this.workspaceActorSignals = [];
     const workspaces = (layoutManager as any)._workspaces;
     if (!Array.isArray(workspaces)) return;
@@ -2039,6 +2081,7 @@ export default class AdrtExtension extends Extension {
       CursorToCentre: () => this.session.centreCursorNow(),
       ActivatePanelItem: (name) => this.panel?.activate(name) ?? false,
       InjectFault: (context) => this.simulateFault(context),
+      SimulateChromeTeardown: () => this.simulateChromeTeardown(),
       StartFrameRecording: () => {
         this.animator.startRecording();
         return true;
