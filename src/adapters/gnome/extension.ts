@@ -14,7 +14,7 @@ import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
-import { layoutManager, notify, overview, sessionMode, wm } from 'resource:///org/gnome/shell/ui/main.js';
+import { notify, overview, sessionMode, wm } from 'resource:///org/gnome/shell/ui/main.js';
 
 import type { AdaptationRecord, Bundle, ImportMode } from '../../core/config.js';
 import { BUNDLE_FORMAT, BUNDLE_VERSION, normalizeBundle, serializeBundle } from '../../core/config.js';
@@ -47,6 +47,8 @@ import { Recorder } from './recorder.js';
 import { RecordingPrompt } from './recording-prompt.js';
 import { RegistryStore } from './registry.js';
 import { WindowSession } from './session.js';
+import { ShellTracker } from './shell-tracker.js';
+import type { ShellTrackerEvent } from './shell-tracker.js';
 import type { TrackedWindow } from './tracked-window.js';
 import { GnomeSettings } from './settings.js';
 import { GnomeTiming } from './timing.js';
@@ -183,6 +185,8 @@ export default class AdrtExtension extends Extension {
   private session!: WindowSession;
   private gestures!: GestureInput;
   private dbus!: GnomeDbus;
+  /** Shell-chrome subscriptions; emits events, keeps no policy (§11). */
+  private tracker!: ShellTracker;
   private border!: BorderState;
   private sessionMachine = new SessionMachine();
   /** The start/stop bug recorder; inert until a `StartRecording` request. */
@@ -443,17 +447,14 @@ export default class AdrtExtension extends Extension {
       this.dbus.expose(this.guardedHandlers());
     }
 
-    this.signals.add('session-mode', sessionMode, 'notify::current-mode', this.guard('session-mode', () => {
-      // A live session transition always wins over a test-injected mode.
-      this.injectedMode = null;
-      this.applySessionMode(this.currentMode());
-    }));
-    this.signals.add('overview', overview, 'showing', this.guard('overview-showing', () => this.onOverviewChanged(true)));
-    this.signals.add('overview', overview, 'hidden', this.guard('overview-hidden', () => this.onOverviewChanged(false)));
-    this.refreshWorkspaceActors();
-    this.connectWorkspaceAnimation();
-    this.signals.add('layout', global.workspace_manager, 'workspace-added', this.guard('workspace-added', () => this.refreshWorkspaceActors()));
-    this.signals.add('layout', global.workspace_manager, 'workspace-removed', this.guard('workspace-removed', () => this.refreshWorkspaceActors()));
+    // §11: shell-chrome subscriptions live in the tracker, which only emits;
+    // every policy branch below stays here.
+    this.tracker = new ShellTracker({
+      signals: this.signals,
+      guard: (context, cb) => this.guard(context, cb),
+      emit: (event) => this.onTrackerEvent(event),
+    });
+    this.tracker.enable();
     this.applySessionMode(this.currentMode(), true);
     // §23: hide the border if the extension is enabled while the overview is
     // already open (e.g. a headless shell that starts in it); the `showing`
@@ -514,11 +515,7 @@ export default class AdrtExtension extends Extension {
     this.teardown('motion', () => this.stopMotionWatch());
     this.teardown('coherence', () => this.timers.clear('coherence'));
     this.teardown('normalize', () => this.timers.clear('normalize-enable'));
-    this.teardown('session-mode', () => this.signals.disconnect('session-mode'));
-    this.teardown('overview', () => this.signals.disconnect('overview'));
-    this.teardown('workspace-actors', () => this.signals.disconnect('workspace-actors'));
-    this.teardown('workspace-animation', () => this.disconnectWorkspaceAnimation());
-    this.teardown('layout', () => this.signals.disconnect('layout'));
+    this.teardown('shell-tracker', () => this.tracker?.disable());
     this.teardown('simulate-workspace-switch', () => this.timers.clear('simulate-workspace-switch'));
     this.teardown('keybindings', () => this.unregisterKeybindings());
     this.teardown('setting-watchers', () => {
@@ -984,22 +981,27 @@ export default class AdrtExtension extends Extension {
     }
   }
 
-  /**
-   * §23.2: GNOME's WorkspaceAnimationController slides clones of the windows
-   * while a switch runs (keyboard animation or touchpad gesture), so the real
-   * window actors — and therefore the position watcher — never move. The
-   * controller emits no signal, but its swipe tracker does; attach to it so the
-   * border hides the instant a gesture starts.
-   */
-  private connectWorkspaceAnimation(): void {
-    const tracker = (wm as any)?._workspaceAnimation?._swipeTracker;
-    if (tracker === null || tracker === undefined || typeof tracker.connect !== 'function') return;
-    this.signals.add('workspace-animation', tracker, 'begin', this.guard('workspace-animation-begin', () => this.onWorkspaceAnimation()));
-    this.signals.add('workspace-animation', tracker, 'update', this.guard('workspace-animation-update', () => this.onWorkspaceAnimation()));
-  }
-
-  private disconnectWorkspaceAnimation(): void {
-    this.signals.disconnect('workspace-animation');
+  /** Policy for the shell tracker's events (§11): the tracker emits, this decides. */
+  private onTrackerEvent(event: ShellTrackerEvent): void {
+    switch (event.type) {
+      case 'session-mode':
+        // A live session transition always wins over a test-injected mode.
+        this.injectedMode = null;
+        this.applySessionMode(this.currentMode());
+        break;
+      case 'overview':
+        this.onOverviewChanged(event.visible);
+        break;
+      case 'workspace-actor-moved':
+        this.onWorkspaceActorMoved();
+        break;
+      case 'workspace-animation':
+        this.onWorkspaceAnimation();
+        break;
+      case 'workspace-mode':
+        this.onWorkspaceModeChanged(event.key);
+        break;
+    }
   }
 
   private onWorkspaceAnimation(): void {
@@ -1081,7 +1083,7 @@ export default class AdrtExtension extends Extension {
     // §Self-heal containment: a throw in a tick must never escape the GLib
     // source (it would log as an unhandled exception and could wedge the
     // compositor's dispatch); the boundary contains and reports it.
-    this.timers.add('motion', this.motionPollMs, this.guardSource('motion-tick', () => this.onMotionTick()));
+    this.timers.addInterval('motion', this.motionPollMs, this.guardSource('motion-tick', () => this.onMotionTick()));
   }
 
   /** The current motion sampler interval, derived from the frame interval. */
@@ -1380,22 +1382,6 @@ export default class AdrtExtension extends Extension {
     }
   }
 
-  /**
-   * Workspace actors translate during a workspace switch — keyboard or
-   * touchpad gesture — and never move when we tile a window. Watching their
-   * position is therefore a precise, focus-independent transition signal.
-   */
-  private refreshWorkspaceActors(): void {
-    this.signals.disconnect('workspace-actors');
-    const workspaces = (layoutManager as any)._workspaces;
-    if (!Array.isArray(workspaces)) return;
-    for (const actor of workspaces) {
-      if (actor === null || actor === undefined) continue;
-      this.signals.add('workspace-actors', actor, 'notify::x', this.guard('workspace-actor-x', () => this.onWorkspaceActorMoved()));
-      this.signals.add('workspace-actors', actor, 'notify::y', this.guard('workspace-actor-y', () => this.onWorkspaceActorMoved()));
-    }
-  }
-
   private onWorkspaceActorMoved(): void {
     if (this.isPaused()) return;
     this.suppressForWorkspaceSwitch();
@@ -1528,28 +1514,6 @@ export default class AdrtExtension extends Extension {
     // §Self-heal containment: settings watchers run inside GSettings signal
     // emissions; each is wrapped by the boundary.
     for (const [key, cb] of reactive) this.settingWatchers.push(this.settings.onChanged(key, this.guard(`setting:${key}`, cb)));
-    this.watchWorkspaceModeSettings();
-  }
-
-  /**
-   * §1: `dynamic-workspaces`, `workspaces-only-on-primary` and `num-workspaces`
-   * live on system schemas and decide each screen's class and slot routing, but
-   * were read per drain with no subscription — a flip in Tweaks left the class
-   * stale until an unrelated Mutter signal. Watch them like the other reactive
-   * settings and re-derive the placement state.
-   */
-  private watchWorkspaceModeSettings(): void {
-    const watch = (schema: string, key: string): void => {
-      try {
-        const store = new Gio.Settings({ schema_id: schema });
-        this.signals.add('settings', store, `changed::${key}`, this.guard(`workspace-mode:${key}`, () => this.onWorkspaceModeChanged(key)));
-      } catch {
-        /* the schema is unavailable in this shell: nothing to watch */
-      }
-    };
-    watch('org.gnome.mutter', 'dynamic-workspaces');
-    watch('org.gnome.mutter', 'workspaces-only-on-primary');
-    watch('org.gnome.desktop.wm.preferences', 'num-workspaces');
   }
 
   /** Re-derive the screen class and slot occupancy after a workspace-mode flip. */
