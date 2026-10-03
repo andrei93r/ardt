@@ -59,27 +59,46 @@ export class AdrtPanel {
    * for a user click (and, for the pause item, set a spurious manual pause).
    */
   private syncing = false;
+  /**
+   * §Shell stability: the Shell destroys the status-area button itself at
+   * session end, before `disable()` runs. A destroyed button is only noticed
+   * through its own `destroy` signal — touching it again would log a Gjs
+   * "already been disposed" critical even inside a try/catch.
+   */
+  private destroyed = false;
+  private buttonGone = false;
+  private readonly toggledIds: { item: any; id: number }[] = [];
+  private menuOpenId = 0;
 
   constructor(private readonly callbacks: PanelCallbacks) {
     // `dontCreateMenu: false` gives the button its own PopupMenu to fill.
     this.button = new PanelMenu.Button(0.0, 'Adrt', false);
     this.button.add_child(new St.Icon({ icon_name: 'view-grid-symbolic', style_class: 'system-status-icon' }));
+    this.button.connect('destroy', () => {
+      this.buttonGone = true;
+    });
 
     this.pauseItem = new PopupMenu.PopupSwitchMenuItem('Pause tiling', false);
-    this.pauseItem.connect('toggled', (_item: any, state: boolean) => {
-      if (this.syncing) return;
-      // The switch already moved; the callback adopts the new value and every
-      // other reader (tiling, indicator) sees it through the pause predicate.
-      this.callbacks.setPaused(state);
-      this.sync();
+    this.toggledIds.push({
+      item: this.pauseItem,
+      id: this.pauseItem.connect('toggled', (_item: any, state: boolean) => {
+        if (this.syncing) return;
+        // The switch already moved; the callback adopts the new value and every
+        // other reader (tiling, indicator) sees it through the pause predicate.
+        this.callbacks.setPaused(state);
+        this.sync();
+      }),
     });
     this.button.menu.addMenuItem(this.pauseItem);
 
     this.indicatorItem = new PopupMenu.PopupSwitchMenuItem('Active-window highlight', true);
-    this.indicatorItem.connect('toggled', (_item: any, state: boolean) => {
-      if (this.syncing) return;
-      this.callbacks.setIndicatorEnabled(state);
-      this.sync();
+    this.toggledIds.push({
+      item: this.indicatorItem,
+      id: this.indicatorItem.connect('toggled', (_item: any, state: boolean) => {
+        if (this.syncing) return;
+        this.callbacks.setIndicatorEnabled(state);
+        this.sync();
+      }),
     });
     this.button.menu.addMenuItem(this.indicatorItem);
 
@@ -87,10 +106,13 @@ export class AdrtPanel {
     // recorder's own state, not a setting, so a recording stopped by its cap
     // still snaps the row back off through `sync()`.
     this.recordItem = new PopupMenu.PopupSwitchMenuItem('Record a bug', false);
-    this.recordItem.connect('toggled', (_item: any, _state: boolean) => {
-      if (this.syncing) return;
-      this.callbacks.toggleRecording();
-      this.sync();
+    this.toggledIds.push({
+      item: this.recordItem,
+      id: this.recordItem.connect('toggled', (_item: any, _state: boolean) => {
+        if (this.syncing) return;
+        this.callbacks.toggleRecording();
+        this.sync();
+      }),
     });
     this.button.menu.addMenuItem(this.recordItem);
 
@@ -99,7 +121,7 @@ export class AdrtPanel {
 
     // A menu built while paused must not show stale labels after the state was
     // changed elsewhere (a keybinding, lock, sharing, the prefs window).
-    this.button.menu.connect('open-state-changed', (_menu: any, open: boolean) => {
+    this.menuOpenId = this.button.menu.connect('open-state-changed', (_menu: any, open: boolean) => {
       if (open) this.sync();
     });
 
@@ -110,6 +132,7 @@ export class AdrtPanel {
   /** Redraw the menu to match the live state. Never throws: it may be called
    * from a state-change path. */
   sync(): void {
+    if (this.destroyed || this.buttonGone) return;
     this.syncing = true;
     try {
       const paused = this.callbacks.isPaused();
@@ -134,6 +157,7 @@ export class AdrtPanel {
    * same action the menu row does. Returns false for an unknown name.
    */
   activate(name: string): boolean {
+    if (this.destroyed || this.buttonGone) return false;
     switch (name) {
       case 'pause':
         this.pauseItem.toggle();
@@ -168,18 +192,73 @@ export class AdrtPanel {
     } catch {
       /* report the widget's own flags below */
     }
+    let pauseLabel = '';
+    let indicatorLabel = '';
+    let recordLabel = '';
+    if (!this.destroyed && !this.buttonGone) {
+      try {
+        pauseLabel = this.pauseItem?.label?.text ?? '';
+        indicatorLabel = this.indicatorItem?.label?.text ?? '';
+        recordLabel = this.recordItem?.label?.text ?? '';
+      } catch {
+        /* the items went away mid-read */
+      }
+    }
     return {
       present: true,
       paused,
       indicatorEnabled: indicator,
       recording,
-      pauseLabel: this.pauseItem?.label?.text ?? '',
-      indicatorLabel: this.indicatorItem?.label?.text ?? '',
-      recordLabel: this.recordItem?.label?.text ?? '',
+      pauseLabel,
+      indicatorLabel,
+      recordLabel,
     };
   }
 
+  /**
+   * §Shell stability: tear the panel down. Idempotent, and safe when the Shell
+   * already destroyed the button: signals are disconnected before the destroy,
+   * each guarded because the emitter (or its closure) may already be gone.
+   */
   destroy(): void {
-    this.button.destroy();
+    if (this.destroyed) return;
+    this.destroyed = true;
+    if (!this.buttonGone) {
+      if (this.menuOpenId !== 0) {
+        try {
+          this.button.menu.disconnect(this.menuOpenId);
+        } catch {
+          /* the menu is gone */
+        }
+        this.menuOpenId = 0;
+      }
+      for (const { item, id } of this.toggledIds) {
+        try {
+          item.disconnect(id);
+        } catch {
+          /* the item is gone */
+        }
+      }
+      this.toggledIds.length = 0;
+      try {
+        this.button.destroy();
+      } catch {
+        /* already destroyed */
+      }
+    }
+  }
+
+  /**
+   * §Shell-stability test trigger: destroy the button exactly the way the
+   * Shell's session end does (raw `destroy()`, none of adrt's bookkeeping), so
+   * a scenario can prove `disable()` survives chrome the Shell already tore
+   * down.
+   */
+  destroyChromeActors(): void {
+    try {
+      this.button.destroy();
+    } catch {
+      /* already destroyed */
+    }
   }
 }

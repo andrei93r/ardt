@@ -138,6 +138,7 @@ screen-sharing-opt-in | A28-screen-sharing A148-sharing-opt-in
 panel-affordance | A147-panel
 workspace-mode-settings | A149-workspace-mode
 error-boundary | A146-error-boundary
+shell-stability | A161-shell-teardown A162-monitor-removal A163-self-heal
 
 # ------------------------------------------------- app compatibility (per toolkit)
 # Every app gets the SAME checklist (tests/lib/appcheck.sh) and each row is

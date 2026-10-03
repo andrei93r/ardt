@@ -77,6 +77,14 @@ const COHERENCE_SWEEP_MS = 700;
 const NORMALIZE_ON_ENABLE_MS = 400;
 /** §23.2: a workspace-switch animation still running after this is torn down. */
 const SWITCH_WATCHDOG_MS = 1500;
+/** §Self-heal: N caught errors inside this window triggers one in-place restart. */
+const RECOVERY_WINDOW_MS = 60_000;
+/** §Self-heal: the error burst size that asks for a restart. */
+const RECOVERY_THRESHOLD = 3;
+/** §Self-heal: restarts are capped per window, so a persistent fault cannot loop. */
+const RESTART_WINDOW_MS = 10 * 60_000;
+/** §Self-heal: beyond this many restarts the extension self-disables instead. */
+const RESTART_CAP = 3;
 
 /**
  * Parse the `SpawnWindow` argv argument. A JSON array is the supported form; a
@@ -153,6 +161,7 @@ interface ExtraHandlers {
   CursorToCentre(): boolean;
   ActivatePanelItem(name: string): boolean;
   InjectFault(context: string): boolean;
+  SimulateChromeTeardown(): boolean;
   StartFrameRecording(): boolean;
   StopFrameRecording(): boolean;
 }
@@ -193,6 +202,29 @@ export default class AdrtExtension extends Extension {
   private injectKeyboard: any = null;
   /** Errors caught by the outer boundaries (enable, signal handlers). */
   private errorCount = 0;
+  /**
+   * §Self-heal: caught errors never propagate into the Shell; when they come
+   * in bursts the extension restarts itself in place, and when a persistent
+   * fault outlives the restart cap it self-disables and leaves the Shell
+   * running. Hard truth: a JS try/catch cannot catch the failures that
+   * actually take GNOME down (`already disposed`, `clutter_actor_remove_child`,
+   * `g_closure_unref`, Mutter monitor assertions are C-level) — that is what
+   * the dispose-safe teardown and the monitor-index bounds prevent. This
+   * machinery recovers from what JS *can* catch, and never claims more.
+   */
+  /** Timestamps of caught errors inside the current window. */
+  private recoveryErrors: number[] = [];
+  /** Timestamps of in-place restarts, for the per-window cap. */
+  private restartTimes: number[] = [];
+  private restartPending = false;
+  private restarting = false;
+  private restartDeferred = false;
+  private selfDisabled = false;
+  /** True while GNOME itself is disabling the extension (never restart then). */
+  private gnomeDisable = false;
+  private restarts = 0;
+  private selfDisables = 0;
+  private lastErrorAt = 0;
   private sessionModeId = 0;
   private overviewSignals: number[] = [];
   private swipeSignalIds: number[] = [];
@@ -200,6 +232,9 @@ export default class AdrtExtension extends Extension {
   private layoutSignals: number[] = [];
   private motionSource: number | null = null;
   private coherenceSource: number | null = null;
+  /** §Shell stability: the enable-time normalisation timer, removed on disable
+   * so a queued callback never runs against a torn-down session. */
+  private normalizeSource = 0;
   /** What build is actually running (set at enable). */
   private buildDirMtimeMs = 0;
   private motionLastX = Number.NaN;
@@ -240,6 +275,15 @@ export default class AdrtExtension extends Extension {
 
   enable(): void {
     const started = GLib.get_monotonic_time();
+    // §Self-heal: a real enable (GNOME entry point) resets the recovery state —
+    // a re-enabled extension is a fresh start. The cumulative counters stay
+    // (add-only diagnostics).
+    this.gnomeDisable = false;
+    this.selfDisabled = false;
+    this.restartPending = false;
+    this.restarting = false;
+    this.restartDeferred = false;
+    this.recoveryErrors = [];
     // §36: the entry point is the most important boundary — a throw here makes
     // GNOME disable the extension (and can cascade in the Shell). Catch it, log
     // it, and let `disable()` clean up whatever was half-built.
@@ -298,14 +342,16 @@ export default class AdrtExtension extends Extension {
     this.changes = new ChangeLog();
     this.border = new BorderState();
 
-    this.host = new GnomeHost();
+    this.host = new GnomeHost((context, error) => this.reportError(context, error));
     this.host.enable();
 
     this.indicator = new GnomeIndicator(this.settings, this.timing);
     this.animator = new FrameClockAnimator({
       isAlive: (id) => this.session.windows.has(id),
-      apply: (id, rect) => this.host.applyFrame(id, rect),
-      onFrame: (id, rect) => this.onAnimatedFrame(id, rect),
+      // §Self-heal containment: these run inside Clutter timeline signal
+      // emissions — a throw must never propagate out of them.
+      apply: (id, rect) => this.guard('animator-apply', () => this.host.applyFrame(id, rect))(),
+      onFrame: (id, rect) => this.guard('animator-frame', () => this.onAnimatedFrame(id, rect))(),
     });
 
     this.tiling = new Tiling({
@@ -376,11 +422,12 @@ export default class AdrtExtension extends Extension {
     if (injectedFailures > 0) this.tiling.injectVerifyFailures(injectedFailures);
 
     this.gestures = new GestureInput(this.settings, this.history, {
-      switchWorkspace: (direction) => this.switchWorkspace(direction),
-      toggleOverview: () => overview.toggle(),
-      showDesktop: () => overview.toggle(),
-      swapPair: (direction) => this.session.moveToward(direction),
-      custom: (action) => this.history.log('gesture', { custom: action }),
+      // §Self-heal containment: these run inside stage signal emissions.
+      switchWorkspace: (direction) => this.guard('gesture:switch-workspace', () => this.switchWorkspace(direction))(),
+      toggleOverview: () => this.guard('gesture:overview', () => overview.toggle())(),
+      showDesktop: () => this.guard('gesture:show-desktop', () => overview.toggle())(),
+      swapPair: (direction) => this.guard('gesture:swap-pair', () => this.session.moveToward(direction))(),
+      custom: (action) => this.guard('gesture:custom', () => this.history.log('gesture', { custom: action }))(),
     });
 
     this.restoreState();
@@ -394,7 +441,8 @@ export default class AdrtExtension extends Extension {
     // §20: every enable normalises the existing workspaces. Adoption finishes on
     // the first ready timeout, so normalisation is deferred just past it; the
     // pass itself is idempotent.
-    GLib.timeout_add(GLib.PRIORITY_DEFAULT, NORMALIZE_ON_ENABLE_MS, () => {
+    this.normalizeSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, NORMALIZE_ON_ENABLE_MS, () => {
+      this.normalizeSource = 0;
       this.guard('normalize-enable', () => this.session?.normalizeOnEnable())();
       return GLib.SOURCE_REMOVE;
     });
@@ -402,7 +450,10 @@ export default class AdrtExtension extends Extension {
     this.gestures.configure();
     if (this.settings.boolean('dbus-enabled', true)) {
       this.dbus = new GnomeDbus();
-      this.dbus.expose(this.handlers());
+      // §Self-heal containment: every D-Bus trigger runs inside the boundary,
+      // so a throw in one method reports and returns instead of escaping into
+      // the caller (or GJS's unhandled-exception path).
+      this.dbus.expose(this.guardedHandlers());
     }
 
     this.sessionModeId = sessionMode.connect('notify::current-mode', this.guard('session-mode', () => {
@@ -453,6 +504,21 @@ export default class AdrtExtension extends Extension {
     // the Shell keeps adrt *resident* while the screen is locked instead of
     // tearing it down. `disable()` therefore runs on logout/extension removal,
     // not on lock; the lock transition is handled by `applySessionMode`.
+    // §Self-heal: a GNOME-initiated disable is never a moment to restart; mark
+    // it so the recovery policy stays quiet through the teardown below.
+    this.gnomeDisable = true;
+    try {
+      this.disableWith();
+    } catch (error) {
+      this.reportError('disable', error);
+    }
+  }
+
+  /** The teardown body, shared by `disable()`, the in-place restart and the
+   * self-disable. Idempotent: every step guards its own resource, so a second
+   * run (or a run over a half-built enable) tears down what exists and skips
+   * the rest. */
+  private disableWith(): void {
     // §36: every teardown step is independent and guarded — if `enable()` threw
     // half-built, or one resource misbehaves, the rest still tears down cleanly.
     this.teardown('journal', () => this.journal?.destroy());
@@ -462,6 +528,12 @@ export default class AdrtExtension extends Extension {
       if (this.coherenceSource !== null) {
         GLib.source_remove(this.coherenceSource);
         this.coherenceSource = null;
+      }
+    });
+    this.teardown('normalize', () => {
+      if (this.normalizeSource !== 0) {
+        GLib.source_remove(this.normalizeSource);
+        this.normalizeSource = 0;
       }
     });
     this.teardown('session-mode', () => {
@@ -475,7 +547,16 @@ export default class AdrtExtension extends Extension {
       this.overviewSignals = [];
     });
     this.teardown('workspace-actors', () => {
-      for (const entry of this.workspaceActorSignals) entry.actor.disconnect(entry.id);
+      // §Shell stability: a workspace actor can already be destroyed at session
+      // end; a disconnect against a disposed emitter must be skipped, not
+      // logged (and never turned into a g_closure_unref assertion).
+      for (const entry of this.workspaceActorSignals) {
+        try {
+          entry.actor.disconnect(entry.id);
+        } catch {
+          /* the actor is gone */
+        }
+      }
       this.workspaceActorSignals = [];
     });
     this.teardown('workspace-animation', () => this.disconnectWorkspaceAnimation());
@@ -548,6 +629,38 @@ export default class AdrtExtension extends Extension {
   }
 
   /**
+   * §Self-heal containment: like `guard`, but for callbacks whose return value
+   * matters (D-Bus method handlers). A contained throw still reports through
+   * the boundary; the caller sees `undefined`.
+   */
+  private guardValue<A extends unknown[]>(context: string, cb: (...args: A) => unknown): (...args: A) => unknown {
+    return (...args: A): unknown => {
+      try {
+        return cb(...args);
+      } catch (error) {
+        this.reportError(context, error);
+        return undefined;
+      }
+    };
+  }
+
+  /**
+   * §Self-heal containment: like `guard`, but for GLib source callbacks whose
+   * boolean return arms the next tick. A contained throw ends the source —
+   * the periodic safety nets re-arm on their own schedule.
+   */
+  private guardSource(context: string, cb: () => boolean): () => boolean {
+    return (): boolean => {
+      try {
+        return cb();
+      } catch (error) {
+        this.reportError(context, error);
+        return GLib.SOURCE_REMOVE;
+      }
+    };
+  }
+
+  /**
    * Log a caught error (`[adrt] ERROR`-style) and journal it. It is deliberately
    * loud: the boundary stops propagation, never hides the fault. The marker is
    * overridable only for the injected-fault test, which must not trip the
@@ -556,11 +669,140 @@ export default class AdrtExtension extends Extension {
   private reportError(context: string, error: unknown, marker = '[adrt] ERROR'): void {
     const message = error instanceof Error ? error.message : String(error);
     this.errorCount += 1;
+    this.lastErrorAt = Date.now();
     console.error(`${marker} ${context}: ${message}`);
     try {
       this.journal?.record('error', 'guarded', { context, error: message });
     } catch {
       /* logging must never rethrow out of the boundary */
+    }
+    // §Self-heal: a caught error is also a recovery signal. It is still an
+    // error — the policy decides whether to restart, never whether to report.
+    this.noteRecoveryError(context);
+  }
+
+  // -------------------------------------------------------------- self-heal
+
+  /** Whether a user interaction is in flight: a restart must never cut it. */
+  private interactionActive(): boolean {
+    return (
+      this.session?.isDragging === true ||
+      this.session?.clientInteractionActive === true ||
+      this.animator?.activeCount > 0 ||
+      this.workspaceAnimationActive()
+    );
+  }
+
+  /** Feed one caught error into the sliding recovery window. */
+  private noteRecoveryError(context: string): void {
+    if (this.selfDisabled || this.gnomeDisable) return;
+    const now = Date.now();
+    this.recoveryErrors = this.recoveryErrors.filter((t) => now - t < RECOVERY_WINDOW_MS);
+    this.recoveryErrors.push(now);
+    if (this.recoveryErrors.length >= RECOVERY_THRESHOLD) this.considerRecovery(context);
+  }
+
+  /**
+   * The recovery policy. Runs whenever the error window fills, and again when
+   * a deferred restart's obstacle (a drag, a transition) clears. Never restarts
+   * inline: the work is scheduled on idle, always outside the emission that
+   * caught the error.
+   */
+  private considerRecovery(context: string): void {
+    if (this.selfDisabled || this.gnomeDisable || this.restarting || this.restartPending) return;
+    const now = Date.now();
+    this.restartTimes = this.restartTimes.filter((t) => now - t < RESTART_WINDOW_MS);
+    if (this.restartTimes.length >= RESTART_CAP) {
+      this.selfDisable(context);
+      return;
+    }
+    // Never restart mid-gesture or mid-transition; defer until it ends (the
+    // drag-end path and the motion tick re-run this check).
+    if (this.interactionActive()) {
+      this.restartDeferred = true;
+      return;
+    }
+    this.restartPending = true;
+    this.restartTimes.push(now);
+    this.recoveryErrors = [];
+    GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+      this.restartPending = false;
+      this.restartDeferred = false;
+      this.restartInPlace(context);
+      return GLib.SOURCE_REMOVE;
+    });
+  }
+
+  /**
+   * Re-check a deferred restart once the interaction that blocked it has
+   * ended (a released drag). The threshold was already met; this only waits
+   * for the obstacle to clear.
+   */
+  private reconsiderDeferredRestart(): void {
+    if (!this.restartDeferred || this.interactionActive()) return;
+    this.restartDeferred = false;
+    this.considerRecovery('interaction-ended');
+  }
+
+  /**
+   * The in-process restart: a full internal teardown and re-init inside the
+   * same loaded extension — never `Main.extensionManager` reload/enable (that
+   * unloads and reloads modules mid-signal). Runs on idle, never inline, and
+   * is visible: a log line, a history entry and a DumpState counter.
+   */
+  private restartInPlace(context: string): void {
+    if (this.selfDisabled || this.gnomeDisable) return;
+    this.restarting = true;
+    try {
+      this.history?.log('extension_restart', { reason: context, at: Date.now(), restarts: this.restarts + 1 });
+      this.journal?.record('model', 'extension_restart', { reason: context });
+    } catch {
+      /* the journal may be gone already; the restart itself is the fix */
+    }
+    console.warn(`[adrt] restarting in place after repeated caught errors (${context})`);
+    this.restarts += 1;
+    try {
+      this.disableWith();
+    } catch (error) {
+      this.reportError('restart-teardown', error);
+    }
+    try {
+      this.enableWith(GLib.get_monotonic_time());
+    } catch (error) {
+      this.reportError('restart-enable', error);
+    } finally {
+      this.restarting = false;
+    }
+  }
+
+  /**
+   * The last resort: the fault outlived the restart cap. Tear everything down
+   * and leave the Shell running, with a toast pointing the user at Extensions.
+   * The Shell still sees the extension as enabled; the next `enable()` (from
+   * Extensions, or the harness) starts fresh.
+   */
+  private selfDisable(context: string): void {
+    if (this.selfDisabled) return;
+    this.selfDisabled = true;
+    this.restartPending = false;
+    this.restartDeferred = false;
+    console.warn(`[adrt] self-disabling after repeated caught errors (${context}); re-enable from Extensions`);
+    try {
+      this.history?.log('extension_self_disable', { reason: context, at: Date.now() });
+      this.journal?.record('model', 'extension_self_disable', { reason: context });
+    } catch {
+      /* journal gone: the counters still record it */
+    }
+    try {
+      notify('Adrt', 'Adrt stopped itself after repeated internal errors. Re-enable it from the Extensions app.');
+    } catch {
+      /* no notification tray mid-shutdown */
+    }
+    this.selfDisables += 1;
+    try {
+      this.disableWith();
+    } catch (error) {
+      this.reportError('self-disable', error);
     }
   }
 
@@ -575,6 +817,20 @@ export default class AdrtExtension extends Extension {
       throw new Error(`injected fault (${context})`);
     }, '[adrt] guard-test')();
     return this.errorCount > before;
+  }
+
+  /**
+   * §Shell-stability test trigger: destroy the chrome actors exactly the way
+   * the Shell's session end does, then leave the extension running, so a
+   * scenario can disable/reload against chrome the Shell has already torn
+   * down. Gated on `ADRT_TEST_TRIGGERS=1`: never reachable in a production
+   * session.
+   */
+  private simulateChromeTeardown(): boolean {
+    if (GLib.getenv('ADRT_TEST_TRIGGERS') !== '1') return false;
+    this.indicator?.destroyChromeActors();
+    this.panel?.destroyChromeActors();
+    return true;
   }
 
   // ---------------------------------------------------------------- session
@@ -848,6 +1104,8 @@ export default class AdrtExtension extends Extension {
     } else {
       this.unsuppressBorder('drag');
       this.startMotionWatch();
+      // §Self-heal: the gesture a deferred restart was waiting for has ended.
+      this.reconsiderDeferredRestart();
     }
     this.syncPreview();
     this.syncIndicator();
@@ -876,7 +1134,10 @@ export default class AdrtExtension extends Extension {
   private armMotionWatch(): void {
     this.motionPollMs = this.derivedMotionPollMs();
     this.motionRetileTicks = this.derivedMotionRetileTicks();
-    this.motionSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this.motionPollMs, () => this.onMotionTick());
+    // §Self-heal containment: a throw in a tick must never escape the GLib
+    // source (it would log as an unhandled exception and could wedge the
+    // compositor's dispatch); the boundary contains and reports it.
+    this.motionSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this.motionPollMs, this.guardSource('motion-tick', () => this.onMotionTick()));
   }
 
   /** The current motion sampler interval, derived from the frame interval. */
@@ -896,6 +1157,9 @@ export default class AdrtExtension extends Extension {
   }
 
   private onMotionTick(): boolean {
+    // §Self-heal: a restart deferred by a live interaction is re-checked here,
+    // on the periodic tick, so it lands as soon as the obstacle clears.
+    this.reconsiderDeferredRestart();
     // §22 extension: the recorder's ~20 Hz state sample rides this existing tick
     // (a no-op with no recording). It runs before the pause/park returns below so
     // a still recording still sees the state that changed.
@@ -1188,7 +1452,15 @@ export default class AdrtExtension extends Extension {
    * position is therefore a precise, focus-independent transition signal.
    */
   private refreshWorkspaceActors(): void {
-    for (const entry of this.workspaceActorSignals) entry.actor.disconnect(entry.id);
+    // §Shell stability: an actor that vanished since the last pass must be
+    // disconnected from without raising (the emitter is already disposed).
+    for (const entry of this.workspaceActorSignals) {
+      try {
+        entry.actor.disconnect(entry.id);
+      } catch {
+        /* the actor is gone */
+      }
+    }
     this.workspaceActorSignals = [];
     const workspaces = (layoutManager as any)._workspaces;
     if (!Array.isArray(workspaces)) return;
@@ -1275,7 +1547,7 @@ export default class AdrtExtension extends Extension {
     // Any setting change drops the memoised classifier config: it is read per
     // window per pass, and a stale config would be a correctness bug, not a perf
     // win, so the invalidation is blanket.
-    this.settingWatchers.push(this.settings.onAnyChange(() => undefined));
+    this.settingWatchers.push(this.settings.onAnyChange(this.guard('setting:any', () => undefined)));
     const reactive: [string, () => void][] = [
       ['exception-apps', () => this.session.invalidateAll()],
       ['rules-json', () => this.session.invalidateAll()],
@@ -1330,7 +1602,9 @@ export default class AdrtExtension extends Extension {
         this.registerKeybindings();
       }]),
     ];
-    for (const [key, cb] of reactive) this.settingWatchers.push(this.settings.onChanged(key, cb));
+    // §Self-heal containment: settings watchers run inside GSettings signal
+    // emissions; each is wrapped by the boundary.
+    for (const [key, cb] of reactive) this.settingWatchers.push(this.settings.onChanged(key, this.guard(`setting:${key}`, cb)));
     this.watchWorkspaceModeSettings();
   }
 
@@ -1458,7 +1732,7 @@ export default class AdrtExtension extends Extension {
       // an empty binding would otherwise be registered with no effect.
       if (this.settings.strv(name).length === 0) continue;
       wm.addKeybinding(name, this.getSettings(), Meta.KeyBindingFlags.NONE, Shell.ActionMode.NORMAL, () =>
-        this.dispatchKeybinding(name),
+        this.guard(`keybinding:${name}`, () => this.dispatchKeybinding(name))(),
       );
       this.keybindings.push(name);
     }
@@ -1928,6 +2202,20 @@ export default class AdrtExtension extends Extension {
     }
   }
 
+  /**
+   * §Self-heal containment: every D-Bus method runs through the error boundary
+   * with its return value preserved — a throw reports and returns `undefined`
+   * to the caller instead of escaping the dispatch.
+   */
+  private guardedHandlers(): Handlers {
+    const raw = this.handlers() as unknown as Record<string, (...args: unknown[]) => unknown>;
+    const wrapped: Record<string, (...args: unknown[]) => unknown> = {};
+    for (const name of Object.keys(raw)) {
+      wrapped[name] = this.guardValue(`dbus:${name}`, raw[name]);
+    }
+    return wrapped as unknown as Handlers;
+  }
+
   private handlers(): Handlers {
     return {
       DumpState: () => this.dumpState(),
@@ -2039,6 +2327,7 @@ export default class AdrtExtension extends Extension {
       CursorToCentre: () => this.session.centreCursorNow(),
       ActivatePanelItem: (name) => this.panel?.activate(name) ?? false,
       InjectFault: (context) => this.simulateFault(context),
+      SimulateChromeTeardown: () => this.simulateChromeTeardown(),
       StartFrameRecording: () => {
         this.animator.startRecording();
         return true;
@@ -2375,6 +2664,11 @@ export default class AdrtExtension extends Extension {
       },
       workspaceMode: this.readWorkspaceModeSettings(),
       errors: this.errorCount,
+      // §Self-heal diagnostics (add-only): the recovery counters and the last
+      // caught error, so a restart is never silent in DumpState.
+      restarts: this.restarts,
+      selfDisables: this.selfDisables,
+      lastErrorAt: this.lastErrorAt,
       flags: {
         debug: {
           enabled: this.settings.boolean('debug-enabled', false),

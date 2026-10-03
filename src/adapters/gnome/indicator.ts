@@ -43,6 +43,16 @@ export class GnomeIndicator implements IndicatorBackend {
   private interfaceSettings: any = null;
   /** The last rect handed to `showPreview`, for `DumpState` and diagnostics. */
   private previewRect: Rect | null = null;
+  /**
+   * §Shell stability: chrome actors can be destroyed by the Shell itself at
+   * session end, before (and independent of) `disable()`. A destroyed actor is
+   * only ever noticed through its own `destroy` signal — touching it again
+   * would log a Gjs "already been disposed" critical, even inside a try/catch.
+   */
+  private destroyed = false;
+  private readonly goneActors = new WeakSet<any>();
+  private stageGone = false;
+  private stageDestroyId = 0;
 
   constructor(
     private readonly settings: GnomeSettings,
@@ -50,6 +60,15 @@ export class GnomeIndicator implements IndicatorBackend {
   ) {
     this.widget = new St.Widget({ style_class: CSS_CLASS, reactive: false, visible: false });
     this.preview = new St.Widget({ style_class: PREVIEW_CLASS, reactive: false, visible: false, opacity: 120 });
+    this.widget.connect('destroy', () => this.goneActors.add(this.widget));
+    this.preview.connect('destroy', () => this.goneActors.add(this.preview));
+    try {
+      this.stageDestroyId = global.stage.connect('destroy', () => {
+        this.stageGone = true;
+      });
+    } catch {
+      this.stageDestroyId = 0;
+    }
     this.applyStyle();
     this.applyPreviewStyle();
     layoutManager.addChrome(this.widget, { affectsStruts: false, trackFullscreen: false });
@@ -63,6 +82,7 @@ export class GnomeIndicator implements IndicatorBackend {
   }
 
   show(rect: Rect): void {
+    if (this.destroyed || this.goneActors.has(this.widget)) return;
     if (!this.settings.boolean('active-window-indicator', true)) {
       this.widget.hide();
       return;
@@ -77,10 +97,12 @@ export class GnomeIndicator implements IndicatorBackend {
 
   hide(): void {
     this.stopPulse();
+    if (this.destroyed || this.goneActors.has(this.widget)) return;
     this.widget.hide();
   }
 
   showPreview(rect: Rect): void {
+    if (this.destroyed || this.goneActors.has(this.preview)) return;
     this.applyPreviewStyle();
     this.previewRect = { ...rect };
     this.preview.set_position(rect.x, rect.y);
@@ -90,10 +112,12 @@ export class GnomeIndicator implements IndicatorBackend {
 
   hidePreview(): void {
     this.previewRect = null;
+    if (this.destroyed || this.goneActors.has(this.preview)) return;
     this.preview.hide();
   }
 
   ghostClose(rect: Rect, durationMs: number): void {
+    if (this.destroyed || this.stageGone) return;
     if (!this.settings.boolean('close-animation-enabled', true)) return;
     // §18: an OS that disabled animations, or a zero resolved duration, means
     // no fade at all rather than an instant flash of chrome.
@@ -102,8 +126,32 @@ export class GnomeIndicator implements IndicatorBackend {
     ghost.set_position(rect.x, rect.y);
     ghost.set_size(rect.width, rect.height);
     ghost.set_style(this.styleString());
-    layoutManager.addChrome(ghost, { affectsStruts: false, trackFullscreen: false });
-    this.stackBelowTray(ghost);
+    // §Shell stability: a session end can have torn the chrome host down while
+    // the close signal was in flight. Give the actor up at once then and arm
+    // neither the fade nor the timer — a queued callback must never touch a
+    // disposed chrome host.
+    let added = false;
+    try {
+      layoutManager.addChrome(ghost, { affectsStruts: false, trackFullscreen: false });
+      added = true;
+      this.stackBelowTray(ghost);
+    } catch {
+      added = false;
+    }
+    if (!added) {
+      try {
+        ghost.destroy();
+      } catch {
+        /* already gone */
+      }
+      return;
+    }
+    // The Shell may destroy the ghost mid-fade (session end); the destroy
+    // signal drops it from the set, so `cleanup` never touches it again.
+    ghost.connect('destroy', () => {
+      this.goneActors.add(ghost);
+      this.ghosts.delete(ghost);
+    });
     this.ghosts.add(ghost);
 
     let sourceId = 0;
@@ -111,18 +159,26 @@ export class GnomeIndicator implements IndicatorBackend {
       if (!this.ghosts.has(ghost)) return;
       this.ghosts.delete(ghost);
       if (sourceId !== 0) {
+        // Removing a source from inside its own callback is legal (it is still
+        // attached); this also keeps `closeSources` honest so `destroy()` never
+        // removes an already-fired id ("Source ID ... was not found").
         this.closeSources.delete(sourceId);
         GLib.source_remove(sourceId);
         sourceId = 0;
       }
-      layoutManager.removeChrome(ghost);
-      ghost.destroy();
+      this.removeChrome(ghost);
+      this.destroyActor(ghost);
     };
 
     // A frame-clock-less compositor may never complete the ease; a few frames
-    // past the duration guarantees the ghost is destroyed either way.
+    // past the duration guarantees the ghost is destroyed either way. The
+    // callback drops its own id first, so `destroy()` never tries to remove an
+    // already-fired source, whatever state the ghost is in by then.
     sourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, durationMs + this.timing.sampleIntervalMs(3), () => {
-      sourceId = 0;
+      if (sourceId !== 0) {
+        this.closeSources.delete(sourceId);
+        sourceId = 0;
+      }
       cleanup();
       return GLib.SOURCE_REMOVE;
     });
@@ -135,20 +191,68 @@ export class GnomeIndicator implements IndicatorBackend {
     });
   }
 
+  /**
+   * §Shell stability: tear the chrome down. Idempotent, and safe when the
+   * Shell already destroyed some or all of the actors (session end, or a
+   * repeated disable): every touch is skipped once the actor's own destroy
+   * signal has fired, and `removeChrome` is skipped once the stage is gone.
+   */
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
     this.stopPulse();
     for (const id of this.closeSources) GLib.source_remove(id);
     this.closeSources.clear();
     for (const ghost of this.ghosts) {
-      layoutManager.removeChrome(ghost);
-      ghost.destroy();
+      this.removeChrome(ghost);
+      this.destroyActor(ghost);
     }
     this.ghosts.clear();
-    layoutManager.removeChrome(this.widget);
-    layoutManager.removeChrome(this.preview);
+    this.removeChrome(this.widget);
+    this.removeChrome(this.preview);
     this.previewRect = null;
-    this.widget.destroy();
-    this.preview.destroy();
+    this.destroyActor(this.widget);
+    this.destroyActor(this.preview);
+    if (this.stageDestroyId !== 0) {
+      try {
+        global.stage.disconnect(this.stageDestroyId);
+      } catch {
+        /* the stage is gone */
+      }
+      this.stageDestroyId = 0;
+    }
+  }
+
+  /**
+   * §Shell-stability test trigger: destroy the chrome actors exactly the way
+   * the Shell's session end does (raw `destroy()`, none of adrt's bookkeeping),
+   * so a scenario can prove `disable()` survives chrome the Shell has already
+   * torn down.
+   */
+  destroyChromeActors(): void {
+    for (const ghost of this.ghosts) this.destroyActor(ghost);
+    this.destroyActor(this.widget);
+    this.destroyActor(this.preview);
+  }
+
+  /** Remove chrome and destroy one actor, each guarded against a prior destroy. */
+  private destroyActor(actor: any): void {
+    if (actor === null || actor === undefined || this.goneActors.has(actor)) return;
+    try {
+      actor.destroy();
+    } catch {
+      /* already gone */
+    }
+  }
+
+  /** `removeChrome`, skipped when the actor or the stage is already gone. */
+  private removeChrome(actor: any): void {
+    if (actor === null || actor === undefined || this.stageGone || this.goneActors.has(actor)) return;
+    try {
+      layoutManager.removeChrome(actor);
+    } catch {
+      /* the chrome host (uiGroup) is gone mid-shutdown: nothing to remove */
+    }
   }
 
   /** Resolved styling, for `DumpState` and diagnostics. */
@@ -166,11 +270,16 @@ export class GnomeIndicator implements IndicatorBackend {
 
   /** §6/§11: the drop-assist overlay, for `DumpState` and diagnostics. */
   describePreview(): { visible: boolean; rect: Rect | null; colour: string } {
-    return { visible: this.preview.visible === true, rect: this.previewRect, colour: this.colour() };
+    return {
+      visible: !this.goneActors.has(this.preview) && this.preview.visible === true,
+      rect: this.previewRect,
+      colour: this.colour(),
+    };
   }
 
   /** Keep `actor` under the notification tray, so a banner paints over it. */
   private stackBelowTray(actor: any): void {
+    if (this.stageGone || this.goneActors.has(actor)) return;
     try {
       const parent = actor.get_parent();
       if (parent === null || messageTray === null || messageTray.get_parent() !== parent) return;
@@ -182,6 +291,7 @@ export class GnomeIndicator implements IndicatorBackend {
 
   /** Whether the highlight currently sits below the notification tray. */
   private isBelowTray(): boolean {
+    if (this.stageGone || this.goneActors.has(this.widget)) return false;
     try {
       const parent = this.widget.get_parent();
       if (parent === null || messageTray === null || messageTray.get_parent() !== parent) return false;
@@ -193,7 +303,7 @@ export class GnomeIndicator implements IndicatorBackend {
   }
 
   get isVisible(): boolean {
-    return this.widget.visible === true;
+    return !this.goneActors.has(this.widget) && this.widget.visible === true;
   }
 
   /** Number of close ghosts currently fading out. */
@@ -203,6 +313,7 @@ export class GnomeIndicator implements IndicatorBackend {
 
   private startPulse(): void {
     if (this.pulseActive) return;
+    if (this.destroyed || this.goneActors.has(this.widget)) return;
     // §18: the pulse is an animation; skip it when the OS asked to save power.
     if (!this.timing.animationsEnabled()) {
       this.stopPulse();
@@ -223,6 +334,7 @@ export class GnomeIndicator implements IndicatorBackend {
   private stopPulse(): void {
     if (!this.pulseActive) return;
     this.pulseActive = false;
+    if (this.goneActors.has(this.widget)) return;
     this.widget.remove_all_transitions();
     this.widget.opacity = 255;
   }
