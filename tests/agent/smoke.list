@@ -160,3 +160,5 @@ A149-workspace-mode
 A146-error-boundary
 # --- shell stability: teardown is dispose-safe; enable/disable churn (§36) ---
 A161-shell-teardown
+# --- shell stability: caught errors restart in place, then self-disable (§36) ---
+A163-self-heal

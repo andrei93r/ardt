@@ -40,6 +40,10 @@ export class GnomeHost implements PlatformHost {
   readonly platform = 'gnome' as const;
   readonly versions = new VersionDetector();
 
+  /** §Self-heal containment: the extension's error boundary, wired in at
+   * construction so every host signal handler reports instead of escaping. */
+  private readonly onError: (context: string, error: unknown) => void;
+
   private readonly listeners = new Map<string, Set<Listener>>();
   private readonly connections: Connection[] = [];
   private readonly surfaceCache = new Map<number, GnomeSurface>();
@@ -64,6 +68,26 @@ export class GnomeHost implements PlatformHost {
   private startupFallback = 0;
   /** Where the last refresh-rate reading came from (for the platform probe). */
   private refreshSource = 'fallback';
+
+  constructor(onError: (context: string, error: unknown) => void = () => undefined) {
+    this.onError = onError;
+  }
+
+  /**
+   * §Self-heal containment: the host's own boundary. Every signal handler and
+   * timer the host connects goes through it, so a throw is reported to the
+   * extension (which counts, journals and may recover) and never propagates
+   * into a compositor emission.
+   */
+  private guard<A extends unknown[]>(context: string, cb: (...args: A) => void): (...args: A) => void {
+    return (...args: A): void => {
+      try {
+        cb(...args);
+      } catch (error) {
+        this.onError(`host:${context}`, error);
+      }
+    };
+  }
 
   get hostLookups(): number {
     return this.lookupCount;
@@ -103,33 +127,37 @@ export class GnomeHost implements PlatformHost {
     }
     // §20: the first layout drain waits for the shell to finish starting up.
     try {
-      this.connect(layoutManager, 'startup-complete', () => this.markStartupComplete());
+      this.connect(layoutManager, 'startup-complete', this.guard('startup-complete', () => this.markStartupComplete()));
     } catch {
       this.startupComplete = true;
     }
     this.startupFallback = GLib.timeout_add(GLib.PRIORITY_DEFAULT, STARTUP_FALLBACK_MS, () => {
       this.startupFallback = 0;
-      this.markStartupComplete();
+      try {
+        this.markStartupComplete();
+      } catch (error) {
+        this.onError('host:startup-fallback', error);
+      }
       return GLib.SOURCE_REMOVE;
     });
-    this.connect(global.display, 'window-created', (_display: any, win: any) => {
+    this.connect(global.display, 'window-created', this.guard('window-created', (_display: any, win: any) => {
       this.emit({ type: 'surface-created', surface: this.ensureSurface(win) });
-    });
-    this.connect(global.display, 'notify::focus-window', () => {
+    }));
+    this.connect(global.display, 'notify::focus-window', this.guard('focus-window', () => {
       this.emit({ type: 'focus-changed', id: global.display.get_focus_window()?.get_id() ?? null });
-    });
-    this.connect(global.window_manager, 'switch-workspace', (_wm: any, from: number, to: number) => {
+    }));
+    this.connect(global.window_manager, 'switch-workspace', this.guard('switch-workspace', (_wm: any, from: number, to: number) => {
       this.emit({ type: 'workspace-switched', from, to, phase: 'active' });
-    });
-    this.connect(layoutManager, 'monitors-changed', () => {
+    }));
+    this.connect(layoutManager, 'monitors-changed', this.guard('monitors-changed', () => {
       this.refreshScreens();
       this.emit({ type: 'screens-changed' });
-    });
+    }));
     // Panels, docks and autohide change the usable area without changing monitors.
-    this.connect(global.display, 'workareas-changed', () => {
+    this.connect(global.display, 'workareas-changed', this.guard('workareas-changed', () => {
       this.refreshScreens();
       this.emit({ type: 'screens-changed' });
-    });
+    }));
   }
 
   disable(): void {
@@ -154,25 +182,25 @@ export class GnomeHost implements PlatformHost {
     if (this.windowSignals.has(id)) return;
     const ids: number[] = [];
     const byUser = (): boolean => this.userGrabInProgress();
-    ids.push(win.connect('notify::frame-rect', () => {
+    ids.push(win.connect('notify::frame-rect', this.guard('window:frame-rect', () => {
       this.emit({ type: 'surface-frame-changed', id, frame: frameOf(win), byUser: byUser() });
-    }));
-    ids.push(win.connect('notify::monitor', () => {
+    })));
+    ids.push(win.connect('notify::monitor', this.guard('window:monitor', () => {
       this.emit({ type: 'surface-screen-changed', id, screenId: win.get_monitor() });
-    }));
-    ids.push(win.connect('workspace-changed', () => {
+    })));
+    ids.push(win.connect('workspace-changed', this.guard('window:workspace-changed', () => {
       this.emit({ type: 'surface-workspace-changed', id, workspaceId: win.get_workspace()?.index() ?? 0, byUser: byUser() });
-    }));
-    ids.push(win.connect('notify::minimized', () => {
+    })));
+    ids.push(win.connect('notify::minimized', this.guard('window:minimized', () => {
       this.emit({ type: 'surface-flags-changed', id, flags: { minimized: win.minimized === true } });
-    }));
-    ids.push(win.connect('notify::wm-class', () => {
+    })));
+    ids.push(win.connect('notify::wm-class', this.guard('window:wm-class', () => {
       this.emit({ type: 'surface-flags-changed', id, flags: {} });
-    }));
-    ids.push(win.connect('unmanaged', () => {
+    })));
+    ids.push(win.connect('unmanaged', this.guard('window:unmanaged', () => {
       this.forgetWindow(id);
       this.emit({ type: 'surface-closed', id });
-    }));
+    })));
     this.windowSignals.set(id, { win, ids });
   }
 

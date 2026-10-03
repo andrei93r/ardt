@@ -2461,7 +2461,9 @@ export class WindowSession {
   private addTimeout(ms: number, cb: () => void): void {
     const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, Math.max(1, ms), () => {
       this.timeoutSources.delete(id);
-      cb();
+      // §Self-heal containment: a session timer callback must never escape the
+      // GLib source dispatch uncaught.
+      this.guard('session-timeout', cb)();
       return GLib.SOURCE_REMOVE;
     });
     this.timeoutSources.add(id);
@@ -3205,7 +3207,8 @@ export class WindowSession {
     }
     this.adjustSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ADJUST_SETTLE_MS, () => {
       this.adjustSource = null;
-      this.endUserAdjust(tracked);
+      // §Self-heal containment: never escape the source dispatch uncaught.
+      this.guard('adjust-end', () => this.endUserAdjust(tracked))();
       return GLib.SOURCE_REMOVE;
     });
   }
@@ -3534,7 +3537,8 @@ export class WindowSession {
     this.scanSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this.scanIntervalMs, () => {
       this.scanSource = null;
       if (this.deps.isPaused()) return GLib.SOURCE_REMOVE;
-      this.scanTick();
+      // §Self-heal containment: never escape the source dispatch uncaught.
+      this.guard('scan-tick', () => this.scanTick())();
       this.backoff();
       this.scheduleScan();
       return GLib.SOURCE_REMOVE;
