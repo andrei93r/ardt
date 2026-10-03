@@ -2,8 +2,7 @@
 // Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
 // and can maintain this code.
 
-import type { Rule } from './rules.js';
-import { contextFor, firstMatch, globMatch } from './rules.js';
+import { globMatch } from './rules.js';
 import type { Surface } from './types.js';
 import { Layer, NON_TILEABLE_KINDS, SurfaceKind } from './types.js';
 
@@ -23,7 +22,6 @@ export type SkipReason =
   | 'transient'
   | 'modal'
   | 'attached-dialog'
-  | 'rule-float'
   | 'heuristic-modal';
 
 /** Reasons that intentionally make a surface a modal relative to tiling. */
@@ -46,7 +44,6 @@ export interface Classification {
 export interface ClassifyConfig {
   exceptionApps: readonly string[];
   heuristicModalDetect: boolean;
-  rules: readonly Rule[];
 }
 
 export interface HeuristicContext {
@@ -132,9 +129,6 @@ export function classify(
   if (f.transient) return fail('transient');
   if (f.modal) return fail('modal');
   if (f.attachedDialog) return fail('attached-dialog');
-
-  const rule = firstMatch(config.rules, contextFor(surface));
-  if (rule !== null && rule.float === true) return fail('rule-float');
 
   if (config.heuristicModalDetect && heuristicModal(surface, context.liveTitles)) {
     return fail('heuristic-modal');

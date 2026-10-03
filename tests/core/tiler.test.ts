@@ -285,6 +285,13 @@ describe('computePlans — rule override', () => {
     );
     expect(plan.placements.find((p) => p.surfaceId === 2)?.rect.x).toBe(960);
   });
+
+  it('ignores a disabled rule and falls back to the normal pair', () => {
+    const rules = [{ match: { appId: 'special' }, tile: 'full' as const, enabled: false }];
+    const plan = computePlans([window({ id: 1 }), window({ id: 2, appId: 'special' })], landscape, config({ rules }));
+    expect(plan.placements).toHaveLength(2);
+    expect(plan.placements.find((p) => p.surfaceId === 2)?.rect.width).toBe(960);
+  });
 });
 
 describe('computePlans — scale snapping', () => {

@@ -135,7 +135,8 @@ session-topology | S25-screen-topology
 # --- panel lane additions (renumbered on merge) ---
 float-restore-exact | A145-float-restore-exact
 screen-sharing-opt-in | A28-screen-sharing A148-sharing-opt-in
-panel-affordance | A147-panel
+panel-removed | A147-panel
+rules-runtime | A164-rules
 workspace-mode-settings | A149-workspace-mode
 error-boundary | A146-error-boundary
 shell-stability | A161-shell-teardown A162-monitor-removal A163-self-heal

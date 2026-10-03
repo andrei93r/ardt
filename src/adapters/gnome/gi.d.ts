@@ -105,16 +105,6 @@ declare module 'resource:///org/gnome/shell/ui/main.js' {
   export function popModal(actor: any): void;
 }
 
-declare module 'resource:///org/gnome/shell/ui/panelMenu.js' {
-  export const Button: any;
-}
-
-declare module 'resource:///org/gnome/shell/ui/popupMenu.js' {
-  export const PopupMenuItem: any;
-  export const PopupSeparatorMenuItem: any;
-  export const PopupSwitchMenuItem: any;
-}
-
 declare module 'resource:///org/gnome/shell/ui/quickSettings.js' {
   export const QuickSettings: any;
 }

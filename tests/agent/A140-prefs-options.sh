@@ -25,7 +25,8 @@ PREFS_SRC="$ROOT_DIR/src/adapters/gnome/prefs.ts"
 #   dry-run-mode, max-frame-interval-ms    developer diagnostics
 #   keybindings                            legacy override, superseded by kb-*
 #   float-pins-workspace                   behaviour is unconditional (dead)
-INTERNAL_KEYS="settings-version first-run-complete debug-enabled debug-tiling debug-focus debug-displays debug-undo debug-session debug-inject-verify-failure debug-toasts record perf-enabled trace-enabled dry-run-mode max-frame-interval-ms keybindings float-pins-workspace"
+#   rules-enabled                          legacy global gate; per-rule enabled wins
+INTERNAL_KEYS="settings-version first-run-complete debug-enabled debug-tiling debug-focus debug-displays debug-undo debug-session debug-inject-verify-failure debug-toasts record perf-enabled trace-enabled dry-run-mode max-frame-interval-ms keybindings float-pins-workspace rules-enabled"
 CUSTOM_KEYS="rules-json"
 
 internal_csv="$(printf '%s' "$INTERNAL_KEYS" | tr ' ' ',')"
@@ -133,6 +134,8 @@ try {
 
   const mod = await import('file://' + extDir + '/adapters/gnome/prefs.js');
   const settings = new Gio.Settings({ schema_id: 'org.gnome.shell.extensions.adrt' });
+  // Exercise the rule-list editor's row builder, including an inline-invalid rule.
+  settings.set_string('rules-json', '[{"match":{"appId":"org.gnome.*"},"tile":"left-half"},{"match":{"appId":"x"},"tile":"full","enabled":false},{"match":{}}]');
   const prefs = new mod.default({ settings, metadata: { 'version-name': '0.2.0' } });
   prefs.fillPreferencesWindow({ add: () => {} });
 

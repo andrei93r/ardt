@@ -133,7 +133,7 @@ appcheck_tearoff() { # env-json argv-json
   local env_json="$1" argv_json="$2" before new
   local deadline
   before="$(list_ids)"
-  adrt ActivatePanelItem pause >/dev/null 2>&1 || true
+  adrt TogglePause >/dev/null 2>&1 || true
   wait_python 10 'import json,sys; sys.exit(0 if json.load(sys.stdin)["paused"] else 1)' || true
   spawn_window_argv "$argv_json" "$env_json" >/dev/null
   deadline=$((SECONDS + 30))
@@ -152,7 +152,7 @@ print(n[-1] if n else '')")"
     sleep 0.5
   done
   if [ -z "$new" ]; then
-    adrt ActivatePanelItem pause >/dev/null 2>&1 || true
+    adrt TogglePause >/dev/null 2>&1 || true
     echo ""
     return 1
   fi
@@ -169,7 +169,7 @@ print(b["x"], b["y"], b["width"], b["height"])')"
   adrt MoveWindow "$new" "$((bx + 30))" "$((by + 30))" 500 500 >/dev/null 2>&1 || true
   sleep 0.5
   adrt EndDrag "$new" >/dev/null 2>&1 || true
-  adrt ActivatePanelItem pause >/dev/null 2>&1 || true
+  adrt TogglePause >/dev/null 2>&1 || true
   wait_settled 15 || true
   echo "$new"
   return 0

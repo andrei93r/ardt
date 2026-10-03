@@ -20,6 +20,8 @@ import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/
 
 import { _, loadTranslations } from './i18n.js';
 import { RegistryStore } from './registry.js';
+import { TILE_MODES, validateRule } from '../../core/rules.js';
+import type { TileMode } from '../../core/rules.js';
 
 /** The widget a settings row is rendered with. */
 export type RowKind = 'switch' | 'spin' | 'combo' | 'entry' | 'accelerator' | 'picker';
@@ -183,13 +185,7 @@ export const PREFERENCES_LAYOUT: readonly PageSpec[] = [
   {
     title: _('Rules'),
     icon: 'emblem-documents-symbolic',
-    groups: [
-      {
-        title: _('Rules'),
-        description: _('User-authored placement rules. Enable or disable the whole rule set here.'),
-        rows: [{ key: 'rules-enabled', kind: 'switch', title: _('Enable rules') }],
-      },
-    ],
+    groups: [],
   },
   {
     title: _('Highlight'),
@@ -282,6 +278,10 @@ export const PREFERENCES_LAYOUT: readonly PageSpec[] = [
         ],
       },
       {
+        title: _('Session'),
+        rows: [{ key: 'kb-toggle-pause', kind: 'accelerator', title: _('Pause or resume tiling') }],
+      },
+      {
         title: _('Recording'),
         rows: [{ key: 'kb-recording-toggle', kind: 'accelerator', title: _('Record a bug') }],
       },
@@ -326,6 +326,52 @@ export const PREFERENCES_LAYOUT: readonly PageSpec[] = [
 
 /** Custom-rendered user-facing keys that are not plain rows. */
 export const CUSTOM_RENDERED_KEYS: readonly string[] = ['rules-json'];
+
+/** The settings surface the rule editor needs (GSettings in the Shell). */
+interface RuleSettings {
+  get_string(key: string): string;
+  set_string(key: string, value: string): void;
+}
+
+/** JSON-safe record test for the raw rule entries the editor preserves. */
+function isRuleRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function ruleString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+/** The appId a raw rule matches, or '' when it matches any app. */
+function ruleAppId(raw: unknown): string {
+  if (!isRuleRecord(raw) || !isRuleRecord(raw.match)) return '';
+  return ruleString(raw.match.appId);
+}
+
+function ruleTitle(raw: unknown): string {
+  if (!isRuleRecord(raw)) return _('Invalid rule');
+  const appId = ruleAppId(raw);
+  if (appId.length > 0 && appId !== '*') return appId;
+  const title = isRuleRecord(raw.match) ? ruleString(raw.match.title) : '';
+  if (title.length > 0) return title;
+  return _('Any application');
+}
+
+function ruleSummary(raw: unknown): string {
+  if (!isRuleRecord(raw)) return _('Not a rule object');
+  const action = raw.tile === 'left-half' ? _('Left half') : raw.tile === 'right-half' ? _('Right half') : _('Full');
+  const title = isRuleRecord(raw.match) ? ruleString(raw.match.title) : '';
+  const titlePart = title.length > 0 ? `, ${_('title')} “${title}”` : '';
+  const disabled = raw.enabled === false ? ` · ${_('disabled')}` : '';
+  return `${action}${titlePart}${disabled}`;
+}
+
+/** Inline validation: every problem, never a silent drop (§23 decision 91). */
+function ruleErrors(raw: unknown, index: number): string[] {
+  const errors: string[] = [];
+  validateRule(raw, `rule[${index}]`, errors);
+  return errors;
+}
 
 export default class AdrtPreferences extends ExtensionPreferences {
   fillPreferencesWindow(window: any): void {
@@ -564,17 +610,199 @@ export default class AdrtPreferences extends ExtensionPreferences {
     }
   }
 
-  /** The JSON rule set editor, shown below the rules switch. */
-  private rulesEditorGroup(settings: any): any {
-    const group = new Adw.PreferencesGroup({ title: _('Rule set') });
-    const editor = new Gtk.TextView({ monospace: true, wrap_mode: Gtk.WrapMode.WORD_CHAR, top_margin: 8, bottom_margin: 8 });
-    editor.buffer.text = settings.get_string('rules-json');
-    editor.buffer.connect('changed', () => {
-      settings.set_string('rules-json', editor.buffer.text);
+  /**
+   * The rules editor (§23 decisions 91-93): a rule list, one expandable row per
+   * rule with an app picker, a title glob, the tile action chosen from a list, a
+   * per-rule enable switch, reorder and remove, and inline validation. There is
+   * no JSON textarea and no global switch.
+   */
+  private rulesEditorGroup(settings: RuleSettings): any {
+    const group = new Adw.PreferencesGroup({
+      title: _('Placement rules'),
+      description: _(
+        'Force a placement when a window matches. The first enabled rule wins. To keep an app floating, use "Never tile these apps" on the Windows page.',
+      ),
     });
-    const scroller = new Gtk.ScrolledWindow({ min_content_height: 200 });
-    scroller.set_child(editor);
-    group.add(scroller);
+    const list = new Gtk.ListBox({ selection_mode: Gtk.SelectionMode.NONE });
+    list.add_css_class('boxed-list');
+    // Test hook: A140 reads this to tell the rule editor from a plain row set.
+    list.adrtRulesEditor = true;
+    group.add(list);
+
+    let entries: unknown[] = [];
+    let parseError: string | null = null;
+    const stored = settings.get_string('rules-json') ?? '[]';
+    try {
+      const parsed: unknown = JSON.parse(stored);
+      if (Array.isArray(parsed)) entries = parsed;
+      else parseError = _('rules-json must be a JSON array.');
+    } catch (error) {
+      parseError = (error as Error).message;
+    }
+
+    const write = (): void => settings.set_string('rules-json', JSON.stringify(entries));
+    const rawAt = (index: number): unknown => entries[index];
+    const mutate = (index: number, next: unknown): void => {
+      entries[index] = next;
+      write();
+    };
+
+    const setMatchString = (index: number, field: string, value: string): void => {
+      const raw = rawAt(index);
+      if (!isRuleRecord(raw)) return;
+      const match = isRuleRecord(raw.match) ? { ...raw.match } : {};
+      if (value.length > 0) match[field] = value;
+      else delete match[field];
+      mutate(index, { ...raw, match });
+    };
+    const setTile = (index: number, tile: TileMode): void => {
+      const raw = rawAt(index);
+      if (!isRuleRecord(raw)) return;
+      mutate(index, { ...raw, tile });
+    };
+    const setEnabled = (index: number, enabled: boolean): void => {
+      const raw = rawAt(index);
+      if (!isRuleRecord(raw)) return;
+      const next = { ...raw };
+      if (enabled) delete next.enabled;
+      else next.enabled = false;
+      mutate(index, next);
+    };
+    const move = (from: number, to: number): void => {
+      if (to < 0 || to >= entries.length || from === to) return;
+      const [moved] = entries.splice(from, 1);
+      entries.splice(to, 0, moved);
+      write();
+      rebuild();
+    };
+    const remove = (index: number): void => {
+      entries.splice(index, 1);
+      write();
+      rebuild();
+    };
+    const refresh = (index: number, row: any): void => {
+      row.title = ruleTitle(rawAt(index));
+      const errors = ruleErrors(rawAt(index), index);
+      row.subtitle = errors.length > 0 ? errors.join('; ') : ruleSummary(rawAt(index));
+    };
+
+    const appPickerRow = (index: number, row: any): any => {
+      const add = new Adw.ActionRow({ title: _('Application') });
+      const choices = appChoices();
+      const byId = new Map(choices.map((choice) => [choice.id, choice]));
+      const update = (): void => {
+        const id = ruleAppId(rawAt(index));
+        const choice = byId.get(id);
+        add.subtitle = id.length === 0 || id === '*' ? _('Any application') : choice ? `${choice.name} (${id})` : id;
+      };
+      const menu = new Gtk.MenuButton({ icon_name: 'view-list-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Choose an application') });
+      menu.add_css_class('flat');
+      menu.popover = this.buildAppPopover(
+        byId,
+        () => {
+          const id = ruleAppId(rawAt(index));
+          return id.length > 0 && id !== '*' ? [id] : [];
+        },
+        (id) => {
+          setMatchString(index, 'appId', ruleAppId(rawAt(index)) === id ? '' : id);
+          update();
+          refresh(index, row);
+        },
+      );
+      add.add_suffix(menu);
+      update();
+      return add;
+    };
+
+    const buildRuleRow = (index: number): any => {
+      const raw = rawAt(index);
+      const row = new Adw.ExpanderRow({ title: ruleTitle(raw), subtitle: ruleSummary(raw) });
+      if (ruleErrors(raw, index).length > 0) row.add_prefix(new Gtk.Image({ icon_name: 'dialog-warning-symbolic' }));
+
+      const enable = new Gtk.Switch({ active: !(isRuleRecord(raw) && raw.enabled === false), valign: Gtk.Align.CENTER, tooltip_text: _('Enable this rule') });
+      enable.connect('notify::active', () => {
+        setEnabled(index, enable.active);
+        refresh(index, row);
+      });
+      row.add_suffix(enable);
+
+      for (const [icon, delta] of [
+        ['go-up-symbolic', -1],
+        ['go-down-symbolic', 1],
+      ] as const) {
+        const button = new Gtk.Button({ icon_name: icon, valign: Gtk.Align.CENTER, tooltip_text: delta < 0 ? _('Move up') : _('Move down') });
+        button.add_css_class('flat');
+        button.connect('clicked', () => move(index, index + delta));
+        row.add_suffix(button);
+      }
+
+      const removeButton = new Gtk.Button({ icon_name: 'list-remove-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Remove') });
+      removeButton.add_css_class('flat');
+      removeButton.connect('clicked', () => remove(index));
+      row.add_suffix(removeButton);
+
+      if (isRuleRecord(raw)) {
+        row.add_row(appPickerRow(index, row));
+        const titleRow = new Adw.EntryRow({ title: _('Title glob') });
+        titleRow.text = isRuleRecord(raw.match) ? ruleString(raw.match.title) : '';
+        titleRow.connect('changed', () => {
+          setMatchString(index, 'title', titleRow.text.trim());
+          refresh(index, row);
+        });
+        row.add_row(titleRow);
+
+        const modes = [...TILE_MODES];
+        const combo = new Adw.ComboRow({ title: _('Action'), model: Gtk.StringList.new([_('Full'), _('Left half'), _('Right half')]) });
+        const current = modes.indexOf(ruleString(raw.tile) as TileMode);
+        combo.selected = current < 0 ? 0 : current;
+        combo.connect('notify::selected', () => {
+          const mode = modes[combo.selected];
+          if (mode !== undefined) {
+            setTile(index, mode);
+            refresh(index, row);
+          }
+        });
+        row.add_row(combo);
+      }
+      return row;
+    };
+
+    const addRow = (): any => {
+      const row = new Adw.ActionRow({ title: _('Add rule') });
+      const button = new Gtk.Button({ icon_name: 'list-add-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Add rule') });
+      button.add_css_class('flat');
+      button.connect('clicked', () => {
+        entries.push({ match: { appId: '*' }, tile: 'full' });
+        write();
+        rebuild();
+      });
+      row.add_suffix(button);
+      return row;
+    };
+
+    const rebuild = (): void => {
+      list.remove_all();
+      if (parseError !== null) {
+        const warn = new Adw.ActionRow({ title: _('The stored rules are not valid JSON'), subtitle: parseError });
+        const discard = new Gtk.Button({ label: _('Start over'), valign: Gtk.Align.CENTER });
+        discard.connect('clicked', () => {
+          entries = [];
+          parseError = null;
+          write();
+          rebuild();
+        });
+        warn.add_suffix(discard);
+        list.append(warn);
+        return;
+      }
+      if (entries.length === 0) {
+        list.append(new Adw.ActionRow({ title: _('No rules yet'), subtitle: _('Add a rule to force a window placement.') }));
+      }
+      entries.forEach((_entry, index) => list.append(buildRuleRow(index)));
+      list.append(addRow());
+    };
+
+    rebuild();
     return group;
   }
 

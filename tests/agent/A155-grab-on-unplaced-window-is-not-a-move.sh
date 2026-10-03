@@ -28,7 +28,7 @@ wait_settled 15
 # Keep the newcomer unplaced: with tiling paused, `onReady` still adopts it but
 # the drain cannot route it, so `routePending` stays set — exactly the state the
 # live tear-off window was in when the grab began.
-adrt ActivatePanelItem pause >/dev/null
+adrt TogglePause >/dev/null
 wait_python 10 'import json,sys; sys.exit(0 if json.load(sys.stdin)["paused"] else 1)' || true
 
 ids_before="$(list_ids)"
@@ -42,7 +42,7 @@ new=[str(w["id"]) for w in d["windows"] if str(w["id"]) not in before]
 print(new[0] if new else "")')"
 if [ -z "$NEW" ]; then
   fail "the newcomer never registered (cannot exercise the tear-off gate)"
-  adrt ActivatePanelItem pause >/dev/null 2>&1 || true
+  adrt TogglePause >/dev/null 2>&1 || true
   ensure_clean
   summary
   exit $?
@@ -76,7 +76,7 @@ print("no window drag armed")
 adrt EndDrag "$NEW" >/dev/null
 # Unpause: the deferred routing must run exactly once and must not interpret the
 # tear-off as a drop (no swap, no user-adjust, no clamp storm).
-adrt ActivatePanelItem pause >/dev/null
+adrt TogglePause >/dev/null
 wait_settled 15
 
 check_python "the tear-off grab was not recorded as a pair swap" '

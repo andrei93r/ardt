@@ -130,7 +130,6 @@ export class GnomeSettings implements SettingsStore {
     this.configCache = {
       exceptionApps: this.strv('exception-apps'),
       heuristicModalDetect: this.boolean('heuristic-modal-detect', true),
-      rules: this.boolean('rules-enabled', true) ? this.rules().rules : [],
     };
     return this.configCache;
   }
@@ -186,7 +185,7 @@ export class GnomeSettings implements SettingsStore {
       primaryAppRatio: this.int('primary-app-ratio', 50) / 100,
       ratios,
       swapPairs,
-      rules: this.boolean('rules-enabled', true) ? this.rules().rules : [],
+      rules: this.rules().rules,
       reflowKeepsEdges: this.boolean('reflow-keeps-edges', true),
     };
   }

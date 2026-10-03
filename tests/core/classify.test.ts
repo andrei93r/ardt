@@ -10,7 +10,7 @@ import { Layer, SurfaceKind } from '../../src/core/types.js';
 import { rect, size, surface } from './helpers.js';
 
 function config(overrides: Partial<ClassifyConfig> = {}): ClassifyConfig {
-  return { exceptionApps: [], heuristicModalDetect: false, rules: [], ...overrides };
+  return { exceptionApps: [], heuristicModalDetect: false, ...overrides };
 }
 
 describe('layerFor', () => {
@@ -97,14 +97,10 @@ describe('classify', () => {
     expect(classify(surface({ flags: { skipTaskbar: true } }), config()).modal).toBe(false);
   });
 
-  it('rejects float rules', () => {
-    const result = classify(surface({ appId: 'pavucontrol' }), config({ rules: [{ match: { appId: 'pavu*' }, float: true }] }));
-    expect(result.tileable).toBe(false);
-    expect(result.reason).toBe('rule-float');
-  });
-
-  it('does not float when the rule only has a tile action', () => {
-    const result = classify(surface({ appId: 'pavucontrol' }), config({ rules: [{ match: { appId: 'pavu*' }, tile: 'left-half' }] }));
+  it('does not consult placement rules: rules only force a tile (§23 decision 91)', () => {
+    // Rules are a tiler override, never a classifier input: a rule can no longer
+    // float a window (that is the Never-tile list).
+    const result = classify(surface({ appId: 'pavucontrol' }), config());
     expect(result.tileable).toBe(true);
   });
 
