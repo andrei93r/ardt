@@ -45,6 +45,13 @@ appimages="$(find "$HOME/Applications" "$HOME/Downloads" -maxdepth 1 \( -iname '
 if [ -z "$appimages" ]; then
   appcheck_skip "A160: no AppImages in ~/Applications or ~/Downloads"
 fi
+# AppImageLauncher registers binfmt handlers for AppImage magic, so exec'ing one
+# opens its integration dialog: it blocks the run and is a user choice, not a
+# tiling behaviour. Skip the row rather than trigger that dialog.
+if [ -e /proc/sys/fs/binfmt_misc/appimage-type2 ] || [ -e /proc/sys/fs/binfmt_misc/appimage-type1 ]; then
+  appcheck_skip "A160: AppImageLauncher binfmt handlers are registered (appimage-type1/2) — launching an AppImage opens its integration dialog"
+  appimages=""
+fi
 while IFS= read -r appimage; do
   [ -n "$appimage" ] || continue
   [ -x "$appimage" ] || { appcheck_skip "A160: $appimage is not executable"; continue; }
