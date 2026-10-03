@@ -5,7 +5,7 @@ in this file.
 
 This file holds the **designs and backlog for work not yet in the model**. It is not
 authoritative: `docs/V2_MODEL.md` is. Anything here that changes behaviour must, when it
-lands, become a **numbered decision in `V2_MODEL.md`** (and the four defects in §5 are
+lands, become a **numbered decision in `V2_MODEL.md`** (and the four defects in §4 are
 already overdue there).
 
 Status legend: **shipped** · **in flight** · **planned** · **candidate** (needs evidence)
@@ -106,8 +106,8 @@ revert rather than debug a broken step; `DumpState` add-only; `core/` stays free
   `new Date`, `Math.random` and IO in `src/core/` (time/randomness are inputs).
 - **P6e perf budget test** — churn workload asserting bounded counters.
 - **P6f dead-hook sweep** — remove only what the audit proved dead (e.g. the dead
-  `Layer.MODAL` `applyLayer` branch, unused internal keys). **Keep `Placement.order`** —
-  the stack work (§4) repurposes it.
+  `Layer.MODAL` `applyLayer` branch, unused internal keys). **Keep `Placement.order`**
+  — reserved as the explicit carrier for window order; do not sweep it as dead.
 - **P6g `docs/ARCHITECTURE.md`** — layer map + invariants (no policy in handlers; core
   purity/determinism; add-only `DumpState`; trigger taxonomy; one owner per state).
 - **P6h recent-errors ring** in `DumpState` (add-only) — the last N boundary errors, so a
@@ -166,75 +166,7 @@ Measured: **204** `: any`/`<any>`/`as any` in `src/` (`compat.ts` 38, `gi.d.ts` 
   stage"* errors; the AMD **DMCUB** GPU failure that made the session unusable (524
   `amdgpu`/`drm` errors, `Error queueing DMUB command`).
 
----
-
-## 4. Future feature — per-zone z-stack ("stacking mode") — **parked**
-
-**Settled.** When the mode is enabled, a workspace on a screen has **1 or 2 zones**
-(hotkey, per screen, default 2); each occupied zone holds a **z-stack of N** windows (no
-two-window ceiling); **one window on a screen is full-screen** and it splits into two only
-when a second window needs a place *and* the mode allows it. A third+ window joins a zone's
-stack instead of taking its own workspace (decision 2 suspended while enabled); the zone is
-the one on the side the window **came from** (screen edge crossed / workspace direction).
-**Float is only ever explicit**; **modals always float** (classification unchanged).
-Toggling to 1 zone moves the other windows as a stack into a **newly created workspace**
-(details in Q18). Focus cycle walks the stack front→back; the mode change is **undoable**,
-a rotation is not.
-
-**Peek strip.** The front window is inset so the next window peeks through a **~50 px
-(configurable) strip at the outer screen edge**; deeper members are invisible. The strip is
-**adrt chrome**, not app content — which is what makes the interaction possible on Wayland.
-**Click on the strip raises the window behind it (one step); scroll over the strip rotates
-through the pack.** Rotation is animated with OS-sourced timing and not at all when
-animations are disabled.
-
-**Feasibility facts (measured).**
-- Mutter exposes **`raise()`/`lower()` only** — no `stack_above`/`stack_below`; no
-  `restacked` signal; z is observation-only (`sort_windows_by_stacking`) and stale until
-  captured. ⇒ the stack is **best-effort**: order re-asserted on our applies and after
-  external raises. `Placement.order` (currently dead) becomes the carrier.
-- **Scroll over a client surface is invisible to an extension** on Wayland (Mutter delivers
-  it to the client and returns STOP); it *is* delivered over **Shell-owned chrome** — hence
-  owning the strip. A new `InjectScroll` (`notify_scroll_continuous`/`discrete_scroll`,
-  `ADRT_INJECT`) is needed to test it honestly.
-- The **plan non-overlap invariant** (`checkPlan`) must become "within a zone, members are
-  **ordered**" — the peek overlaps by construction.
-- The **two-position assumption** is baked in ~30 sites (`placement.ts` `Ws.slots`/
-  `sideSlot`/`arrivalSlot`/`swappedSides`, `tiler.ts` two-window guarantee + `computePlans` +
-  `findRuleOverride`, `focus.ts`, `normalize.ts`, `undo.ts`, `displays.ts`, `replay.ts`,
-  `session.ts` `buildPlacementState`/`pinSlots`/`pairSibling`/`moveToward`/`toggleFloat`/
-  `onMinimized`, `tiling.ts`, `extension.ts` `slotOf`/`buildTraceInitial`/`DumpState.slot`).
-
-**Open questions.**
-- **Q16 — peek edge, exactly**: per-zone strip hugging the outer screen boundary (edge by
-  orientation for a single zone)?
-- **Q17 — resolved**: click = **one step** (the clicked window goes in front of the current
-  front); scroll = **rotate through the pack**.
-- **Q18 — toggle to 1, then back**: does toggling back to 2 bring the parked stack back and
-  split it across the zones; new workspace to the right; reaped when empty?
-- **Q19 — brand-new window with no origin**: today's routing (right slot when free) vs the
-  side of its initial geometry?
-
-**Model amendments required**: §1/§3/§4/§5/§7/§9/§10/§13/§20 and decisions 2, 3, 8, 13, 14,
-15, 28/32, 41, 43, 47, 49, 74, 75, 89, 90; the lone-maximize law gains its visible
-exception (a front window with members behind it is inset by the peek).
-
-**Idea pack** (all recorded; explore one at a time, park on completion). A spike branch
-(`feature/gnome-tools`) holds an unverified WIP commit for idea 1.
-1. **peek-strip affordance** — own the strip as chrome; click raises behind; scroll rotates.
-2. depth badge ("2 of 5" / parallel lines).
-3. next-window identity (app icon + title) in the strip.
-4. keyboard rotate (next/prev in stack) — needs the §17 keybinding amendment.
-5. strip edge safety — inset/configure the edge vs GNOME edge/hot-corner behaviour.
-6. hold-to-fan — fan the stack to pick any member.
-7. drag the strip out — pull the next window out to front / float / other zone.
-8. skip minimized members in strip order.
-9. soft depth cap (e.g. 8) with a toast.
-10. persist per-zone order across restarts (back-to-front re-raise on restore).
-
----
-
-## 5. Model defects to fix regardless — **planned**
+## 4. Model defects to fix regardless — **planned**
 
 1. **Gap rule contradiction**: decision 43 ("gaps follow the axis") vs decisions 15/74
    ("per orientation"); the code follows orientation, so a forced axis is unspecified.
@@ -247,7 +179,7 @@ exception (a front window with members behind it is inset by the peek).
 
 ---
 
-## 6. Shipped (reference; no work listed)
+## 5. Shipped (reference; no work listed)
 
 Recorder (start/stop, hot-switch `Super+Shift+R`, observation prompt with modal grab + key
 focus, note in the file, backups outside the extensions dir) · app-compatibility matrix
@@ -260,7 +192,7 @@ recorder/hot-config.
 
 ---
 
-## 7. Process constraints (learned — apply to all future work)
+## 6. Process constraints (learned — apply to all future work)
 
 - **EGO distribution bars bundling**: no runtime deps, no bundler; ship readable JS.
 - **`/tmp` is a 14 G tmpfs**; nested state dirs fill it and produce `write() failed: Disk
