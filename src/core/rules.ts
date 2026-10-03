@@ -22,7 +22,7 @@ export function contextFor(surface: Surface): RuleContext {
   };
 }
 
-/** A single user-authored rule (§19.1 `rules-json`, §5, §6). */
+/** A single user-authored rule (§19.1 `rules-json`, §6). */
 export interface RuleMatch {
   appId?: string;
   title?: string;
@@ -30,15 +30,23 @@ export interface RuleMatch {
   transient?: boolean;
 }
 
+/** The placement a rule can force. */
 export type TileMode = 'full' | 'left-half' | 'right-half';
 
+export const TILE_MODES: readonly TileMode[] = ['full', 'left-half', 'right-half'];
+
+/**
+ * One rule. `float` was dropped: a rule only ever *forces a placement*, and the
+ * durable "never tile" decision lives in the Never-tile list / registry
+ * `neverTile` (§16). First match in array order wins; `enabled: false` skips it
+ * without removing it.
+ */
 export interface Rule {
   match: RuleMatch;
-  float?: boolean;
-  tile?: TileMode;
+  tile: TileMode;
+  /** Per-rule switch. Absent means enabled (storage-compatible). */
+  enabled?: boolean;
 }
-
-export const TILE_MODES: readonly TileMode[] = ['full', 'left-half', 'right-half'];
 
 const VALID_KINDS = new Set<string>(Object.values(SurfaceKind));
 
@@ -73,9 +81,10 @@ export function ruleMatches(rule: Rule, context: RuleContext): boolean {
   return true;
 }
 
-/** First rule (in list order) that matches, or null. */
+/** First enabled rule (in list order) that matches, or null. */
 export function firstMatch(rules: readonly Rule[], context: RuleContext): Rule | null {
   for (const rule of rules) {
+    if (rule.enabled === false) continue;
     if (ruleMatches(rule, context)) return rule;
   }
   return null;
@@ -122,11 +131,63 @@ function parseMatch(raw: unknown, where: string, errors: string[]): RuleMatch {
   return match;
 }
 
+/** Whether a match constrains anything at all. */
+function constrains(match: RuleMatch): boolean {
+  return (
+    match.appId !== undefined ||
+    match.title !== undefined ||
+    match.transient !== undefined ||
+    (match.kind !== undefined && match.kind.length > 0)
+  );
+}
+
 /**
- * Validate a parsed `rules-json` value. Invalid entries are dropped and
- * reported; the returned list is always safe to use.
+ * Validate one raw rule entry. Returns the rule when it is usable, `null`
+ * otherwise; every problem is appended to `errors` (never silently dropped).
  */
-export function validateRules(input: unknown): { rules: Rule[]; errors: string[] } {
+export function validateRule(entry: unknown, where: string, errors: string[]): Rule | null {
+  if (!isRecord(entry)) {
+    errors.push(`${where}: must be an object`);
+    return null;
+  }
+  if (entry.float !== undefined) {
+    errors.push(`${where}: "float" is no longer supported; use the Never-tile list`);
+    return null;
+  }
+  const match = parseMatch(entry.match, where, errors);
+  if (!constrains(match)) {
+    errors.push(`${where}: match must name at least one of appId, title, kind, transient`);
+  }
+  let tile: TileMode | null = null;
+  if (entry.tile === undefined) {
+    errors.push(`${where}: "tile" is required (${TILE_MODES.join(', ')})`);
+  } else if (typeof entry.tile !== 'string' || !TILE_MODES.includes(entry.tile as TileMode)) {
+    errors.push(`${where}: tile must be one of ${TILE_MODES.join(', ')}`);
+  } else {
+    tile = entry.tile as TileMode;
+  }
+  let enabled: boolean | undefined;
+  if (entry.enabled !== undefined) {
+    if (typeof entry.enabled !== 'boolean') errors.push(`${where}: enabled must be a boolean`);
+    else enabled = entry.enabled;
+  }
+  if (tile === null || !constrains(match)) return null;
+  const rule: Rule = { match, tile };
+  if (enabled !== undefined) rule.enabled = enabled;
+  return rule;
+}
+
+export interface RulesParse {
+  rules: Rule[];
+  errors: string[];
+}
+
+/**
+ * Validate a parsed `rules-json` value. Invalid entries are reported in
+ * `errors` and omitted from `rules` (the UI surfaces them inline; the runtime
+ * never applies them).
+ */
+export function validateRules(input: unknown): RulesParse {
   const errors: string[] = [];
   if (input === null || input === undefined) return { rules: [], errors };
   if (!Array.isArray(input)) {
@@ -135,30 +196,14 @@ export function validateRules(input: unknown): { rules: Rule[]; errors: string[]
   }
   const rules: Rule[] = [];
   input.forEach((entry, i) => {
-    const where = `rule[${i}]`;
-    if (!isRecord(entry)) {
-      errors.push(`${where}: must be an object`);
-      return;
-    }
-    const rule: Rule = { match: parseMatch(entry.match, where, errors) };
-    if (entry.float !== undefined) {
-      if (typeof entry.float !== 'boolean') errors.push(`${where}: float must be a boolean`);
-      else rule.float = entry.float;
-    }
-    if (entry.tile !== undefined) {
-      if (typeof entry.tile !== 'string' || !TILE_MODES.includes(entry.tile as TileMode)) {
-        errors.push(`${where}: tile must be one of ${TILE_MODES.join(', ')}`);
-      } else {
-        rule.tile = entry.tile as TileMode;
-      }
-    }
-    rules.push(rule);
+    const rule = validateRule(entry, `rule[${i}]`, errors);
+    if (rule !== null) rules.push(rule);
   });
   return { rules, errors };
 }
 
 /** Parse a JSON string into validated rules (§22 `ReloadRules`). */
-export function parseRulesJson(json: string): { rules: Rule[]; errors: string[] } {
+export function parseRulesJson(json: string): RulesParse {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
@@ -166,4 +211,76 @@ export function parseRulesJson(json: string): { rules: Rule[]; errors: string[] 
     return { rules: [], errors: [`rules-json is not valid JSON: ${(e as Error).message}`] };
   }
   return validateRules(parsed);
+}
+
+/** The result of migrating a legacy rule list to the new shape. */
+export interface RuleMigration extends RulesParse {
+  /** App patterns extracted from legacy float rules: append to `exception-apps`. */
+  neverTile: string[];
+  /** True when `rules-json` should be rewritten. */
+  changed: boolean;
+}
+
+function appIdOf(raw: unknown): string {
+  if (!isRecord(raw) || !isRecord(raw.match)) return '';
+  return typeof raw.match.appId === 'string' ? raw.match.appId : '';
+}
+
+/**
+ * Migrate a parsed legacy rule list (§23 decisions 91-93):
+ *   - a `{"match":{"appId":…},"float":true}` rule moves its app glob to the
+ *     Never-tile list and leaves the rule set;
+ *   - a legacy global `rules-enabled:false` becomes `enabled:false` on every
+ *     rule, so the per-rule switch carries the old off state;
+ *   - a `float` flag on a rule that *also* has a `tile` action is stripped, and
+ *     the tile action survives.
+ */
+export function migrateRules(input: unknown, rulesEnabled: boolean): RuleMigration {
+  const errors: string[] = [];
+  const rules: Rule[] = [];
+  const neverTile: string[] = [];
+  let changed = false;
+  if (input === null || input === undefined) return { rules, errors, neverTile, changed };
+  if (!Array.isArray(input)) {
+    return { rules, errors: ['rules-json must be a JSON array'], neverTile, changed: false };
+  }
+  input.forEach((entry, i) => {
+    const where = `rule[${i}]`;
+    if (!isRecord(entry)) {
+      errors.push(`${where}: must be an object`);
+      return;
+    }
+    const legacyFloat = entry.float === true;
+    if (entry.float !== undefined) changed = true;
+    if (legacyFloat && rulesEnabled) {
+      const appId = appIdOf(entry);
+      if (appId.length > 0) neverTile.push(appId);
+    }
+    // Rebuild the entry without the legacy flag, then validate it as today.
+    const clean: Record<string, unknown> = {};
+    if (entry.match !== undefined) clean.match = entry.match;
+    if (entry.tile !== undefined) clean.tile = entry.tile;
+    if (entry.enabled !== undefined) clean.enabled = entry.enabled;
+    // A float-only rule has nothing left to keep once its app moved.
+    if (legacyFloat && entry.tile === undefined) return;
+    const rule = validateRule(clean, where, errors);
+    if (rule === null) return;
+    if (!rulesEnabled && rule.enabled !== false) {
+      rule.enabled = false;
+      changed = true;
+    }
+    rules.push(rule);
+  });
+  return { rules, errors, neverTile, changed };
+}
+
+/** Migrate a raw `rules-json` string. Invalid JSON is reported, never rewritten. */
+export function migrateRulesJson(json: string, rulesEnabled: boolean): RuleMigration {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch (e) {
+    return { rules: [], errors: [`rules-json is not valid JSON: ${(e as Error).message}`], neverTile: [], changed: false };
+  }
+  return migrateRules(parsed, rulesEnabled);
 }

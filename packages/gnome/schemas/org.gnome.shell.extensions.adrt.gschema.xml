@@ -119,16 +119,17 @@
       <description>Apps that are never tiled. Entries are app ids (globs are also accepted).</description>
     </key>
 
-    <!-- Rules (§19.1) -->
+    <!-- Rules (§19.1, §23 decisions 91-93). `rules-enabled` is legacy: kept only
+         so the per-rule `enabled` can be migrated from the old global gate. -->
     <key name="rules-enabled" type="b">
       <default>true</default>
-      <summary>Enable rules</summary>
-      <description>Apply the user-authored rules.</description>
+      <summary>Enable rules (legacy)</summary>
+      <description>Read once during migration; superseded by each rule's own enabled switch.</description>
     </key>
     <key name="rules-json" type="s">
       <default>'[]'</default>
       <summary>Rules JSON</summary>
-      <description>JSON array of rules.</description>
+      <description>JSON array of placement rules: match by appId/title/kind/transient, force tile full, left-half or right-half.</description>
     </key>
 
     <!-- Animation (§11) -->
@@ -345,6 +346,11 @@
       <default>['&lt;Super&gt;&lt;Shift&gt;r']</default>
       <summary>Record a bug</summary>
       <description>Start a bug recording, or stop it and ask what you observed.</description>
+    </key>
+    <key name="kb-toggle-pause" type="as">
+      <default>['&lt;Super&gt;&lt;Shift&gt;p']</default>
+      <summary>Pause or resume tiling</summary>
+      <description>Pause adrt's tiling and hide the highlight, or resume and retile.</description>
     </key>
     <key name="kb-focus-next" type="as">
       <default>['&lt;Super&gt;grave']</default>

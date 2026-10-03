@@ -496,7 +496,9 @@ Two clarifications that follow from this:
 - `undo`, `focus cycle`, the four **focus** directions, the four **move** directions,
   `move window to workspace` (next, previous, and by index), `float toggle`,
   `nudge resize` (**both axes**), `fullscreen toggle`, `close focused`,
-  `cursor to centre`.
+  `cursor to centre`, **`pause toggle` (`kb-toggle-pause`)**. The pause toggle is
+  the user pause's non-panel home: it drives the same predicate as a locked or
+  sharing session (§19), hiding the highlight, and resumes by re-tiling once.
 - `cursor to centre` (`kb-cursor-centre`) puts the pointer in the middle of the
   focused window, clamped inside the work area; it is a no-op with no focused
   window. `cursor-follows-focus` (default **off**) makes every focus change move
@@ -971,6 +973,33 @@ never debug-gated (the deduplication and rate limits still apply).
     produces **no drop-assist highlight and no swap/slot/maximize**. The drag is a
     plain move. A landing outline is drawn only for a window the drop could actually
     tile, so the preview can never promise a placement that cannot happen.
+
+91. **Rules force a tile placement, nothing else** (the Rules-tab decision): a rule
+    is matched against a window by **`appId` (glob), `title` (glob), `kind` (a
+    `SurfaceKind` list) and `transient`** — every present field must match (AND) —
+    and its only action is **`tile`: `full` | `left-half` | `right-half`**. There is
+    **no global gate**: the **first enabled rule in array order wins**, and each rule
+    has its own **`enabled`** switch. Rules are applied by the tiler as a placement
+    override (`findRuleOverride`), never by the classifier — a rule can no longer
+    float a window. The legacy `rules-enabled` key is kept **for migration only**.
+    An invalid rule is **surfaced, never silently dropped**: inline in the editor and
+    in `DumpState.rules.errors`; the runtime simply does not apply it.
+
+92. **`float` is not a rule action; it belongs to the Never-tile list** (the same
+    decision): on load, a legacy `{"match":{"appId":…},"float":true}` rule's app glob
+    is appended to `exception-apps` (the durable never-tile path, §12/§16) and the
+    rule is removed from `rules-json`; a rule with both `float` and a surviving
+    `tile` keeps its `tile` and loses the flag. A legacy global
+    `rules-enabled:false` is carried over as **`enabled:false` on every rule**, so
+    the old off state survives as per-rule state. The migration is idempotent.
+
+93. **The Rules tab is a rule-list editor** (decision 91's UI): one expandable row
+    per rule with the **app picker** (the installed-app `appChoices()` picker), a
+    **title-glob entry**, the **tile action chosen from a list (never typed)**, a
+    **per-rule enable switch**, **remove**, and **reorder up/down**, plus an **Add
+    rule** control, an **empty state**, and **inline validation** that names every
+    problem on the offending row. There is **no JSON textarea and no global switch**;
+    `rules-json` stays the storage key.
 
 ## Deliberate non-goals
 

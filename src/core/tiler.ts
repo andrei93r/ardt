@@ -387,7 +387,7 @@ function findRuleOverride(windows: readonly TilerWindow[], rules: readonly Rule[
   for (const win of sorted) {
     const context = { appId: win.appId, title: win.title, kind: win.kind, transient: false } satisfies RuleContext;
     const rule = firstMatch(rules, context);
-    if (rule !== null && rule.tile !== undefined) return { window: win, mode: rule.tile };
+    if (rule !== null) return { window: win, mode: rule.tile };
   }
   return null;
 }

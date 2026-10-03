@@ -23,6 +23,7 @@ import type { SuppressionReason } from '../../core/border.js';
 import { SessionMachine } from '../../core/session.js';
 import type { SessionMode } from '../../core/session.js';
 import { ChangeLog } from '../../core/undo.js';
+import { migrateRulesJson } from '../../core/rules.js';
 import type { SplitAxis } from '../../core/tiler.js';
 import { ratioKey } from '../../core/tiler.js';
 import type { MemoryEntry } from '../../core/displays.js';
@@ -41,7 +42,6 @@ import { GnomeHost } from './host.js';
 import { History } from './history.js';
 import { GnomeIndicator } from './indicator.js';
 import { EventJournal } from './journal.js';
-import { AdrtPanel } from './panel.js';
 import { Recorder } from './recorder.js';
 import { RecordingPrompt } from './recording-prompt.js';
 import { RegistryStore } from './registry.js';
@@ -159,7 +159,7 @@ interface ExtraHandlers {
   SimulateWorkspaceReorder(from: number, to: number): boolean;
   SimulateWorkspaceOrientation(vertical: boolean): boolean;
   CursorToCentre(): boolean;
-  ActivatePanelItem(name: string): boolean;
+  TogglePause(): boolean;
   InjectFault(context: string): boolean;
   SimulateChromeTeardown(): boolean;
   StartFrameRecording(): boolean;
@@ -184,8 +184,6 @@ export default class AdrtExtension extends Extension {
   private dbus!: GnomeDbus;
   private border!: BorderState;
   private sessionMachine = new SessionMachine();
-  /** The top-bar panel affordance; null until `enable()` builds it. */
-  private panel: AdrtPanel | null = null;
   /** The start/stop bug recorder; inert until a `StartRecording` request. */
   private recorder: Recorder | null = null;
   /** The observation prompt shown after a user stop; null outside `enable()`. */
@@ -339,6 +337,9 @@ export default class AdrtExtension extends Extension {
       exceptionApps: this.settings.strv('exception-apps'),
     });
     this.registry.setEnabled(this.settings.boolean('adaptation-enabled', true));
+    // §23: fold legacy rule floats into the Never-tile list once, before any
+    // window is classified, and drop the dead global gate.
+    this.migrateRuleFloats();
     this.changes = new ChangeLog();
     this.border = new BorderState();
 
@@ -400,23 +401,11 @@ export default class AdrtExtension extends Extension {
       monitors: () => this.host.screens().map((screen) => ({ ...screen })),
       settings: () => this.settings.snapshot(),
       snapshot: () => this.recordSnapshot(),
-      onChanged: () => this.syncPanel(),
+      onChanged: () => undefined,
     });
     // §22 extension: the observation prompt. Built empty; `show()` is lazy so
     // no Shell chrome exists until a user stop actually needs it.
     this.recordingPrompt = new RecordingPrompt();
-
-    // §1: the on-screen presence. Built after the session so its callbacks can
-    // read the live pause predicate; it owns no state of its own.
-    this.panel = new AdrtPanel({
-      isPaused: () => this.isPaused(),
-      setPaused: (paused) => this.setTilingPaused(paused),
-      indicatorEnabled: () => this.settings.boolean('active-window-indicator', true),
-      setIndicatorEnabled: (enabled) => this.settings.write('active-window-indicator', enabled),
-      recording: () => this.recorder?.isRecording ?? false,
-      toggleRecording: () => this.toggleRecording(),
-      openPreferences: () => this.openPreferences(),
-    });
 
     const injectedFailures = this.settings.int('debug-inject-verify-failure', 0);
     if (injectedFailures > 0) this.tiling.injectVerifyFailures(injectedFailures);
@@ -583,10 +572,6 @@ export default class AdrtExtension extends Extension {
     this.teardown('recorder', () => {
       this.recorder?.destroy('disable');
       this.recorder = null;
-    });
-    this.teardown('panel', () => {
-      this.panel?.destroy();
-      this.panel = null;
     });
     this.teardown('gestures', () => this.gestures?.disable());
     this.teardown('session', () => this.session?.destroy());
@@ -829,7 +814,6 @@ export default class AdrtExtension extends Extension {
   private simulateChromeTeardown(): boolean {
     if (GLib.getenv('ADRT_TEST_TRIGGERS') !== '1') return false;
     this.indicator?.destroyChromeActors();
-    this.panel?.destroyChromeActors();
     return true;
   }
 
@@ -857,14 +841,13 @@ export default class AdrtExtension extends Extension {
   }
 
   /**
-   * §19: the panel/manual pause. It lives in the session machine (folded into
-   * `isPaused`), so the tiling engine, the drain and the indicator all see it
-   * with no extra plumbing. Resuming asks for one reconcile so windows that
-   * moved while paused are re-tiled.
+   * §19: the user pause (`kb-toggle-pause` and the `TogglePause` trigger). It
+   * lives in the session machine (folded into `isPaused`), so the tiling engine,
+   * the drain and the indicator all see it with no extra plumbing. Resuming asks
+   * for one reconcile so windows that moved while paused are re-tiled.
    */
   private setTilingPaused(paused: boolean): void {
     if (this.sessionMachine.manualPause === paused) {
-      this.syncPanel();
       return;
     }
     this.sessionMachine.setManualPause(paused);
@@ -879,7 +862,6 @@ export default class AdrtExtension extends Extension {
     }
     this.syncIndicator();
     this.syncPreview();
-    this.syncPanel();
     this.history.log('session_mode', { mode: this.sessionMachine.state.mode, paused: this.isPaused(), manualPaused: paused });
   }
 
@@ -905,7 +887,6 @@ export default class AdrtExtension extends Extension {
     }
     this.session.setScanning(effects.scanTickRunning);
     this.syncIndicator();
-    this.syncPanel();
     if (!initial && (effects.retileOnResume || (mode === 'user' && leftSharingPaused))) {
       this.session.scheduleReconcile('session-resume');
     }
@@ -924,7 +905,6 @@ export default class AdrtExtension extends Extension {
     if (want) this.suppressBorder('sharing');
     else this.unsuppressBorder('sharing');
     this.syncIndicator();
-    this.syncPanel();
   }
 
   /**
@@ -1399,12 +1379,6 @@ export default class AdrtExtension extends Extension {
     }
   }
 
-  /** Redraw the top-bar affordance to match the live state (cheap, no-op until
-   * `enable()` has built it). */
-  private syncPanel(): void {
-    this.panel?.sync();
-  }
-
   /**
    * §6/§11: the drop-assist overlay. The target is the model's own drag
    * decision (`WindowSession.previewTarget`), recomputed here while the drag is
@@ -1551,7 +1525,6 @@ export default class AdrtExtension extends Extension {
     const reactive: [string, () => void][] = [
       ['exception-apps', () => this.session.invalidateAll()],
       ['rules-json', () => this.session.invalidateAll()],
-      ['rules-enabled', () => this.session.invalidateAll()],
       ['heuristic-modal-detect', () => this.session.invalidateAll()],
       ['min-size-policy', () => this.session.invalidateAll()],
       ['primary-apps', () => this.session.invalidateAll()],
@@ -1573,7 +1546,6 @@ export default class AdrtExtension extends Extension {
       ['gaps-between', () => this.session.invalidateAll()],
       ['active-window-indicator', () => {
         this.syncIndicator();
-        this.syncPanel();
       }],
       ['gesture-enabled', () => this.gestures.configure()],
       ['gesture-sensitivity', () => this.gestures.configure()],
@@ -1684,6 +1656,7 @@ export default class AdrtExtension extends Extension {
     return [
       'kb-undo',
       'kb-recording-toggle',
+      'kb-toggle-pause',
       'kb-focus-next',
       'kb-focus-left',
       'kb-focus-right',
@@ -1744,9 +1717,14 @@ export default class AdrtExtension extends Extension {
         this.session.undo();
         break;
       case 'kb-recording-toggle':
-        // The hotkey goes through the same one action as the panel row and the
-        // D-Bus trigger, so all three always agree.
+        // The hotkey goes through the same one action as the D-Bus trigger, so
+        // both always agree.
         this.toggleRecording();
+        break;
+      case 'kb-toggle-pause':
+        // The user's pause home: the same predicate the old panel row and the
+        // D-Bus TogglePause trigger drive.
+        this.setTilingPaused(!this.sessionMachine.manualPause);
         break;
       case 'kb-focus-next':
         this.session.focusCycle();
@@ -1884,6 +1862,31 @@ export default class AdrtExtension extends Extension {
     if (current >= EXTENSION_VERSION) return;
     this.settings.write('settings-version', EXTENSION_VERSION);
     this.history.log('config_imported', { migratedFrom: current, to: EXTENSION_VERSION });
+  }
+
+  /**
+   * §23 decisions 91-93: fold legacy rule floats into the Never-tile list and
+   * carry a legacy global `rules-enabled:false` over as per-rule
+   * `enabled:false`. Idempotent: after the first run `rules-json` holds no
+   * legacy flags and `changed` is false.
+   */
+  private migrateRuleFloats(): void {
+    const migration = migrateRulesJson(
+      this.settings.string('rules-json', '[]'),
+      this.settings.boolean('rules-enabled', true),
+    );
+    if (migration.neverTile.length > 0) {
+      const merged = [...this.settings.strv('exception-apps')];
+      for (const glob of migration.neverTile) {
+        if (!merged.includes(glob)) merged.push(glob);
+      }
+      this.settings.write('exception-apps', merged);
+      this.history.log('rules_migrated', { neverTile: migration.neverTile });
+    }
+    if (migration.changed) this.settings.write('rules-json', JSON.stringify(migration.rules));
+    if (migration.errors.length > 0) {
+      this.journal.record('model', 'rules_invalid', { errors: migration.errors });
+    }
   }
 
   private firstRun(): void {
@@ -2325,7 +2328,10 @@ export default class AdrtExtension extends Extension {
       SimulateWorkspaceReorder: (from, to) => this.session.simulateWorkspaceReorder(from, to),
       SimulateWorkspaceOrientation: (vertical) => this.session.simulateWorkspaceOrientation(vertical),
       CursorToCentre: () => this.session.centreCursorNow(),
-      ActivatePanelItem: (name) => this.panel?.activate(name) ?? false,
+      TogglePause: () => {
+        this.setTilingPaused(!this.sessionMachine.manualPause);
+        return true;
+      },
       InjectFault: (context) => this.simulateFault(context),
       SimulateChromeTeardown: () => this.simulateChromeTeardown(),
       StartFrameRecording: () => {
@@ -2366,14 +2372,13 @@ export default class AdrtExtension extends Extension {
         this.changes.clear();
         this.saveState();
         this.session.clearSignatures();
-        // Test isolation: a layout reset also clears a panel/manual pause, so a
+        // Test isolation: a layout reset also clears a manual pause, so a
         // scenario that forgot to resume cannot leak a paused session into the
         // next one on the same worker.
         if (this.sessionMachine.manualPause) {
           this.sessionMachine.setManualPause(false);
           if (this.sessionMachine.state.mode === 'user') this.unsuppressBorder('pause');
           this.syncIndicator();
-          this.syncPanel();
         }
         this.session.scheduleReconcile('reset-layout');
         return true;
@@ -2518,7 +2523,7 @@ export default class AdrtExtension extends Extension {
   }
 
   /**
-   * The one action shared by the hotkey, the panel row and the D-Bus
+   * The one action shared by the Super+Shift+R hotkey and the D-Bus
    * `ToggleRecording` trigger: flip recording on/off in place. Stopping shows
    * the observation prompt; starting closes any prompt left from a previous
    * stop so its file is closed with no note.
@@ -2598,6 +2603,9 @@ export default class AdrtExtension extends Extension {
 
   private dumpState(): string {
     const monitors = this.host.screens().map((screen) => ({ ...screen }));
+    // §23: the rules the tiler would use, with the parse errors surface — the
+    // runtime never silently drops an invalid rule.
+    const rulesParse = this.settings.rules();
     const windows = [...this.session.windows.values()].map((tracked) => {
       tracked.surface.refresh();
       tracked.surface.captureZ();
@@ -2642,15 +2650,16 @@ export default class AdrtExtension extends Extension {
       mode: this.sessionMachine.state.mode,
       userPaused: this.sessionMachine.manualPause,
       pauseDuringSharing: this.pauseDuringSharing(),
-      panel: this.panel?.describe() ?? {
+      panel: {
         present: false,
         paused: this.isPaused(),
         indicatorEnabled: this.settings.boolean('active-window-indicator', true),
-        recording: false,
+        recording: this.recorder?.isRecording ?? false,
         pauseLabel: '',
         indicatorLabel: '',
         recordLabel: '',
       },
+      rules: { count: rulesParse.rules.length, errors: rulesParse.errors },
       recording: this.recorder?.describe() ?? {
         recording: false,
         path: null,

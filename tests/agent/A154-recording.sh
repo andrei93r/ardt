@@ -2,7 +2,7 @@
 # Generated with AI for personal use.
 # Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
 # and can maintain this code.
-# A154 bug recorder (§22 extension): the hotkey, the panel row and the D-Bus
+# A154 bug recorder (§22 extension): the hotkey (Super+Shift+R) and the D-Bus
 # triggers all drive one lifecycle. StartRecording/ToggleRecording write one
 # JSONL file per session under the Shell's data dir; every journal event and a
 # ~20 Hz state snapshot flow into it; a *user* stop opens the observation prompt
@@ -221,34 +221,7 @@ print("states=%d window=%d" % (len(states), wid))
   fi
 fi
 
-# 7. The panel row drives the same lifecycle, prompt included.
-adrt ActivatePanelItem record >/dev/null 2>&1 || true
-if wait_python 10 'import json,sys; sys.exit(0 if json.load(sys.stdin)["recording"]["recording"] else 1)'; then
-  pass "the panel record item starts a recording"
-else
-  fail "the panel record item did not start a recording"
-fi
-panel_path="$(state_expr 'd["recording"]["path"]')"
-adrt ActivatePanelItem record >/dev/null 2>&1 || true
-if wait_python 10 'import json,sys; d=json.load(sys.stdin)["recording"]; sys.exit(0 if not d["recording"] and d["promptOpen"] else 1)'; then
-  pass "the panel record item stops and opens the prompt"
-else
-  fail "the panel record item did not stop and open the prompt"
-fi
-note_panel="panel observation"
-assert_true "the panel stop's note is accepted" "$(adrt SubmitRecordingNote "$note_panel" | python3 "$PARSE")"
-if [ -f "$panel_path" ] && python3 -c '
-import json, sys
-rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf8") if line.strip()]
-notes = [r for r in rows if r["kind"] == "note"]
-sys.exit(0 if rows and rows[-1]["kind"] == "footer" and rows[-1]["reason"] == "user" and notes and notes[0]["text"] == sys.argv[2] else 1)
-' "$panel_path" "$note_panel"; then
-  pass "the panel-started recording closes with the note and a user footer"
-else
-  fail "the panel-started recording did not close with the note"
-fi
-
-# 8. ToggleRecording is the hotkey path: start, stop, prompt, note, footer.
+# 7. ToggleRecording is the hotkey path: start, stop, prompt, note, footer.
 assert_eq "ToggleRecording starts recording" "True" \
   "$(adrt ToggleRecording | python3 "$PARSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["recording"])')"
 toggle_path="$(status_field path)"

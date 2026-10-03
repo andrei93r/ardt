@@ -4,13 +4,13 @@
 # and can maintain this code.
 # A161 §Shell stability: extension teardown is dispose-safe. At session end the
 # Shell destroys adrt's chrome actors itself (the indicator, the drop preview,
-# close ghosts, the panel button) *before* `disable()` runs. This scenario
-# drives the real teardown paths against chrome the Shell has already destroyed
-# (`SimulateChromeTeardown` does exactly what the session end does), then
-# repeats plain enable/disable cycles with live chrome present, and asserts the
-# journal recorded no disposed-actor touch: no `[adrt] ERROR`, no Gjs "already
-# been disposed" in adrt's frames, and no `clutter_actor_remove_child` /
-# `g_closure_unref` assertion.
+# close ghosts) *before* `disable()` runs. This scenario drives the real teardown
+# paths against chrome the Shell has already destroyed (`SimulateChromeTeardown`
+# does exactly what the session end does), then repeats plain enable/disable
+# cycles with live chrome present, and asserts the journal recorded no
+# disposed-actor touch: no `[adrt] ERROR`, no Gjs "already been disposed" in
+# adrt's frames, and no `clutter_actor_remove_child` / `g_closure_unref`
+# assertion.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 LOG_FILE="${ADRT_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/adrt-nested}/shell.log"
@@ -119,7 +119,7 @@ done
 
 # The extension is still fully alive and its chrome is back after every cycle.
 assert_true "the extension still answers after the stress" "$(adrt DumpState | python3 "$PARSE" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("format") == "adrt.state" else 1)' && echo true || echo false)"
-assert_eq "the panel is present again" "True" "$(state_expr 'd["panel"]["present"]')"
+assert_eq "the panel stays absent" "False" "$(state_expr 'str(d["panel"]["present"])')"
 if wait_python 15 '
 import json, sys
 sys.exit(0 if json.load(sys.stdin)["border"]["visible"] else 1)'; then
