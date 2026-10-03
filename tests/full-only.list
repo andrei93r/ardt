@@ -129,3 +129,14 @@ A116-escape-clamped-own-workspace
 S08-keybindings
 S17-dock-drill
 S18-trigger-wins
+
+# reason: live-only application compatibility — these spawn real snap/flatpak/
+#   AppImage/Electron clients against the live session, so they run in the live
+#   full suite, not the nested smoke. The nested A158-A160 carry the same
+#   checklist as the smoke representation.
+S26-app-compatibility
+
+# reason: real tab tear-off is a pointer drag / menu action with no stable
+#   headless form — a documented manual check (tests/MANUAL.md §13), never a
+#   flaky automated one. The decision is covered nested by A155.
+S27-tab-tear-off

@@ -138,3 +138,12 @@ screen-sharing-opt-in | A28-screen-sharing A148-sharing-opt-in
 panel-affordance | A147-panel
 workspace-mode-settings | A149-workspace-mode
 error-boundary | A146-error-boundary
+
+# ------------------------------------------------- app compatibility (per toolkit)
+# Every app gets the SAME checklist (tests/lib/appcheck.sh) and each row is
+# availability-gated: missing / non-launching apps are named skips, never
+# failures. Nested A158-A160 are the smoke representation; S26/S27 are live-only.
+app-compatibility | A158-app-matrix A159-app-matrix-electron A160-app-matrix-foreign S26-app-compatibility S27-tab-tear-off
+app-toolkit-gtk | A158-app-matrix
+app-toolkit-electron | A159-app-matrix-electron
+app-toolkit-foreign | A160-app-matrix-foreign

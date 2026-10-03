@@ -12,7 +12,7 @@ wait_python 15 '
 import json, sys
 d = json.load(sys.stdin)
 sys.exit(0 if any(w["maximized"] for w in d["windows"]) else 1)' || true
-adrt SpawnWindow "$FILES" >/dev/null
+spawn "$FILES"
 wait_tests 2 15 || true
 
 TEST_IDS="$(test_ids)" poll "the maximized app was tiled with its sibling" '

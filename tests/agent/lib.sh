@@ -6,6 +6,8 @@ export ADRT_STATE_DIR="${ADRT_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/adrt-nested}"
 
 # shellcheck source=tests/lib/common.sh
 source "$AGENT_DIR/../lib/common.sh"
+# shellcheck source=tests/lib/appcheck.sh
+source "$AGENT_DIR/../lib/appcheck.sh"
 
 NESTED="$ROOT_DIR/scripts/nested-shell.sh"
 TEST_CLIENT="${ADRT_TEST_CLIENT:-gnome-text-editor --new-window}"
@@ -68,13 +70,109 @@ dump() {
   adrt DumpState | python3 "$PARSE"
 }
 
+# Spawn from a JSON argv array plus a JSON env object/array (the SpawnWindow
+# trigger). The launcher inherits the nested Shell's Wayland socket and private
+# session bus; the env entries overlay it.
+spawn_window_argv() {
+  local argv_json="$1" env_json="${2:-\{\}}"
+  adrt SpawnWindow "$argv_json" "$env_json" | python3 "$PARSE"
+}
+
+# Build a JSON argv array from a plain command string. This is the legacy
+# single-string convenience: `command.split(' ')`, no shell, no env — kept so
+# every existing scenario keeps working unchanged.
+argv_json_from_string() {
+  python3 -c 'import json, sys; print(json.dumps(sys.argv[1].split()))' "$1"
+}
+
+# Legacy form: one command string, no extra environment.
 spawn_window() {
   local command="${1:-$TEST_CLIENT}"
-  adrt SpawnWindow "$command" | python3 "$PARSE"
+  spawn_window_argv "$(argv_json_from_string "$command")" '{}'
 }
 
 close_window() {
   adrt CloseWindow "$1" >/dev/null 2>&1 || true
+}
+
+# --- the shared app-compatibility checklist's runner hooks (tests/lib/appcheck.sh)
+
+# Close every window and reset the layout/settings a scenario may have set.
+appcheck_reset() { ensure_clean; }
+
+# Open a client from argv/env JSON and block until it is tracked. Prints the new
+# window id, or "" when none appeared (an absent app, or a single-instance app
+# that only raised its existing window).
+appcheck_spawn() { # env-json argv-json [timeout]
+  local env_json="$1" argv_json="$2" timeout="${3:-30}" before new
+  local deadline
+  before="$(list_ids)"
+  spawn_window_argv "$argv_json" "$env_json" >/dev/null
+  deadline=$((SECONDS + timeout))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    new="$(dump | python3 -c "
+import json, sys
+before = set('$before'.split())
+d = json.load(sys.stdin)
+new = [str(w['id']) for w in d['windows'] if str(w['id']) not in before]
+print(new[0] if new else '')")"
+    [ -n "$new" ] && { echo "$new"; return 0; }
+    sleep 0.5
+  done
+  echo ""
+  return 1
+}
+
+appcheck_close() { close_window "$1"; }
+
+# A tear-off: with tiling paused, open a newcomer (so it is adopted but not
+# placed, exactly the live tear-off state A155 describes), grab it, move it and
+# release. Prints the newcomer id, or "" when it never appeared. The checklist
+# then asserts no swap/storm/stubborn on that newcomer.
+appcheck_tearoff() { # env-json argv-json
+  local env_json="$1" argv_json="$2" before new
+  local deadline
+  before="$(list_ids)"
+  adrt ActivatePanelItem pause >/dev/null 2>&1 || true
+  wait_python 10 'import json,sys; sys.exit(0 if json.load(sys.stdin)["paused"] else 1)' || true
+  spawn_window_argv "$argv_json" "$env_json" >/dev/null
+  deadline=$((SECONDS + 30))
+  new=""
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    # The app's first new window: it may be the real window or a helper/utility
+    # (VS Code opens both). The no-swap/no-storm decision is asserted either
+    # way; the checklist skips only the "tiles" half for a utility newcomer.
+    new="$(dump | python3 -c "
+import json, sys
+before = set('$before'.split())
+d = json.load(sys.stdin)
+n = [str(w['id']) for w in d['windows'] if str(w['id']) not in before]
+print(n[-1] if n else '')")"
+    [ -n "$new" ] && break
+    sleep 0.5
+  done
+  if [ -z "$new" ]; then
+    adrt ActivatePanelItem pause >/dev/null 2>&1 || true
+    echo ""
+    return 1
+  fi
+  # Its first frame has arrived (adopted) but it is still unplaced.
+  sleep 0.6
+  local bx by bw bh
+  read -r bx by bw bh <<<"$(dump | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+ws = sorted([w for w in d["windows"] if w["tileable"] and w["layer"] != 2], key=lambda w: w["rect"]["x"])
+b = ws[-1]["rect"]
+print(b["x"], b["y"], b["width"], b["height"])')"
+  adrt BeginDrag "$new" >/dev/null 2>&1 || true
+  adrt MoveWindow "$new" "$((bx + 30))" "$((by + 30))" 500 500 >/dev/null 2>&1 || true
+  sleep 0.5
+  adrt EndDrag "$new" >/dev/null 2>&1 || true
+  adrt ActivatePanelItem pause >/dev/null 2>&1 || true
+  wait_settled 15 || true
+  echo "$new"
+  return 0
 }
 
 list_ids() {

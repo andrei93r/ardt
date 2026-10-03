@@ -73,8 +73,11 @@ echo "This will inject Super+Z, Super+Alt+l and Super+f into your session."
 echo
 
 # --- fixtures --------------------------------------------------------------
-adrt SpawnWindow "$CLIENT" >/dev/null || true
-adrt SpawnWindow "$CLIENT" >/dev/null || true
+# SpawnWindow takes a JSON argv array (plus a JSON env object); build it from
+# the plain command string.
+CLIENT_ARGV="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1].split()))' "$CLIENT")"
+adrt SpawnWindow "$CLIENT_ARGV" '{}' >/dev/null || true
+adrt SpawnWindow "$CLIENT_ARGV" '{}' >/dev/null || true
 wait_count 2 || { echo "keybinding-test: could not open two windows" >&2; exit 1; }
 sleep 2
 set -- $(ids)
