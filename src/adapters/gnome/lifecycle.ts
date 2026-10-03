@@ -23,15 +23,6 @@ export interface SignalHandle {
 }
 
 /**
- * A handle returned by `TimeoutRegistry.add()`. Calling `disarm()` or
- * letting the registry clear itself will remove the timeout.
- */
-export interface TimeoutHandle {
-  /** Remove this timeout. Idempotent. */
-  disarm(): void;
-}
-
-/**
  * Registry for GObject signal connections.
  *
  * Usage:
@@ -98,21 +89,6 @@ export class SignalRegistry {
     this.entries.length = 0;
   }
 
-  /**
-   * Disconnect all signals from a specific object.
-   */
-  clearForObject(obj: any): void {
-    const remaining: typeof this.entries = [];
-    for (const entry of this.entries) {
-      if (entry.obj === obj) {
-        try { obj.disconnect(entry.id); } catch { /* already gone */ }
-      } else {
-        remaining.push(entry);
-      }
-    }
-    this.entries = remaining;
-  }
-
   /** Number of tracked connections. */
   get size(): number {
     return this.entries.length;
@@ -129,14 +105,9 @@ export class SignalRegistry {
 /**
  * Registry for GLib timeouts/intervals.
  *
- * Usage:
- * ```ts
- * const timers = new TimeoutRegistry();
- * timers.add('my-timer', 1000, () => doThing());
- * timers.arm('periodic', 5000, () => periodic());
- * timers.disarm('my-timer');
- * timers.clear(); // removes all
- * ```
+ * Only the shapes the extension uses exist: one-shot `add`, repeating
+ * `addInterval`, and `clear`/`clearAll` for teardown. Anything else is
+ * speculative API on a teardown module.
  */
 export class TimeoutRegistry {
   private timeouts = new Map<string, number>();
@@ -173,29 +144,6 @@ export class TimeoutRegistry {
   }
 
   /**
-   * Arm a named timeout. If already armed, does nothing.
-   * Useful for periodic work that should only be scheduled once.
-   */
-  arm(name: string, ms: number, callback: () => void | boolean): void {
-    if (this.timeouts.has(name)) return;
-    this.addInterval(name, ms, callback);
-  }
-
-  /**
-   * Update the interval of an existing periodic timer.
-   * If the timer doesn't exist, does nothing.
-   */
-  updateInterval(name: string, ms: number): void {
-    const id = this.timeouts.get(name);
-    if (id === undefined) return;
-    GLib.source_remove(id);
-    const id2 = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
-      return GLib.SOURCE_CONTINUE;
-    });
-    this.timeouts.set(name, id2);
-  }
-
-  /**
    * Remove a named timeout/interval. Idempotent.
    */
   clear(name: string): void {
@@ -209,11 +157,6 @@ export class TimeoutRegistry {
   /** Check if a named timeout is currently armed. */
   has(name: string): boolean {
     return this.timeouts.has(name);
-  }
-
-  /** Get the GLib source ID for a named timer (for debugging). */
-  getId(name: string): number | undefined {
-    return this.timeouts.get(name);
   }
 
   /**
@@ -230,17 +173,4 @@ export class TimeoutRegistry {
   get size(): number {
     return this.timeouts.size;
   }
-}
-
-/**
- * Convenience: create both registries at once.
- */
-export function createLifecycleRegistries(): {
-  signals: SignalRegistry;
-  timers: TimeoutRegistry;
-} {
-  return {
-    signals: new SignalRegistry(),
-    timers: new TimeoutRegistry(),
-  };
 }

@@ -396,9 +396,6 @@ export class GnomeHost implements PlatformHost {
       case Layer.TILED:
         win.unmake_above();
         break;
-      case Layer.MODAL:
-        win.raise();
-        break;
       default:
         break;
     }
