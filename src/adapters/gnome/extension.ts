@@ -42,6 +42,7 @@ import { GnomeHost } from './host.js';
 import { History } from './history.js';
 import { GnomeIndicator } from './indicator.js';
 import { EventJournal } from './journal.js';
+import { SignalRegistry, TimeoutRegistry } from './lifecycle.js';
 import { Recorder } from './recorder.js';
 import { RecordingPrompt } from './recording-prompt.js';
 import { RegistryStore } from './registry.js';
@@ -223,16 +224,12 @@ export default class AdrtExtension extends Extension {
   private restarts = 0;
   private selfDisables = 0;
   private lastErrorAt = 0;
-  private sessionModeId = 0;
-  private overviewSignals: number[] = [];
-  private swipeSignalIds: number[] = [];
-  private workspaceActorSignals: { actor: any; id: number }[] = [];
-  private layoutSignals: number[] = [];
-  private motionSource: number | null = null;
-  private coherenceSource: number | null = null;
-  /** §Shell stability: the enable-time normalisation timer, removed on disable
-   * so a queued callback never runs against a torn-down session. */
-  private normalizeSource = 0;
+  /** Owns every compositor/shell signal connection, per teardown group (§36). */
+  private signals!: SignalRegistry;
+  /** Owns every GLib timer, per teardown name (§36). */
+  private timers!: TimeoutRegistry;
+  /** True once `disable()` has run; a second disable is a no-op (§36). */
+  private disabled = false;
   /** What build is actually running (set at enable). */
   private buildDirMtimeMs = 0;
   private motionLastX = Number.NaN;
@@ -311,6 +308,9 @@ export default class AdrtExtension extends Extension {
       this.buildDirMtimeMs = 0;
     }
     this.settings = new GnomeSettings(this.getSettings());
+    this.signals = new SignalRegistry();
+    this.timers = new TimeoutRegistry();
+    this.disabled = false;
     this.timing = new GnomeTiming({
       screens: () => this.host?.screens() ?? [],
       animationsDisabled: () => this.settings.boolean('disable-animations', false),
@@ -430,11 +430,9 @@ export default class AdrtExtension extends Extension {
     // §20: every enable normalises the existing workspaces. Adoption finishes on
     // the first ready timeout, so normalisation is deferred just past it; the
     // pass itself is idempotent.
-    this.normalizeSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, NORMALIZE_ON_ENABLE_MS, () => {
-      this.normalizeSource = 0;
-      this.guard('normalize-enable', () => this.session?.normalizeOnEnable())();
-      return GLib.SOURCE_REMOVE;
-    });
+    this.timers.add('normalize-enable', NORMALIZE_ON_ENABLE_MS, this.guard('normalize-enable', () => {
+      this.session?.normalizeOnEnable();
+    }));
 
     this.gestures.configure();
     if (this.settings.boolean('dbus-enabled', true)) {
@@ -445,17 +443,17 @@ export default class AdrtExtension extends Extension {
       this.dbus.expose(this.guardedHandlers());
     }
 
-    this.sessionModeId = sessionMode.connect('notify::current-mode', this.guard('session-mode', () => {
+    this.signals.add('session-mode', sessionMode, 'notify::current-mode', this.guard('session-mode', () => {
       // A live session transition always wins over a test-injected mode.
       this.injectedMode = null;
       this.applySessionMode(this.currentMode());
     }));
-    this.overviewSignals.push(overview.connect('showing', this.guard('overview-showing', () => this.onOverviewChanged(true))));
-    this.overviewSignals.push(overview.connect('hidden', this.guard('overview-hidden', () => this.onOverviewChanged(false))));
+    this.signals.add('overview', overview, 'showing', this.guard('overview-showing', () => this.onOverviewChanged(true)));
+    this.signals.add('overview', overview, 'hidden', this.guard('overview-hidden', () => this.onOverviewChanged(false)));
     this.refreshWorkspaceActors();
     this.connectWorkspaceAnimation();
-    this.layoutSignals.push(global.workspace_manager.connect('workspace-added', this.guard('workspace-added', () => this.refreshWorkspaceActors())));
-    this.layoutSignals.push(global.workspace_manager.connect('workspace-removed', this.guard('workspace-removed', () => this.refreshWorkspaceActors())));
+    this.signals.add('layout', global.workspace_manager, 'workspace-added', this.guard('workspace-added', () => this.refreshWorkspaceActors()));
+    this.signals.add('layout', global.workspace_manager, 'workspace-removed', this.guard('workspace-removed', () => this.refreshWorkspaceActors()));
     this.applySessionMode(this.currentMode(), true);
     // §23: hide the border if the extension is enabled while the overview is
     // already open (e.g. a headless shell that starts in it); the `showing`
@@ -465,16 +463,13 @@ export default class AdrtExtension extends Extension {
     this.session.setScanning(true);
     // §35: a periodic guarantee, independent of signals: a normal window must
     // never be left untiled next to a sibling.
-    this.coherenceSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, COHERENCE_SWEEP_MS, () => {
-      this.guard('coherence-sweep', () => {
-        this.session.coherenceSweep();
-        this.refreshSessionMode();
-        this.watchWorkspaceAnimation();
-        this.refreshWorkspaceSwitchSuppression();
-        this.refreshSharingSuppression();
-      })();
-      return GLib.SOURCE_CONTINUE;
-    });
+    this.timers.addInterval('coherence', COHERENCE_SWEEP_MS, this.guard('coherence-sweep', () => {
+      this.session.coherenceSweep();
+      this.refreshSessionMode();
+      this.watchWorkspaceAnimation();
+      this.refreshWorkspaceSwitchSuppression();
+      this.refreshSharingSuppression();
+    }));
 
     this.onStateChanged();
     this.firstRun();
@@ -496,6 +491,10 @@ export default class AdrtExtension extends Extension {
     // §Self-heal: a GNOME-initiated disable is never a moment to restart; mark
     // it so the recovery policy stays quiet through the teardown below.
     this.gnomeDisable = true;
+    // §36: idempotent — a second disable is a no-op, so a re-entrant teardown
+    // can never re-destroy a disposed actor.
+    if (this.disabled) return;
+    this.disabled = true;
     try {
       this.disableWith();
     } catch (error) {
@@ -513,50 +512,19 @@ export default class AdrtExtension extends Extension {
     this.teardown('journal', () => this.journal?.destroy());
     this.teardown('log-disable', () => this.history?.log('disable', {}));
     this.teardown('motion', () => this.stopMotionWatch());
-    this.teardown('coherence', () => {
-      if (this.coherenceSource !== null) {
-        GLib.source_remove(this.coherenceSource);
-        this.coherenceSource = null;
-      }
-    });
-    this.teardown('normalize', () => {
-      if (this.normalizeSource !== 0) {
-        GLib.source_remove(this.normalizeSource);
-        this.normalizeSource = 0;
-      }
-    });
-    this.teardown('session-mode', () => {
-      if (this.sessionModeId !== 0) {
-        sessionMode.disconnect(this.sessionModeId);
-        this.sessionModeId = 0;
-      }
-    });
-    this.teardown('overview', () => {
-      for (const id of this.overviewSignals) overview.disconnect(id);
-      this.overviewSignals = [];
-    });
-    this.teardown('workspace-actors', () => {
-      // §Shell stability: a workspace actor can already be destroyed at session
-      // end; a disconnect against a disposed emitter must be skipped, not
-      // logged (and never turned into a g_closure_unref assertion).
-      for (const entry of this.workspaceActorSignals) {
-        try {
-          entry.actor.disconnect(entry.id);
-        } catch {
-          /* the actor is gone */
-        }
-      }
-      this.workspaceActorSignals = [];
-    });
+    this.teardown('coherence', () => this.timers.clear('coherence'));
+    this.teardown('normalize', () => this.timers.clear('normalize-enable'));
+    this.teardown('session-mode', () => this.signals.disconnect('session-mode'));
+    this.teardown('overview', () => this.signals.disconnect('overview'));
+    this.teardown('workspace-actors', () => this.signals.disconnect('workspace-actors'));
     this.teardown('workspace-animation', () => this.disconnectWorkspaceAnimation());
-    this.teardown('layout', () => {
-      for (const id of this.layoutSignals) global.workspace_manager.disconnect(id);
-      this.layoutSignals = [];
-    });
+    this.teardown('layout', () => this.signals.disconnect('layout'));
+    this.teardown('simulate-workspace-switch', () => this.timers.clear('simulate-workspace-switch'));
     this.teardown('keybindings', () => this.unregisterKeybindings());
     this.teardown('setting-watchers', () => {
       for (const unsubscribe of this.settingWatchers) unsubscribe();
       this.settingWatchers = [];
+      this.signals.disconnect('settings');
     });
     this.teardown('host-watchers', () => {
       for (const unsubscribe of this.hostUnsubscribers) unsubscribe();
@@ -1026,16 +994,12 @@ export default class AdrtExtension extends Extension {
   private connectWorkspaceAnimation(): void {
     const tracker = (wm as any)?._workspaceAnimation?._swipeTracker;
     if (tracker === null || tracker === undefined || typeof tracker.connect !== 'function') return;
-    this.swipeSignalIds.push(tracker.connect('begin', this.guard('workspace-animation-begin', () => this.onWorkspaceAnimation())));
-    this.swipeSignalIds.push(tracker.connect('update', this.guard('workspace-animation-update', () => this.onWorkspaceAnimation())));
+    this.signals.add('workspace-animation', tracker, 'begin', this.guard('workspace-animation-begin', () => this.onWorkspaceAnimation()));
+    this.signals.add('workspace-animation', tracker, 'update', this.guard('workspace-animation-update', () => this.onWorkspaceAnimation()));
   }
 
   private disconnectWorkspaceAnimation(): void {
-    const tracker = (wm as any)?._workspaceAnimation?._swipeTracker;
-    for (const id of this.swipeSignalIds) {
-      if (tracker !== null && tracker !== undefined) tracker.disconnect(id);
-    }
-    this.swipeSignalIds = [];
+    this.signals.disconnect('workspace-animation');
   }
 
   private onWorkspaceAnimation(): void {
@@ -1098,7 +1062,7 @@ export default class AdrtExtension extends Extension {
    * covers gesture-driven switches, which emit no start signal.
    */
   private startMotionWatch(): void {
-    if (this.motionSource !== null) return;
+    if (this.timers.has('motion')) return;
     this.motionLastX = Number.NaN;
     this.motionLastY = Number.NaN;
     this.motionStable = 0;
@@ -1117,7 +1081,7 @@ export default class AdrtExtension extends Extension {
     // §Self-heal containment: a throw in a tick must never escape the GLib
     // source (it would log as an unhandled exception and could wedge the
     // compositor's dispatch); the boundary contains and reports it.
-    this.motionSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this.motionPollMs, this.guardSource('motion-tick', () => this.onMotionTick()));
+    this.timers.add('motion', this.motionPollMs, this.guardSource('motion-tick', () => this.onMotionTick()));
   }
 
   /** The current motion sampler interval, derived from the frame interval. */
@@ -1131,9 +1095,8 @@ export default class AdrtExtension extends Extension {
   }
 
   private stopMotionWatch(): void {
-    if (this.motionSource === null) return;
-    GLib.source_remove(this.motionSource);
-    this.motionSource = null;
+    if (!this.timers.has('motion')) return;
+    this.timers.clear('motion');
   }
 
   private onMotionTick(): boolean {
@@ -1152,10 +1115,7 @@ export default class AdrtExtension extends Extension {
     // VRR mode switch) must not leave the sampler on a stale interval.
     const desiredPollMs = this.timing.sampleIntervalMs(MOTION_POLL_FRAMES);
     if (desiredPollMs !== this.motionPollMs) {
-      if (this.motionSource !== null) {
-        GLib.source_remove(this.motionSource);
-        this.motionSource = null;
-      }
+      this.timers.clear('motion');
       this.armMotionWatch();
       return GLib.SOURCE_REMOVE;
     }
@@ -1426,22 +1386,13 @@ export default class AdrtExtension extends Extension {
    * position is therefore a precise, focus-independent transition signal.
    */
   private refreshWorkspaceActors(): void {
-    // §Shell stability: an actor that vanished since the last pass must be
-    // disconnected from without raising (the emitter is already disposed).
-    for (const entry of this.workspaceActorSignals) {
-      try {
-        entry.actor.disconnect(entry.id);
-      } catch {
-        /* the actor is gone */
-      }
-    }
-    this.workspaceActorSignals = [];
+    this.signals.disconnect('workspace-actors');
     const workspaces = (layoutManager as any)._workspaces;
     if (!Array.isArray(workspaces)) return;
     for (const actor of workspaces) {
       if (actor === null || actor === undefined) continue;
-      this.workspaceActorSignals.push({ actor, id: actor.connect('notify::x', this.guard('workspace-actor-x', () => this.onWorkspaceActorMoved())) });
-      this.workspaceActorSignals.push({ actor, id: actor.connect('notify::y', this.guard('workspace-actor-y', () => this.onWorkspaceActorMoved())) });
+      this.signals.add('workspace-actors', actor, 'notify::x', this.guard('workspace-actor-x', () => this.onWorkspaceActorMoved()));
+      this.signals.add('workspace-actors', actor, 'notify::y', this.guard('workspace-actor-y', () => this.onWorkspaceActorMoved()));
     }
   }
 
@@ -1591,8 +1542,7 @@ export default class AdrtExtension extends Extension {
     const watch = (schema: string, key: string): void => {
       try {
         const store = new Gio.Settings({ schema_id: schema });
-        const id = store.connect(`changed::${key}`, this.guard(`workspace-mode:${key}`, () => this.onWorkspaceModeChanged(key)));
-        this.settingWatchers.push(() => store.disconnect(id));
+        this.signals.add('settings', store, `changed::${key}`, this.guard(`workspace-mode:${key}`, () => this.onWorkspaceModeChanged(key)));
       } catch {
         /* the schema is unavailable in this shell: nothing to watch */
       }
@@ -2739,7 +2689,7 @@ export default class AdrtExtension extends Extension {
         preview: this.indicator.describePreview(),
       },
       overview: overview.visible,
-      workspaceActors: this.workspaceActorSignals.length / 2,
+      workspaceActors: this.signals.groupSize('workspace-actors') / 2,
       coherenceSweeps: this.session.coherenceSweepCount(),
       coherenceFixes: this.session.coherenceFixCount(),
       wsSwitchEvents: this.wsSwitchEvents,
@@ -3019,12 +2969,11 @@ export default class AdrtExtension extends Extension {
     if (controller === null || controller === undefined || typeof controller._prepareWorkspaceSwitch !== 'function') return false;
     const hold = holdMs > 0 ? Math.min(holdMs, 5000) : 600;
     controller._prepareWorkspaceSwitch();
-    GLib.timeout_add(GLib.PRIORITY_DEFAULT, hold, () => {
+    this.timers.add('simulate-workspace-switch', hold, () => {
       const current = (wm as any)?._workspaceAnimation;
       if (current !== null && current !== undefined && current._switchData != null) {
         current._finishWorkspaceSwitch(current._switchData);
       }
-      return GLib.SOURCE_REMOVE;
     });
     return true;
   }
