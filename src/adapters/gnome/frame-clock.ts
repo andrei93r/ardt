@@ -28,16 +28,66 @@ export interface AnimatorHooks {
   onFrame?(id: number, rect: Rect): void;
 }
 
-interface Entry {
-  timeline: any;
+/**
+ * One tween of an actor's rect, standalone. Interpolates `from` → `to` on the
+ * actor's frame clock with the duration's easing, clamping inside `bounds`,
+ * and reports through `hooks`. A null actor or a non-positive duration applies
+ * the target immediately. The returned `rect` is the live interpolated object
+ * (mutated in place, never reallocated); `stop()` halts the timeline.
+ */
+export interface Tween {
+  stop(): void;
+  /** True when the target was applied immediately (no timeline runs). */
+  immediate: boolean;
+  /** The live interpolated rect. */
   rect: Rect;
-  from: Rect;
-  to: Rect;
-  durationMs: number;
-  easing: (t: number) => number;
-  onComplete: (() => void) | null;
-  /** Optional work area: the animated rect is kept inside it. */
-  bounds: Rect | null;
+}
+
+export interface TweenHooks {
+  apply(rect: Rect): void;
+  frame?(rect: Rect): void;
+  complete(): void;
+}
+
+export function tweenRect(
+  actor: any,
+  from: Rect,
+  to: Rect,
+  durationMs: number,
+  hooks: TweenHooks,
+  bounds: Rect | null = null,
+): Tween {
+  const rect = { ...to };
+  if (actor === null || durationMs <= 0) {
+    hooks.apply({ ...to });
+    hooks.complete();
+    return { stop: () => undefined, immediate: true, rect };
+  }
+  const safeDuration = Math.max(1, Math.round(durationMs));
+  const easing = easingFor(safeDuration);
+  const timeline = new Clutter.Timeline({ duration: safeDuration, actor });
+  timeline.connect('new-frame', (_tl: any, msec: number) => {
+    const t = Math.min(1, Math.max(0, msec / safeDuration));
+    const e = easing(t);
+    rect.x = from.x + (to.x - from.x) * e;
+    rect.y = from.y + (to.y - from.y) * e;
+    rect.width = from.width + (to.width - from.width) * e;
+    rect.height = from.height + (to.height - from.height) * e;
+    if (bounds !== null) {
+      rect.width = Math.min(rect.width, bounds.width);
+      rect.height = Math.min(rect.height, bounds.height);
+      rect.x = Math.max(bounds.x, Math.min(rect.x, bounds.x + bounds.width - rect.width));
+      rect.y = Math.max(bounds.y, Math.min(rect.y, bounds.y + bounds.height - rect.height));
+    }
+    hooks.apply(rect);
+    hooks.frame?.(rect);
+  });
+  timeline.connect('completed', () => {
+    hooks.apply({ ...to });
+    hooks.complete();
+  });
+  timeline.start();
+  return { stop: () => timeline.stop(), immediate: false, rect };
 }
 
 /**
@@ -59,117 +109,115 @@ export interface AnimRecord {
 /** A bounded sample window so an armed recording can never grow without limit. */
 const MAX_RECORDS = 4096;
 
-export class FrameClockAnimator {
-  private readonly entries = new Map<number, Entry>();
-  private records: AnimRecord[] = [];
-  private recording = false;
-
-  constructor(private readonly hooks: AnimatorHooks) {}
-
-  /** Arm the bounded recorder: clears it and starts collecting. */
-  startRecording(): void {
-    this.records = [];
-    this.recording = true;
-  }
-
-  stopRecording(): void {
-    this.recording = false;
-  }
-
-  /** The last sampled animation events (empty when never armed). */
-  recordsSnapshot(): AnimRecord[] {
-    return this.records;
-  }
-
-  private record(entry: AnimRecord): void {
-    if (!this.recording || this.records.length >= MAX_RECORDS) return;
-    this.records.push(entry);
-  }
-
-  get activeCount(): number {
-    return this.entries.size;
-  }
-
+/** The animation surface the tiler drives: live-transition bookkeeping plus the
+ * bounded test recorder. Implemented by {@link createAnimationLedger}; the
+ * interpolation itself is the standalone {@link tweenRect} helper. */
+export interface Animator {
+  readonly activeCount: number;
   /** Whether a specific window is mid-animation. */
-  isAnimating(id: number): boolean {
-    return this.entries.has(id);
+  isAnimating(id: number): boolean;
+  animate(actor: any, id: number, from: Rect, to: Rect, durationMs: number, onComplete?: (() => void) | null, bounds?: Rect | null): void;
+  cancel(id: number): void;
+  cancelAll(): void;
+  /** Arm the bounded recorder: clears it and starts collecting. */
+  startRecording(): void;
+  stopRecording(): void;
+  /** The last sampled animation events (empty when never armed). */
+  recordsSnapshot(): AnimRecord[];
+  destroy(): void;
+}
+
+/**
+ * The live-transition ledger: which windows are mid-animation, plus the bounded
+ * `animRecords` test recorder. State lives in this closure — no class — while
+ * every frame is interpolated by {@link tweenRect}.
+ */
+export function createAnimationLedger(hooks: AnimatorHooks): Animator {
+  const entries = new Map<number, LedgerEntry>();
+  let records: AnimRecord[] = [];
+  let recording = false;
+
+  function record(entry: AnimRecord): void {
+    if (!recording || records.length >= MAX_RECORDS) return;
+    records.push(entry);
   }
 
-  animate(actor: any, id: number, from: Rect, to: Rect, durationMs: number, onComplete: (() => void) | null = null, bounds: Rect | null = null): void {
+  function cancel(id: number): void {
+    const entry = entries.get(id);
+    if (entry === undefined) return;
+    entry.stop();
+    entries.delete(id);
+    record({ kind: 'cancel', id, at: Date.now(), rect: { ...entry.rect }, to: { ...entry.to }, from: { ...entry.from } });
+  }
+
+  function animate(actor: any, id: number, from: Rect, to: Rect, durationMs: number, onComplete: (() => void) | null = null, bounds: Rect | null = null): void {
     if (actor === null || durationMs <= 0) {
-      this.hooks.apply(id, to);
+      hooks.apply(id, to);
       if (onComplete !== null) onComplete();
       return;
     }
-    this.cancel(id);
-    const safeDuration = Math.max(1, Math.round(durationMs));
-    const timeline = new Clutter.Timeline({ duration: safeDuration, actor });
-    const entry: Entry = {
-      timeline,
-      rect: { ...to },
-      from: { ...from },
-      to: { ...to },
-      durationMs: safeDuration,
-      easing: easingFor(safeDuration),
-      onComplete,
-      bounds,
-    };
-    this.entries.set(id, entry);
-    this.record({ kind: 'start', id, at: Date.now(), rect: { ...from }, to: { ...to }, from: { ...from } });
-    timeline.connect('new-frame', (_tl: any, msec: number) => this.onFrame(id, entry, msec));
-    timeline.connect('completed', () => this.onCompleted(id, entry));
-    timeline.start();
+    cancel(id);
+    let dead = false;
+    const tween = tweenRect(actor, from, to, durationMs, {
+      apply: (rect) => {
+        if (!hooks.isAlive(id)) {
+          dead = true;
+          cancel(id);
+          return;
+        }
+        hooks.apply(id, rect);
+      },
+      frame: (rect) => {
+        if (dead) return;
+        record({ kind: 'frame', id, at: Date.now(), rect: { ...rect }, to: { ...to }, from: { ...from } });
+        hooks.onFrame?.(id, rect);
+      },
+      complete: () => {
+        // A window may have closed mid-animation (§26).
+        if (!hooks.isAlive(id)) {
+          entries.delete(id);
+          return;
+        }
+        entries.delete(id);
+        hooks.apply(id, to);
+        record({ kind: 'end', id, at: Date.now(), rect: { ...to } });
+        onComplete?.();
+      },
+    }, bounds);
+    if (tween.immediate) return;
+    entries.set(id, { stop: () => tween.stop(), rect: tween.rect, from: { ...from }, to: { ...to } });
+    record({ kind: 'start', id, at: Date.now(), rect: { ...from }, to: { ...to }, from: { ...from } });
   }
 
-  cancel(id: number): void {
-    const entry = this.entries.get(id);
-    if (entry === undefined) return;
-    entry.timeline.stop();
-    this.entries.delete(id);
-    this.record({ kind: 'cancel', id, at: Date.now(), rect: { ...entry.rect }, to: { ...entry.to }, from: { ...entry.from } });
-  }
+  return {
+    get activeCount(): number {
+      return entries.size;
+    },
+    isAnimating: (id: number): boolean => entries.has(id),
+    animate,
+    cancel,
+    cancelAll: (): void => {
+      for (const entry of entries.values()) entry.stop();
+      entries.clear();
+    },
+    startRecording: (): void => {
+      records = [];
+      recording = true;
+    },
+    stopRecording: (): void => {
+      recording = false;
+    },
+    recordsSnapshot: (): AnimRecord[] => records,
+    destroy: (): void => {
+      for (const entry of entries.values()) entry.stop();
+      entries.clear();
+    },
+  };
+}
 
-  cancelAll(): void {
-    for (const entry of this.entries.values()) entry.timeline.stop();
-    this.entries.clear();
-  }
-
-  destroy(): void {
-    this.cancelAll();
-  }
-
-  private onFrame(id: number, entry: Entry, msec: number): void {
-    if (!this.hooks.isAlive(id)) {
-      this.cancel(id);
-      return;
-    }
-    const t = Math.min(1, Math.max(0, msec / entry.durationMs));
-    const e = entry.easing(t);
-    entry.rect.x = entry.from.x + (entry.to.x - entry.from.x) * e;
-    entry.rect.y = entry.from.y + (entry.to.y - entry.from.y) * e;
-    entry.rect.width = entry.from.width + (entry.to.width - entry.from.width) * e;
-    entry.rect.height = entry.from.height + (entry.to.height - entry.from.height) * e;
-    const b = entry.bounds;
-    if (b !== null) {
-      entry.rect.width = Math.min(entry.rect.width, b.width);
-      entry.rect.height = Math.min(entry.rect.height, b.height);
-      entry.rect.x = Math.max(b.x, Math.min(entry.rect.x, b.x + b.width - entry.rect.width));
-      entry.rect.y = Math.max(b.y, Math.min(entry.rect.y, b.y + b.height - entry.rect.height));
-    }
-    this.hooks.apply(id, entry.rect);
-    this.record({ kind: 'frame', id, at: Date.now(), rect: { ...entry.rect }, to: { ...entry.to }, from: { ...entry.from } });
-    if (this.hooks.onFrame !== undefined) this.hooks.onFrame(id, entry.rect);
-  }
-
-  private onCompleted(id: number, entry: Entry): void {
-    // A window may have closed mid-animation (§26).
-    if (!this.hooks.isAlive(id)) {
-      this.entries.delete(id);
-      return;
-    }
-    this.entries.delete(id);
-    this.hooks.apply(id, entry.to);
-    this.record({ kind: 'end', id, at: Date.now(), rect: { ...entry.to } });
-    if (entry.onComplete !== null) entry.onComplete();
-  }
+interface LedgerEntry {
+  stop: () => void;
+  rect: Rect;
+  from: Rect;
+  to: Rect;
 }

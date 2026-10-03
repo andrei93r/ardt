@@ -15,7 +15,7 @@ import { clamp, rectEquals } from '../../core/types.js';
 import type { Placement, Rect, Screen, TilePlan } from '../../core/types.js';
 import * as compat from './compat.js';
 import type { RegistryStore } from './registry.js';
-import type { FrameClockAnimator } from './frame-clock.js';
+import type { Animator } from './frame-clock.js';
 import type { GnomeHost } from './host.js';
 import type { History } from './history.js';
 import type { GnomeSettings } from './settings.js';
@@ -37,7 +37,7 @@ export interface TilingDeps {
   history: History;
   /** §12: the app registry; `adapt` is timing-only. */
   registry: RegistryStore;
-  animator: FrameClockAnimator;
+  animator: Animator;
   changes: ChangeLog;
   windows(): Map<number, TrackedWindow>;
   isPaused(): boolean;

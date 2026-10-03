@@ -36,7 +36,8 @@ import { PLATFORM_EVENT_TYPES } from '../../platform/events.js';
 import { dataDir, readJson, readText, writeAtomic } from './adapt.js';
 import * as compat from './compat.js';
 import { GnomeDbus } from './dbus.js';
-import { FrameClockAnimator } from './frame-clock.js';
+import { createAnimationLedger } from './frame-clock.js';
+import type { Animator } from './frame-clock.js';
 import { GestureInput } from './gesture-input.js';
 import { GnomeHost } from './host.js';
 import { History } from './history.js';
@@ -180,7 +181,7 @@ export default class AdrtExtension extends Extension {
   private journal!: EventJournal;
   private changes!: ChangeLog;
   private indicator!: GnomeIndicator;
-  private animator!: FrameClockAnimator;
+  private animator!: Animator;
   private tiling!: Tiling;
   private session!: WindowSession;
   private gestures!: GestureInput;
@@ -351,7 +352,7 @@ export default class AdrtExtension extends Extension {
     this.host.enable();
 
     this.indicator = new GnomeIndicator(this.settings, this.timing);
-    this.animator = new FrameClockAnimator({
+    this.animator = createAnimationLedger({
       isAlive: (id) => this.session.windows.has(id),
       // §Self-heal containment: these run inside Clutter timeline signal
       // emissions — a throw must never propagate out of them.
