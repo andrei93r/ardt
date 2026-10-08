@@ -8,6 +8,7 @@
  */
 
 import Clutter from 'gi://Clutter';
+import type { ClutterActor, ClutterTimeline } from 'gi://Clutter';
 
 import type { Rect } from '../../core/types.js';
 
@@ -50,7 +51,7 @@ export interface TweenHooks {
 }
 
 export function tweenRect(
-  actor: any,
+  actor: ClutterActor | null,
   from: Rect,
   to: Rect,
   durationMs: number,
@@ -65,8 +66,8 @@ export function tweenRect(
   }
   const safeDuration = Math.max(1, Math.round(durationMs));
   const easing = easingFor(safeDuration);
-  const timeline = new Clutter.Timeline({ duration: safeDuration, actor });
-  timeline.connect('new-frame', (_tl: any, msec: number) => {
+  const timeline: ClutterTimeline = new Clutter.Timeline({ duration: safeDuration, actor });
+  timeline.connect('new-frame', (_tl: ClutterTimeline, msec: number) => {
     const t = Math.min(1, Math.max(0, msec / safeDuration));
     const e = easing(t);
     rect.x = from.x + (to.x - from.x) * e;
@@ -116,7 +117,7 @@ export interface Animator {
   readonly activeCount: number;
   /** Whether a specific window is mid-animation. */
   isAnimating(id: number): boolean;
-  animate(actor: any, id: number, from: Rect, to: Rect, durationMs: number, onComplete?: (() => void) | null, bounds?: Rect | null): void;
+  animate(actor: ClutterActor | null, id: number, from: Rect, to: Rect, durationMs: number, onComplete?: (() => void) | null, bounds?: Rect | null): void;
   cancel(id: number): void;
   cancelAll(): void;
   /** Arm the bounded recorder: clears it and starts collecting. */
@@ -171,7 +172,7 @@ export function createAnimationLedger(hooks: AnimatorHooks): Animator {
     recordCancel(id, entry.rect, entry.from, entry.to);
   }
 
-  function animate(actor: any, id: number, from: Rect, to: Rect, durationMs: number, onComplete: (() => void) | null = null, bounds: Rect | null = null): void {
+  function animate(actor: ClutterActor | null, id: number, from: Rect, to: Rect, durationMs: number, onComplete: (() => void) | null = null, bounds: Rect | null = null): void {
     // 1.6: a new target always supersedes an in-flight tween for this id, so
     // cancel it first — including on the immediate path below. Otherwise a
     // still-running tween would later re-apply its stale target over the one

@@ -12,6 +12,8 @@
  * only asked again when a signal that can change size hints fires.
  */
 
+import type { MetaWindow } from 'gi://Meta';
+
 import type { Classification, ClassifyConfig, HeuristicContext } from '../../core/classify.js';
 import { classify } from '../../core/classify.js';
 import type { IdentitySource } from '../../core/identity.js';
@@ -22,7 +24,7 @@ import type { GnomeSurface } from './surface.js';
 
 export class TrackedWindow {
   readonly id: number;
-  readonly win: any;
+  readonly win: MetaWindow;
   readonly surface: GnomeSurface;
   /**
    * §10 timing profile. Re-derived once the app identity is known: a Wayland
@@ -109,7 +111,7 @@ export class TrackedWindow {
 
   private cached: Classification | null = null;
 
-  constructor(win: any, surface: GnomeSurface) {
+  constructor(win: MetaWindow, surface: GnomeSurface) {
     this.win = win;
     this.surface = surface;
     this.id = surface.id;

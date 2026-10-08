@@ -10,6 +10,8 @@
 
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import type { FileInfo } from 'gi://Gio';
+import type { MetaWindow } from 'gi://Meta';
 
 const STABILITY_WINDOW_MS = 10 * 60 * 1000;
 const SEMVER = /\d+\.\d+(?:\.\d+)?/;
@@ -59,7 +61,7 @@ export class VersionDetector {
   private readonly hashes = new Map<string, HashEntry>();
 
   /** Detect the version of the process that owns a window. */
-  detect(win: any, title: string): string {
+  detect(win: MetaWindow, title: string): string {
     const pid: number = win.get_pid();
     if (!Number.isInteger(pid) || pid <= 0) {
       return semverFromTitle(title) ?? '*';
@@ -141,7 +143,7 @@ export class VersionDetector {
 
   private statHash(path: string): string {
     const file = Gio.File.new_for_path(path);
-    let info: any;
+    let info: FileInfo | null = null;
     try {
       info = file.query_info('time::modified,standard::size', Gio.FileQueryInfoFlags.NONE, null);
     } catch {

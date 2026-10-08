@@ -8,6 +8,7 @@
  */
 
 import GLib from 'gi://GLib';
+import type { Settings as GioSettings, Variant } from 'gi://Gio';
 
 import type { ClassifyConfig } from '../../core/classify.js';
 import { parseRulesJson } from '../../core/rules.js';
@@ -24,7 +25,7 @@ import { unpackVariant } from './compat.js';
  */
 type TilerConfigBase = Omit<TilerConfig, 'ratios' | 'swapPairs'>;
 
-function readVariant(settings: any, key: string): SettingValue | undefined {
+function readVariant(settings: GioSettings, key: string): SettingValue | undefined {
   const value = settings.get_value(key);
   if (value === null) return undefined;
   const unpacked = unpackVariant(value);
@@ -33,7 +34,7 @@ function readVariant(settings: any, key: string): SettingValue | undefined {
   return undefined;
 }
 
-function writeVariant(settings: any, key: string, value: unknown): boolean {
+function writeVariant(settings: GioSettings, key: string, value: unknown): boolean {
   const typeString = settings.get_default_value(key).get_type_string();
   settings.set_value(key, new GLib.Variant(typeString, value));
   return true;
@@ -54,7 +55,7 @@ export class GnomeSettings implements SettingsStore {
   private rulesCache: RulesParse | null = null;
   private rulesParseCount = 0;
 
-  constructor(private readonly settings: any) {}
+  constructor(private readonly settings: GioSettings) {}
 
   get configBuilds(): number {
     return this.configBuildCount;
@@ -164,7 +165,7 @@ export class GnomeSettings implements SettingsStore {
   writeSerialized(key: string, text: string): boolean {
     const type = this.settings.get_default_value(key)?.get_type_string();
     if (typeof type !== 'string') return false;
-    let parsed: unknown;
+    let parsed: Variant;
     try {
       parsed = GLib.Variant.parse(new GLib.VariantType(type), text, null, null);
     } catch {

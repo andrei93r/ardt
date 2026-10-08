@@ -16,7 +16,9 @@
  */
 
 import Gio from 'gi://Gio';
+import type { Settings as GioSettings } from 'gi://Gio';
 import St from 'gi://St';
+import type { Settings as StSettings } from 'gi://St';
 
 import {
   DEFAULT_REFRESH_RATE,
@@ -39,7 +41,7 @@ export interface TimingDeps {
 }
 
 /** `St.Settings.get()`, or null in a bare test shell that has no St settings. */
-function safeStSettings(): any {
+function safeStSettings(): StSettings | null {
   try {
     return St.Settings.get();
   } catch {
@@ -47,7 +49,7 @@ function safeStSettings(): any {
   }
 }
 
-function numberProperty(object: any, name: string): number | null {
+function numberProperty(object: StSettings | null, name: string): number | null {
   try {
     const value = object?.[name];
     return typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -56,7 +58,7 @@ function numberProperty(object: any, name: string): number | null {
   }
 }
 
-function booleanProperty(object: any, name: string): boolean | null {
+function booleanProperty(object: StSettings | null, name: string): boolean | null {
   try {
     const value = object?.[name];
     return typeof value === 'boolean' ? value : null;
@@ -65,7 +67,7 @@ function booleanProperty(object: any, name: string): boolean | null {
   }
 }
 
-function rawProperty(object: any, name: string): unknown {
+function rawProperty(object: StSettings | null, name: string): unknown {
   try {
     return object?.[name];
   } catch {
@@ -110,9 +112,9 @@ interface TimingReadings {
 }
 
 export class GnomeTiming {
-  private readonly stSettings: any;
-  private interfaceSettings: any = null;
-  private mutterSettings: any = null;
+  private readonly stSettings: StSettings | null;
+  private interfaceSettings: GioSettings | null = null;
+  private mutterSettings: GioSettings | null = null;
   private notifyIds: number[] = [];
   private interfaceChangedId = 0;
   private mutterChangedId = 0;
@@ -143,11 +145,12 @@ export class GnomeTiming {
       }
     }
     try {
-      this.interfaceSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
+      const settings: GioSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
+      this.interfaceSettings = settings;
       // The St properties are the primary source; these keys are the fallback
       // on a Shell that lacks them, so watch the schema directly rather than
       // letting a fallback read go stale.
-      this.interfaceChangedId = this.interfaceSettings.connect('changed', () => this.invalidate());
+      this.interfaceChangedId = settings.connect('changed', () => this.invalidate());
     } catch {
       this.interfaceSettings = null;
       this.interfaceChangedId = 0;
@@ -156,8 +159,9 @@ export class GnomeTiming {
       // `deps.adaptiveSync` reads `org.gnome.mutter` on the host; a change to
       // the experimental-features list has no signal of its own, so this mirror
       // watch is what drops the cached `adaptiveSync` reading.
-      this.mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
-      this.mutterChangedId = this.mutterSettings.connect('changed', () => this.invalidate());
+      const settings: GioSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
+      this.mutterSettings = settings;
+      this.mutterChangedId = settings.connect('changed', () => this.invalidate());
     } catch {
       this.mutterSettings = null;
       this.mutterChangedId = 0;

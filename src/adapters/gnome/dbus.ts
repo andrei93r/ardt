@@ -8,6 +8,7 @@
  */
 
 import Gio from 'gi://Gio';
+import type { DBusExportedObject } from 'gi://Gio';
 
 import type { DbusBackend, DbusHandlers } from '../../platform/dbus.js';
 
@@ -159,12 +160,13 @@ const INTERFACE_XML = `
 </node>`;
 
 export class GnomeDbus implements DbusBackend {
-  private exported: any = null;
+  private exported: DBusExportedObject | null = null;
   private ownerId = 0;
 
   expose(handlers: DbusHandlers): void {
-    this.exported = Gio.DBusExportedObject.wrapJSObject(INTERFACE_XML, handlers);
-    this.exported.export(Gio.DBus.session, DBUS_PATH);
+    const exported: DBusExportedObject = Gio.DBusExportedObject.wrapJSObject(INTERFACE_XML, handlers);
+    this.exported = exported;
+    exported.export(Gio.DBus.session, DBUS_PATH);
     this.ownerId = Gio.bus_own_name(Gio.BusType.SESSION, DBUS_NAME, Gio.BusNameOwnerFlags.NONE, null, null, null);
   }
 

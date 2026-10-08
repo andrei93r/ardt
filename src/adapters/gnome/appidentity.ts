@@ -12,11 +12,22 @@
  */
 
 import Shell from 'gi://Shell';
+import type { MetaWindow } from 'gi://Meta';
 
 import type { IdentityProbe, ProcessEnv } from '../../core/identity.js';
 import { resolveIdentity } from '../../core/identity.js';
 import type { IdentityResolution } from '../../core/identity.js';
 import { readText } from './adapt.js';
+
+/** The shell's window tracker (`Shell.WindowTracker`), as far as it is read. */
+interface WindowTrackerLike {
+  get_window_app(win: MetaWindow): ShellAppLike | null;
+}
+
+/** A `Shell.App`, read only for its desktop id. */
+interface ShellAppLike {
+  get_id?(): string | null;
+}
 
 function safe<T>(fn: () => T | null | undefined): T | null {
   try {
@@ -35,9 +46,9 @@ function stringOrNull(value: unknown): string | null {
  * The desktop id the shell's window tracker attributes to this window, or null.
  * `get_window_app` is absent while a window is still being constructed.
  */
-export function desktopIdFor(win: any, tracker?: any): string | null {
+export function desktopIdFor(win: MetaWindow, tracker?: WindowTrackerLike): string | null {
   try {
-    const source = tracker ?? Shell.WindowTracker.get_default();
+    const source: WindowTrackerLike = tracker ?? Shell.WindowTracker.get_default();
     const app = source?.get_window_app?.(win);
     return stringOrNull(app?.get_id?.());
   } catch {
@@ -80,7 +91,7 @@ export function processSnapshot(pid: number, maxDepth = 32): ProcessEnv[] {
 }
 
 /** Read every raw candidate the chain may use for one live window. */
-export function probeIdentity(win: any, windowSeq: number, tracker?: any): IdentityProbe {
+export function probeIdentity(win: MetaWindow, windowSeq: number, tracker?: WindowTrackerLike): IdentityProbe {
   const pid = safe<number>(() => win.get_pid?.());
   const processes = pid !== null && pid > 0 ? processSnapshot(pid) : undefined;
   return {
@@ -95,12 +106,12 @@ export function probeIdentity(win: any, windowSeq: number, tracker?: any): Ident
 }
 
 /** Resolve one live window's identity through the pure chain. */
-export function resolveWindowIdentity(win: any, windowSeq: number, tracker?: any): IdentityResolution {
+export function resolveWindowIdentity(win: MetaWindow, windowSeq: number, tracker?: WindowTrackerLike): IdentityResolution {
   return resolveIdentity(probeIdentity(win, windowSeq, tracker));
 }
 
 /** A stable per-session instance id for placements (§12). */
-export function instanceIdFor(win: any): string {
+export function instanceIdFor(win: MetaWindow): string {
   const stable = safe<number>(() => win.get_stable_sequence?.());
   if (stable !== null && Number.isFinite(stable)) return String(stable);
   const id = safe<number>(() => win.get_id?.());

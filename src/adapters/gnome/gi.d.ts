@@ -43,11 +43,18 @@ declare module 'gi://Gio' {
     get_strv(key: string): string[];
     get_boolean(key: string): boolean;
     get_int(key: string): number;
+    get_double(key: string): number;
     get_string(key: string): string;
+    get_value(key: string): Variant | null;
+    get_default_value(key: string): Variant;
     set_int(key: string, value: number): void;
     set_string(key: string, value: string): void;
     set_boolean(key: string, value: boolean): void;
     set_strv(key: string, value: string[]): void;
+    set_value(key: string, value: Variant): void;
+    list_keys(): string[];
+    connect(signal: string, callback: () => void): number;
+    disconnect(id: number): void;
     bind(key: string, target: unknown, property: string, flags: number): void;
     readonly settings_schema: SettingsSchema;
   }
@@ -65,6 +72,28 @@ declare module 'gi://Gio' {
   /** A `GLib.VariantType`, read only for its type string. */
   export interface VariantType {
     dup_string?(): string;
+  }
+
+  /**
+   * A `GLib.Variant` as read by the settings bridge: `unpack()`/`unpack` of the
+   * value, and its type string for reconciling a write against the schema.
+   */
+  export interface Variant {
+    unpack(): unknown;
+    recursiveUnpack?(): unknown;
+    get_type_string(): string;
+  }
+
+  /** A `Gio.FileInfo`, read only for the stat fields version detection needs. */
+  export interface FileInfo {
+    get_attribute_uint64(name: string): number;
+    get_symlink_target(): string | null;
+  }
+
+  /** A wrapped D-Bus object (`Gio.DBusExportedObject`), exported and unexported. */
+  export interface DBusExportedObject {
+    export(bus: unknown, path: string): void;
+    unexport(): void;
   }
 
   /** One installed application (`Gio.AppInfo`), as read by the app picker. */
@@ -123,25 +152,56 @@ declare module 'gi://Meta' {
     warp_pointer?(x: number, y: number): void;
   }
 
-  /** A Mutter window (`Meta.Window`), as read by `host.ts`. */
+  /**
+   * A Mutter window (`Meta.Window`): the full surface the adapters read and
+   * drive (host, surface, tracked-window, appidentity, tiling, session). The
+   * namespace default stays `any`; this is the accurate shape for call sites
+   * that have been typed.
+   */
   export interface MetaWindow {
     get_id(): number;
     get_title(): string | null;
+    get_wm_class(): string | null;
+    get_pid(): number;
+    get_sandboxed_app_id?(): string | null;
+    get_gtk_application_id?(): string | null;
+    get_stable_sequence?(): number;
     get_frame_rect(): MetaRectangle;
     get_monitor(): number;
     get_workspace(): MetaWorkspace | null;
+    get_transient_for(): MetaWindow | null;
+    /** GNOME 50 leads with a boolean flag, older versions do not. */
+    get_min_size(): Array<number | boolean>;
+    get_max_size(): Array<number | boolean>;
+    get_window_type(): number;
+    is_on_all_workspaces(): boolean;
+    get_maximized(): number;
+    get_maximize_flags?(): number;
+    is_attached_dialog?(): boolean;
+    is_skip_taskbar?(): boolean;
+    is_override_redirect?(): boolean;
+    get_compositor_private(): import('gi://Clutter').ClutterActor | null;
     minimized: boolean;
     is_above(): boolean;
+    is_fullscreen(): boolean;
     make_above(): void;
     unmake_above(): void;
+    stick(): void;
+    unstick(): void;
+    activate(time: number): void;
+    raise(): void;
+    delete(time: number): void;
+    move_to_monitor(monitor: number): void;
     move_resize_frame(userOp: boolean, x: number, y: number, width: number, height: number): void;
     change_workspace_by_index(index: number, create: boolean): void;
     maximize(): void;
     unmaximize(): void;
     minimize(): void;
     unminimize(): void;
-    /** GNOME 50 leads with a boolean flag, older versions do not. */
-    get_min_size(): Array<number | boolean>;
+    make_fullscreen(): void;
+    unmake_fullscreen(): void;
+    connect(signal: string, callback: (...args: unknown[]) => void): number;
+    disconnect(id: number): void;
   }
 
   /** A Mutter monitor mode (`Meta.MonitorMode`). */
@@ -166,10 +226,35 @@ declare module 'gi://Meta' {
 declare module 'gi://St' {
   const St: any;
   export default St;
+
+  /**
+   * The `St.Settings` surface `timing.ts` reads. St settings expose dynamic
+   * properties by name (`enable_animations`, `slow_down_factor`,
+   * `reduced_motion`, ...), hence the index signature; the named members are
+   * the ones connected to directly.
+   */
+  export interface Settings {
+    [property: string]: unknown;
+    connect(signal: string, callback: () => void): number;
+    disconnect(id: number): void;
+    find_property(name: string): unknown;
+  }
 }
 declare module 'gi://Clutter' {
   const Clutter: any;
   export default Clutter;
+  /** A `Clutter.Actor` (including a window actor), as read by the animator. */
+  export interface ClutterActor {
+    get_transformed_position(): [number, number];
+    get_stage(): unknown | null;
+  }
+  /** A `Clutter.Timeline`, driven by the frame animator. */
+  export interface ClutterTimeline {
+    connect(signal: 'new-frame', callback: (timeline: ClutterTimeline, msec: number) => void): number;
+    connect(signal: 'completed', callback: () => void): number;
+    start(): void;
+    stop(): void;
+  }
   /** A `Clutter.Stage`, read only for its own frame-clock rate (`host.ts`). */
   export interface ClutterStage {
     get_view?(): ClutterStageView | null;

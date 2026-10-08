@@ -8,13 +8,20 @@
  * signal that changed them (§24 items 2 and 3).
  */
 
+import type { MetaRectangle, MetaWindow } from 'gi://Meta';
+
 import * as compat from './compat.js';
 import { Layer, SurfaceKind, emptyFlags } from '../../core/types.js';
 import type { Rect, Size, Surface, SurfaceFlags } from '../../core/types.js';
 import { layerFor } from '../../core/classify.js';
 import { clipText } from '../../core/text.js';
 
-function toRect(source: any): Rect {
+/** A compositor window actor, read only for the Meta window it wraps. */
+interface WindowActor {
+  meta_window: MetaWindow;
+}
+
+function toRect(source: MetaRectangle): Rect {
   return { x: source.x, y: source.y, width: source.width, height: source.height };
 }
 
@@ -24,19 +31,18 @@ function toRect(source: any): Rect {
  * set), where older versions returned `[width, height]`. Read whichever shape
  * arrived, so a client's minimum is honest across the versions.
  */
-function toSize(pair: any): Size {
-  const arr = pair as ArrayLike<unknown> | null | undefined;
-  if (arr === null || arr === undefined) return { width: 0, height: 0 };
-  const length = arr.length ?? 0;
+function toSize(pair: Array<number | boolean> | null | undefined): Size {
+  if (pair === null || pair === undefined) return { width: 0, height: 0 };
+  const length = pair.length ?? 0;
   const base = length >= 3 ? 1 : 0;
-  const width = Number(arr[base] ?? 0);
-  const height = Number(arr[base + 1] ?? 0);
+  const width = Number(pair[base] ?? 0);
+  const height = Number(pair[base + 1] ?? 0);
   return { width: Number.isFinite(width) ? width : 0, height: Number.isFinite(height) ? height : 0 };
 }
 
 export class GnomeSurface implements Surface {
   readonly id: number;
-  readonly win: any;
+  readonly win: MetaWindow;
   kind: SurfaceKind;
   appId: string;
   appVersion: string;
@@ -53,7 +59,7 @@ export class GnomeSurface implements Surface {
   private floatingOverride = false;
 
   constructor(
-    win: any,
+    win: MetaWindow,
     appVersion: string,
     /** Answers whether `on-all-workspaces` is implied by the window's monitor. */
     private readonly flagContext: () => { workspacesOnlyOnPrimary: boolean; primaryMonitor: number },
@@ -121,8 +127,8 @@ export class GnomeSurface implements Surface {
 
   /** §3: stacking is read only for `DumpState`, never on every tick. */
   captureZ(): void {
-    const sorted: any[] = global.display.sort_windows_by_stacking(
-      global.get_window_actors().map((actor: any) => actor.meta_window),
+    const sorted: MetaWindow[] = global.display.sort_windows_by_stacking(
+      global.get_window_actors().map((actor: WindowActor) => actor.meta_window),
     );
     this.zPosition = sorted.indexOf(this.win);
   }
