@@ -44,7 +44,7 @@ concurrency:
 
 jobs:
   core:
-    name: Core (lint, types, build, unit, purity)
+    name: Core (lint, types, build, unit, purity, coverage)
     runs-on: ubuntu-24.04
     steps:
       - name: Check out
@@ -66,6 +66,8 @@ jobs:
         run: npx vitest run tests/core
       - name: Core/platform purity
         run: bash scripts/check-core-purity.sh
+      - name: Scenario coverage guard
+        run: npm run test:coverage
 
   i18n:
     name: i18n (template + catalogues)
