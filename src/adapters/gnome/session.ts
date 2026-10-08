@@ -1151,8 +1151,8 @@ export class WindowSession {
     // workspace: the group is the pair (or single) the source workspace held, and
     // creating one per move split the pair across two workspaces (A110).
     const createdByKey = new Map<number, number>();
-    for (const move of plan.moves) if (!restored.has(move)) this.applyDisplayMove(move, screens, createdByKey);
-    for (const move of floats) this.applyDisplayMove(move, screens, createdByKey);
+    for (const move of plan.moves) if (!restored.has(move)) this.applyDisplayMove(move, createdByKey);
+    for (const move of floats) this.applyDisplayMove(move, createdByKey);
     for (const entry of plan.remember) {
       const at = this.displayMemory.findIndex((candidate) => candidate.connector === entry.connector);
       if (at >= 0) this.displayMemory[at] = entry;
@@ -1171,7 +1171,6 @@ export class WindowSession {
 
   private applyDisplayMove(
     move: DisplayMove,
-    screens: readonly Screen[],
     createdByKey: Map<number, number>,
   ): void {
     const tracked = this.windows.get(move.id);
@@ -1208,8 +1207,8 @@ export class WindowSession {
     // reassigned the workspace and the pair never left the primary.
     const targetScreen = move.create?.screen ?? move.screen;
     if (targetScreen !== undefined) {
-      const target = screens.find((screen) => screen.index === targetScreen);
-      if (target !== undefined) {
+      const target = this.deps.host.screenByIndex(targetScreen);
+      if (target !== null) {
         targetConnector = target.connector;
         tracked.surface.screenId = target.index;
         this.deps.tiling.noteSelfApply();
@@ -1449,8 +1448,8 @@ export class WindowSession {
     if (focused === null) return;
     // The live rect, never the one captured when the focus signal fired.
     focused.refreshFrame();
-    const screen = this.deps.host.screens().find((s) => s.index === focused.surface.screenId);
-    const area = screen === undefined ? focused.surface.frame : screen.workArea ?? screen.geometry;
+    const screen = this.deps.host.screenByIndex(focused.surface.screenId);
+    const area = screen === null ? focused.surface.frame : screen.workArea ?? screen.geometry;
     const target = centreInWorkArea(focused.surface.frame, area);
     const moved = this.deps.host.warpPointer(target.x, target.y);
     this.deps.history.log('cursor_centre', {
@@ -2576,11 +2575,14 @@ export class WindowSession {
     };
   }
 
+  /**
+   * §9/P2.6: resolve a screen by index through the host's maintained index
+   * (built once per screen change) instead of scanning the screen list on
+   * every window of the clamp/reconcile/sweep paths. A missing index still
+   * resolves to `null`, so every caller's fallback is unchanged.
+   */
   private screenFor(index: number): Screen | null {
-    for (const screen of this.deps.host.screens()) {
-      if (screen.index === index) return screen;
-    }
-    return null;
+    return this.deps.host.screenByIndex(index);
   }
 
   /** §7.2 lone-maximize policy, per monitor (a pair on one monitor must not

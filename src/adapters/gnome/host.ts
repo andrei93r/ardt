@@ -47,6 +47,13 @@ export class GnomeHost implements PlatformHost {
   /** Windows already watched for the event journal (§22). */
   private readonly watched = new Set<number>();
   private screensCache: Screen[] = [];
+  /**
+   * §9/P2.6: O(1) lookup of a screen by its Mutter monitor index, rebuilt
+   * whenever `screensCache` is replaced. The list is tiny, but it is resolved
+   * per window on the clamp/reconcile/sweep paths, so a linear scan there is
+   * repeated work for no reason.
+   */
+  private screensByIndex = new Map<number, Screen>();
   /** `org.gnome.mutter`: whether workspaces exist only on the primary monitor. */
   private mutter: any = null;
   private primaryMonitorIndex = 0;
@@ -313,6 +320,21 @@ export class GnomeHost implements PlatformHost {
     return this.screensCache;
   }
 
+  /**
+   * §9/P2.6: resolve a screen by its Mutter monitor index in O(1). The index
+   * is rebuilt from `screensCache` on every screen change, so this is exactly
+   * the linear `find` it replaces: a removed or unknown index returns `null`.
+   */
+  screenByIndex(index: number): Screen | null {
+    return this.screensByIndex.get(index) ?? null;
+  }
+
+  /** Rebuild the index from the current `screensCache` (replace-on-write). */
+  private indexScreens(): void {
+    this.screensByIndex = new Map();
+    for (const screen of this.screensCache) this.screensByIndex.set(screen.index, screen);
+  }
+
   /** §20: true once the shell's startup is complete (or the fallback fired). */
   isStartupComplete(): boolean {
     return this.startupComplete;
@@ -489,6 +511,7 @@ export class GnomeHost implements PlatformHost {
         geometry: { ...screen.geometry },
         workArea: this.simulatedWorkAreas.get(screen.connector) ?? (screen.workArea === undefined ? undefined : { ...screen.workArea }),
       }));
+      this.indexScreens();
       this.primaryMonitorIndex = this.screensCache.find((screen) => screen.isPrimary)?.index ?? this.screensCache[0]?.index ?? 0;
       this.refreshSource = 'simulated';
       return;
@@ -536,6 +559,7 @@ export class GnomeHost implements PlatformHost {
         isPrimary: monitorIndex === this.primaryMonitorIndex,
       };
     });
+    this.indexScreens();
     this.refreshSource = sawLayout ? 'layout' : sawBackend ? 'backend' : stageRate > 0 ? 'stage' : 'fallback';
   }
 
