@@ -1,4 +1,10 @@
-# Generaset -uo pipefail
+# Generated with AI for personal use.
+# Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+# and can maintain this code.
+#
+# shellcheck shell=bash
+# Shared helpers for the autonomous agent scenarios (§40.3). Source this file;
+# do not execute it directly.
 
 AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARSE="$AGENT_DIR/parse.py"

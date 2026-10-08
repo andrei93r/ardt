@@ -2,6 +2,7 @@
 # Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
 # and can maintain this code.
 #
+# shellcheck shell=bash
 # Helpers for the live-session scenarios. These run against the *real* GNOME
 # Shell, so they only ever touch windows they spawn themselves and restore the
 # workspace they started on. Source this file; do not execute it.

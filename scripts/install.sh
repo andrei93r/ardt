@@ -28,8 +28,8 @@ fi
 
 version="$(gnome-shell --version 2>/dev/null | grep -oE '[0-9]+' | head -1)"
 case "$version" in
-  48 | 49 | 50) ;;
-  *) fail "GNOME Shell $version is not supported (need 48, 49 or 50)" ;;
+  48 | 49 | 50 | 51) ;;
+  *) fail "GNOME Shell $version is not supported (need 48, 49, 50 or 51)" ;;
 esac
 echo "install: GNOME Shell $version detected"
 

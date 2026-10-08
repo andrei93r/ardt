@@ -101,7 +101,7 @@ smoke_load_list() {
       missing=$((missing + 1))
       continue
     fi
-    eval "$set[\$sid]=1"
+    eval "${set}[\$sid]=1"
   done < "$list"
   [ "$missing" -eq 0 ]
 }

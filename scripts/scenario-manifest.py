@@ -69,7 +69,7 @@ why, so no skip is ever a surprise.
 
 Totals: {len(agent)} agent scenarios, {len(session)} session scenarios.
 
-## Where things run (this laptop, 2026-10-01)
+## Where things run (this laptop, 2026-10-08)
 
 | target | state |
 | --- | --- |

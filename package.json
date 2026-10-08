@@ -12,6 +12,7 @@
   "test:core:watch": "vitest tests/core",
   "check:types": "tsc --noEmit -p tsconfig.test.json",
   "check:core": "bash scripts/check-core-purity.sh",
+  "check:knip": "knip --include files,dependencies,unlisted",
   "i18n:update": "bash scripts/update-po.sh",
   "i18n:check": "bash scripts/check-po.sh",
   "test:agent": "bash scripts/agent-test.sh",
@@ -36,6 +37,7 @@
   "@eslint/js": "^9.14.0",
   "eslint": "^9.14.0",
   "globals": "^15.12.0",
+  "knip": "^6.40.0",
   "typescript": "^5.6.3",
   "typescript-eslint": "^8.13.0",
   "vitest": "^2.1.4"

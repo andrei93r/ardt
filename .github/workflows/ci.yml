@@ -7,6 +7,12 @@
 #           with msgfmt. Both scripts fall back to a clear no-op when gettext is
 #           not installed, so the job cannot fail merely because the optional
 #           tool is missing.
+#   shellcheck — static-analysis of the shell tooling (scripts/, tests/agent/,
+#           tests/session/) at error severity. No Shell or compositor needed.
+#
+#   The core job also gates dead code and unlisted dependencies with knip
+#   (`--include files,dependencies,unlisted`); unused exports/types are reported
+#   by a plain `npx knip` run but are not a merge gate.
 #
 # What deliberately does NOT run here — the nested and live suites:
 #   scripts/agent-test.sh, scripts/nested-shell.sh, scripts/topology-matrix.sh,
@@ -44,7 +50,7 @@ concurrency:
 
 jobs:
   core:
-    name: Core (lint, types, build, unit, purity, coverage)
+    name: Core (lint, types, build, unit, purity, coverage, knip)
     runs-on: ubuntu-24.04
     steps:
       - name: Check out
@@ -68,6 +74,11 @@ jobs:
         run: bash scripts/check-core-purity.sh
       - name: Scenario coverage guard
         run: npm run test:coverage
+      - name: Dead code and unlisted dependencies (knip)
+        # Gates on unused files/dependencies and unlisted imports; the GJS
+        # builtins (gi:, resource:, gettext) are allowlisted in knip.json.
+        # Unused exports/types are reported by a plain `npx knip` but not gated.
+        run: npm run check:knip
 
   i18n:
     name: i18n (template + catalogues)
@@ -90,6 +101,17 @@ jobs:
         run: npm run i18n:update
       - name: Validate catalogues
         run: npm run i18n:check
+
+  shellcheck:
+    name: Shell scripts (shellcheck)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Lint the tooling (error severity)
+        run: shellcheck --severity=error scripts/*.sh tests/agent/*.sh tests/session/*.sh
 
   # Optional, manual only, allowed to fail. See the header for why the nested and
   # live suites cannot run on a stock runner.

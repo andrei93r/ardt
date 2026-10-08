@@ -1,0 +1,16 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/prefs.ts"
+  ],
+  "project": [
+    "src/**/*.ts",
+    "tests/**/*.ts"
+  ],
+  "ignore": [],
+  "ignoreDependencies": [
+    "gi",
+    "resource",
+    "gettext"
+  ]
+}
