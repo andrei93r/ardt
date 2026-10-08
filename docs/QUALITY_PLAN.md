@@ -29,10 +29,10 @@
 | --- | --- | --- |
 | P0 | Land ready refactor + repair the green gate | **done** (gate fixes on `perf-gnome`; nested smoke pending) |
 | P1 | Correctness sweep | **done** — 1.1–1.9, 1.11–1.14 committed; 1.10 done for session.ts; live-verified: smoke 52/52, full suite 156/0 (21 multi-monitor skips), two real regressions found and fixed (A90/A152 workspace echo, A159 maximize echo) |
-| P2 | Main-loop & allocation diet | **done** — 2.7 resolved by live measurement: idle 12 s with a window shows `sweeps` +18 at ~0.15 ms each, `classifyMisses` 0, `plansComputed` 0, `sweepFrameReads` 0, `configBuilds` 0, `drains` 0; gating would save ~0.2 ms/s and weaken the §35 guarantee, so the 700 ms sweep stays. 2.9 profiler in; its churn-workload test remains |
-| P3 | Zero `any` | **done** — zero explicit `any` in `src` including `gi.d.ts`, tests type-checked, `no-explicit-any` and type-aware `no-floating-promises` enforced; one documented D-Bus dispatch `as unknown as` |
+| P2 | Main-loop & allocation diet | **done** — 2.7 resolved by live measurement: idle 12 s with a window shows `sweeps` +18 at ~0.15 ms each, `classifyMisses` 0, `plansComputed` 0, `sweepFrameReads` 0, `configBuilds` 0, `drains` 0; gating would save ~0.2 ms/s and weaken the §35 guarantee, so the 700 ms sweep stays. 2.9 profiler verified by nested A165 |
+| P3 | Zero `any` | **done** — zero explicit `any` in `src` including `gi.d.ts`, tests type-checked, `no-explicit-any` and type-aware `no-floating-promises` enforced; no `as unknown as` remains (handler maps are type aliases, so reflective dispatch is assignable without one) |
 | P4 | Decomposition & deletion | **done** — session split and extension extraction (`session.ts` 4,083 → 1,891; `extension.ts` 3,102 → 1,827), trigger table, JSONL unification, helper dedupe, settings descriptor with drift gate, dead files/exports cleared under knip. Kept deliberately: test-only core exports, `topology.ts` |
-| P5 | Guardrails (CI/tests/docs) | done except two documented blockers — generated fuzz vectors are prose scenarios with no executable reducer (reported, no fake test); `TESTING.md`'s A1–A77 table is stale |
+| P5 | Guardrails (CI/tests/docs) | **done** — check:types, coverage guard, shellcheck, knip, ARCHITECTURE.md, docs hygiene; the generated fuzz cases are prose expectations (the generator documents them as a design catalogue); a new nested A165 verifies the section profiler |
 
 ---
 

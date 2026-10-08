@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Expand scripts/core_seeds.py into concrete business-logic test cases.
 
+The cases are prose-level expectations (setup/action/expect are English), so
+the JSON is a design catalogue, not an executable test input — see the P5 note
+in docs/QUALITY_PLAN.md. `docs/V2_TEST_MATRIX.md` is the artifact kept in
+sync; the executable coverage of the same logic lives in tests/core.
+
 Writes:
   tests/generated/core-cases.json   every concrete case (decision-level expectations)
   docs/V2_TEST_MATRIX.md            the human catalogue: axes, policy, generated tables
