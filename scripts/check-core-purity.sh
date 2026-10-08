@@ -9,12 +9,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-FORBIDDEN_SHELL='gi://|Meta\.|Shell\.|St\.|Clutter\.|global\.|Main\.'
+# A compositor token is only a token when a member follows it (`Shell.Widget`,
+# `global.display`). Matching bare `Shell.` also hit prose that ends a sentence
+# ("... without a Shell."), so comment-only lines are filtered too.
+FORBIDDEN_SHELL='gi://|Meta\.[A-Za-z_$]|Shell\.[A-Za-z_$]|St\.[A-Za-z_$]|Clutter\.[A-Za-z_$]|global\.[A-Za-z_$]|Main\.[A-Za-z_$]'
 FORBIDDEN_LEGACY='adr-auto-pos|AutoPos'
 
 status=0
 
-if grep -RInE "$FORBIDDEN_SHELL" src/core src/platform; then
+if grep -RInE "$FORBIDDEN_SHELL" src/core src/platform | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|\*|/\*)'; then
   echo "check-core-purity: compositor tokens found in core/platform" >&2
   status=1
 fi
