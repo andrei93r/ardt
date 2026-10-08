@@ -9,9 +9,7 @@
  */
 
 import Clutter from 'gi://Clutter';
-import Gio from 'gi://Gio';
 import Meta from 'gi://Meta';
-import St from 'gi://St';
 import { PACKAGE_VERSION } from 'resource:///org/gnome/shell/misc/config.js';
 
 import { SurfaceKind } from '../../core/types.js';
@@ -95,17 +93,6 @@ interface TouchpadGestureEventLike {
   get_touchpad_gesture_finger_count?(): unknown;
   get_gesture_pinch_scale?(): unknown;
   get_gesture_motion_delta_unaccelerated(): [unknown, unknown];
-}
-
-/** `St.Settings`, read only for the reduced-motion preference. */
-interface StSettingsLike {
-  reduced_motion?: unknown;
-  'reduced-motion'?: unknown;
-}
-
-/** A shell popup menu with either `close()` signature. */
-interface PopupMenuLike {
-  close?(arg?: unknown): void;
 }
 
 /** A `GLib.Variant` as read by `unpackVariant`. */
@@ -249,89 +236,6 @@ export function defaultSeat(): ClutterSeatLike | null {
   }
 }
 
-/**
- * GNOME 51 renamed `St.ButtonMask.ONE/TWO/THREE` to `PRIMARY/MIDDLE/SECONDARY`
- * (the old names remain as deprecated aliases). Map the semantic button onto
- * whichever spelling this Shell exposes; 0 when the mask is unavailable.
- */
-export function stButtonMask(button: 'primary' | 'middle' | 'secondary'): number {
-  const mask: Record<string, unknown> = St?.ButtonMask ?? {};
-  const candidates =
-    button === 'primary' ? ['PRIMARY', 'ONE'] : button === 'middle' ? ['MIDDLE', 'TWO'] : ['SECONDARY', 'THREE'];
-  for (const name of candidates) {
-    if (typeof mask[name] === 'number') return mask[name];
-  }
-  return 0;
-}
-
-/**
- * GNOME 51 moved reduced motion onto `St.Settings` as the `St.ReducedMotion`
- * enum (`NO_PREFERENCE=0`, `REDUCE=1`); 48–50 expose no such preference here.
- * Returns true/false, or null when this Shell has no reading.
- */
-export function stReducedMotion(): boolean | null {
-  let settings: StSettingsLike | null | undefined;
-  try {
-    settings = St?.Settings?.get?.();
-  } catch {
-    return null;
-  }
-  if (settings === null || settings === undefined) return null;
-  let value: unknown;
-  try {
-    value = settings.reduced_motion ?? settings['reduced-motion'];
-  } catch {
-    return null;
-  }
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'number') {
-    const reduce: unknown = St?.ReducedMotion?.REDUCE;
-    return value === (typeof reduce === 'number' ? reduce : 1);
-  }
-  return null;
-}
-
-/**
- * Close a Shell popup menu. GNOME 51 replaced the single `PopupAnimation`
- * argument with a `{animate, fadeOnly}` parameters object; the object form is
- * tried first and the enum argument is the fallback, so both generations work.
- */
-export function closePopupMenu(menu: PopupMenuLike | null | undefined, animate = false): void {
-  if (menu === null || menu === undefined || typeof menu.close !== 'function') return;
-  try {
-    menu.close({ animate });
-    return;
-  } catch {
-    /* pre-51 signature: an object is not a PopupAnimation */
-  }
-  try {
-    menu.close(animate ? 1 : 0);
-  } catch {
-    /* nothing to close */
-  }
-}
-
-/**
- * A `Gio.DBusProxy` wrapper factory. GJS exposes it on `Gio.DBusProxy` (older
- * builds also on `Gio.DBus`); GNOME 51 returns a `Gio.DBusProxy` subclass where
- * earlier Shells returned a plain constructor — both are invoked with `new`, so
- * callers get the constructor either way. Null when this GJS has no wrapper.
- */
-export function makeProxyWrapper(interfaceXml: string): unknown {
-  const factory: ((xml: string) => unknown) | null =
-    typeof Gio?.DBus?.makeProxyWrapper === 'function'
-      ? Gio.DBus.makeProxyWrapper
-      : typeof Gio?.DBusProxy?.makeProxyWrapper === 'function'
-        ? Gio.DBusProxy.makeProxyWrapper
-        : null;
-  if (factory === null) return null;
-  try {
-    return factory(interfaceXml);
-  } catch {
-    return null;
-  }
-}
-
 export type NormalizedGesturePhase = 'begin' | 'update' | 'end' | 'cancel';
 
 export interface TouchpadGestureReading {
@@ -440,8 +344,6 @@ export function unpackVariant(value: VariantLike | null | undefined): unknown {
   if (value === null || value === undefined) return undefined;
   return typeof value.recursiveUnpack === 'function' ? value.recursiveUnpack() : value.unpack();
 }
-
-export const MOVE_OP: number = Meta.GrabOp.MOVING_UNCONSTRAINED;
 
 /** Stage-space position of an actor, including any moving parent (workspace). */
 export function actorStagePosition(actor: ClutterActorLike): [number, number] {

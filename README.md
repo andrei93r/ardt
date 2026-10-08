@@ -308,38 +308,6 @@ export interface SettingsStore {
 ```
 
 ```typescript
-// platform/gestures.ts
-
-export type GestureKind =
-  | "swipe-3-horizontal"
-  | "swipe-3-vertical"
-  | "swipe-4-horizontal"
-  | "swipe-4-vertical"
-  | "pinch-in"
-  | "pinch-out"
-  | "hold-3-swipe";
-
-export type GesturePhase = "begin" | "update" | "end" | "cancel";
-
-export interface GestureEvent {
-  kind: GestureKind;
-  phase: GesturePhase;
-  progress: number;
-  deltaX: number;
-  deltaY: number;
-  direction: "left" | "right" | "up" | "down" | null;
-  touchPoints: number;
-  timestampUs: number;
-}
-
-export interface GestureRecognizer {
-  enable(): void;
-  disable(): void;
-  onGesture(cb: (event: GestureEvent) => void): () => void;
-}
-```
-
-```typescript
 // platform/indicator.ts
 
 import type { Rect } from "../core/types.js";

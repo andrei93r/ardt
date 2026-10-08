@@ -38,7 +38,7 @@ are covered. Coverage references the harnesses:
 | D22 | User gesture on a tile | inner-edge resize, outer-edge resize, move within half, move onto sibling (swap), move to other monitor | `session.beginDrag/adjustMode/interpretDrop` |
 | D23 | Suppression set (§23.1) | workspace-switch, drag, fullscreen, pause, sharing, overview — any subset × focus present/absent | `core/border.ts` |
 | D24 | Focus | none, tileable, non-tileable/modal; next/prev by direction/cycle; no window in the requested direction falls back to the other side, else nothing | `onFocusChanged`, `focusDirection` |
-| D25 | Float | toggle on, toggle off, persisted (opt-in), restored on launch | `toggleFloat`, `FloatStore` |
+| D25 | Float | toggle on, toggle off, persisted (opt-in), restored on launch | `toggleFloat`, `RegistryStore` (floats) |
 | D26 | Adaptation | disabled; refusal 1/2/3; trusted ≥2; stubborn 3-consecutive → cooldown; skipAnimation at 3 | `adapt.ts` |
 | D27 | Gesture | enabled/disabled × kind (3-h/3-v/4-h/4-v/pinch-in/pinch-out) × (begin/update/end/cancel) × above/below threshold × overlap | `core/gestures.ts` |
 | D28 | Gesture vs GNOME built-ins | matches (defer), differs (override) | `gesture-input.overridesBuiltin` |
