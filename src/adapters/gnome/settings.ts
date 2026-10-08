@@ -11,11 +11,18 @@ import GLib from 'gi://GLib';
 
 import type { ClassifyConfig } from '../../core/classify.js';
 import { parseRulesJson } from '../../core/rules.js';
-import type { Rule } from '../../core/rules.js';
+import type { RulesParse } from '../../core/rules.js';
 import type { TilerConfig } from '../../core/tiler.js';
 import type { MinSizePolicy } from '../../core/tiler.js';
 import type { SettingValue, SettingsStore } from '../../platform/settings.js';
 import { unpackVariant } from './compat.js';
+
+/**
+ * The settings-derived part of a `TilerConfig`. Ratios and swap pairs are live
+ * per-pass inputs owned by the tiling adapter, so they stay out of the memo and
+ * are merged in per call: a cache must not outlive the inputs it wraps.
+ */
+type TilerConfigBase = Omit<TilerConfig, 'ratios' | 'swapPairs'>;
 
 function readVariant(settings: any, key: string): SettingValue | undefined {
   const value = settings.get_value(key);
@@ -34,13 +41,17 @@ function writeVariant(settings: any, key: string, value: unknown): boolean {
 
 export class GnomeSettings implements SettingsStore {
   /**
-   * Diagnostics (§24): how often a config object is built and how often the
-   * rules JSON is parsed. Both are per-call today and are the target of the
-   * first caching pass.
+   * Diagnostics (§24): how often a settings-derived config object is built and
+   * how often the rules JSON is parsed. Both are memoised per settings
+   * generation now, so these advance only when a setting actually changes.
    */
   private configBuildCount = 0;
   /** The memoised classifier config; null means it must be rebuilt. */
   private configCache: ClassifyConfig | null = null;
+  /** The memoised settings half of the tiler config; null means rebuild. */
+  private tilerBaseCache: TilerConfigBase | null = null;
+  /** The memoised parsed rules, shared by the tiler config and diagnostics. */
+  private rulesCache: RulesParse | null = null;
   private rulesParseCount = 0;
 
   constructor(private readonly settings: any) {}
@@ -114,15 +125,23 @@ export class GnomeSettings implements SettingsStore {
     return Array.isArray(value) ? value : [];
   }
 
-  rules(): { rules: Rule[]; errors: string[] } {
+  /**
+   * The parsed `rules-json`, memoised until a setting changes. Shared by the
+   * tiler config and the diagnostics dump; invalidated by the same blanket
+   * `changed` wiring as the config caches (key `rules-json`).
+   */
+  rules(): RulesParse {
+    if (this.rulesCache !== null) return this.rulesCache;
     this.rulesParseCount += 1;
-    return parseRulesJson(this.string('rules-json', '[]'));
+    this.rulesCache = parseRulesJson(this.string('rules-json', '[]'));
+    return this.rulesCache;
   }
 
   /**
-   * The resolved classifier config, memoised until a setting changes. It is read
-   * for every window on every pass, so rebuilding it per call was the single
-   * hottest allocation in the loop (PERFORMANCE_PLAN stage 1, carried forward).
+   * The resolved classifier config, memoised until a setting changes
+   * (`exception-apps`, `heuristic-modal-detect`). It is read for every window on
+   * every pass, so rebuilding it per call was the single hottest allocation in
+   * the loop (PERFORMANCE_PLAN stage 1, carried forward).
    */
   classifierConfig(): ClassifyConfig {
     if (this.configCache !== null) return this.configCache;
@@ -157,12 +176,30 @@ export class GnomeSettings implements SettingsStore {
     return true;
   }
 
-  /** Drop the memoised config: any setting read may have changed. */
+  /**
+   * Drop every settings-derived memo. The blanket `changed` wiring in
+   * `onAnyChange` (and every `write` / `writeSerialized`) funnels here, so the
+   * caches below are rebuilt on the same event the classifier cache already
+   * used:
+   *   - classifier: `exception-apps`, `heuristic-modal-detect`;
+   *   - tiler base: `min-size-policy`, `gaps-*`, `primary-apps`,
+   *     `primary-app-ratio`, `reflow-keeps-edges`, and `rules-json` (via
+   *     `rules()`);
+   *   - rules: `rules-json`.
+   */
   invalidateConfig(): void {
     this.configCache = null;
+    this.tilerBaseCache = null;
+    this.rulesCache = null;
   }
 
-  tilerConfig(ratios: Readonly<Record<string, number>>, swapPairs: ReadonlySet<string>): TilerConfig {
+  /**
+   * The settings-derived half of the tiler config. Reads `min-size-policy`,
+   * `gaps-base`, `gaps-portrait`, `gaps-landscape`, the four outer `gaps-*`,
+   * `gaps-between`, `primary-apps`, `primary-app-ratio`, `reflow-keeps-edges`
+   * and `rules-json`; all are dropped by `invalidateConfig`.
+   */
+  private buildTilerBase(): TilerConfigBase {
     this.configBuildCount += 1;
     const policy = this.string('min-size-policy', 'respect');
     const minSizePolicy: MinSizePolicy =
@@ -183,10 +220,19 @@ export class GnomeSettings implements SettingsStore {
       minSizePolicy,
       primaryApps: this.strv('primary-apps'),
       primaryAppRatio: this.int('primary-app-ratio', 50) / 100,
-      ratios,
-      swapPairs,
       rules: this.rules().rules,
       reflowKeepsEdges: this.boolean('reflow-keeps-edges', true),
     };
+  }
+
+  /**
+   * The tiler config for one pass. `ratios` and `swapPairs` are live inputs
+   * (per-workspace ratios, the current pair-swap set) and are merged onto the
+   * memoised base on every call; only the settings half is cached, so a change
+   * to either argument is never masked by a stale memo.
+   */
+  tilerConfig(ratios: Readonly<Record<string, number>>, swapPairs: ReadonlySet<string>): TilerConfig {
+    if (this.tilerBaseCache === null) this.tilerBaseCache = this.buildTilerBase();
+    return { ...this.tilerBaseCache, ratios, swapPairs };
   }
 }

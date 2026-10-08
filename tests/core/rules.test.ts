@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  compileGlob,
   contextFor,
   firstMatch,
   globMatch,
@@ -30,6 +31,29 @@ describe('globMatch', () => {
   it('escapes regex metacharacters', () => {
     expect(globToRegExp('a.b').test('a.b')).toBe(true);
     expect(globToRegExp('a.b').test('axb')).toBe(false);
+  });
+});
+
+describe('compileGlob', () => {
+  it('reuses the compiled pattern for repeated calls', () => {
+    const first = compileGlob('org.gnome.*');
+    // Identity, not equality: a fresh RegExp per call was the allocation the
+    // cache removes, so the same instance must come back.
+    expect(compileGlob('org.gnome.*')).toBe(first);
+  });
+
+  it('compiles to the same pattern as globToRegExp', () => {
+    const glob = '*firefox*';
+    expect(compileGlob(glob).source).toBe(globToRegExp(glob).source);
+    expect(compileGlob(glob).flags).toBe(globToRegExp(glob).flags);
+    expect(compileGlob(glob).test('org.mozilla.Firefox')).toBe(true);
+    expect(compileGlob(glob).test('org.gnome.Nautilus')).toBe(false);
+  });
+
+  it('keeps globMatch results identical across calls', () => {
+    expect(globMatch('code?', 'codex')).toBe(true);
+    expect(globMatch('code?', 'codex')).toBe(true);
+    expect(globMatch('code', 'codex')).toBe(false);
   });
 });
 

@@ -1742,6 +1742,11 @@ export class WindowSession {
     // Every policy below is per monitor, matching the tiler (§9: a pair shares
     // a monitor). Counting a workspace's windows across screens would make a
     // pair on one monitor an "extra" — or a lone window — on another.
+    // One config per pass, not per screen: the settings half is memoised and the
+    // live ratios/swap-pair set are identical for every screen, so the `new Set`
+    // and the assembly were rebuilt per screen for no reason
+    // (PERFORMANCE_PLAN stage 1.3 — "once per pass").
+    const config = this.tilerConfig();
     for (const screen of this.deps.host.screens()) {
       const onScreen = (t: TrackedWindow): boolean => t.surface.screenId === screen.index;
       const tileables = this.tileables(workspaceId).filter(onScreen).filter((t) => !t.surface.flags.fullscreen);
@@ -1774,7 +1779,7 @@ export class WindowSession {
           if (
             sibling !== undefined &&
             screen !== null &&
-            this.refusalEscapes(refusing, sibling, screen, this.placementEnv(refusing.surface.screenId))
+            this.refusalEscapes(refusing, sibling, screen, this.placementEnv(refusing.surface.screenId), config)
           ) {
             this.escapeRefusal(refusing, sibling);
             this.scheduleRetile(workspaceId, 'escape-refusal');
@@ -1808,7 +1813,7 @@ export class WindowSession {
       }
       const startedUs = GLib.get_monotonic_time();
       this.plansComputed += 1;
-      const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, this.tilerConfig());
+      const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, config);
       // §36: pass the per-window minimum so the below-min invariant actually
       // runs in production, not just in the tests; a violation is still logged,
       // never enforced.
@@ -2743,11 +2748,11 @@ export class WindowSession {
    * ratio clamp is left to give the refusing window its minimum and the
    * sibling the rest; true means the pair cannot exist and step 3 applies.
    */
-  private refusalEscapes(refusing: TrackedWindow, sibling: TrackedWindow, screen: Screen, env: Env): boolean {
+  private refusalEscapes(refusing: TrackedWindow, sibling: TrackedWindow, screen: Screen, env: Env, config: TilerConfig): boolean {
     const area = screenArea(screen);
     // §10: the split extent uses the between-window gap, not the base, so an
     // explicit `gaps-between` is honoured by the refusal ladder.
-    const gap = resolveGaps(this.tilerConfig(), screen).between;
+    const gap = resolveGaps(config, screen).between;
     const extent = env.axis === 'vertical' ? area.height : area.width;
     const split = Math.max(0, extent - gap);
     const axis: 'width' | 'height' = env.axis === 'vertical' ? 'height' : 'width';
@@ -3814,6 +3819,10 @@ export class WindowSession {
     this.clampWindowsToScreen();
     this.coherenceRuns += 1;
     const sweepStartedUs = GLib.get_monotonic_time();
+    // One config per sweep, not per workspace×screen: the settings half is
+    // memoised and the live ratios/swap-pair set do not vary within the sweep
+    // (PERFORMANCE_PLAN stage 1.3 — "once per pass").
+    const config = this.tilerConfig();
     const count = global.workspace_manager.get_n_workspaces();
     for (let index = 0; index < count; index++) {
       for (const screen of this.deps.host.screens()) {
@@ -3855,7 +3864,7 @@ export class WindowSession {
         if (tileables.length > 2) continue;
 
         this.plansComputed += 1;
-        const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, this.tilerConfig());
+        const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, config);
         let offender = false;
         for (const placement of plan.placements) {
           const tracked = this.windows.get(placement.surfaceId);

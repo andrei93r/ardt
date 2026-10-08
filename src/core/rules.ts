@@ -62,8 +62,31 @@ export function globToRegExp(glob: string): RegExp {
   return new RegExp(source, 'i');
 }
 
+/**
+ * Compiled globs, keyed by the pattern string. `globMatch` runs per exception
+ * app and per rule field on every classification/retile, so a `new RegExp` per
+ * call was pure churn (PERFORMANCE_PLAN stage 1.3). The cache is bounded because
+ * patterns come from user settings; FIFO eviction keeps a rules-editor keystroke
+ * burst from growing it without limit.
+ */
+const GLOB_CACHE_LIMIT = 256;
+const compiledGlobs = new Map<string, RegExp>();
+
+/** The shared RegExp for a glob — compiled once per distinct pattern. */
+export function compileGlob(glob: string): RegExp {
+  const cached = compiledGlobs.get(glob);
+  if (cached !== undefined) return cached;
+  const compiled = globToRegExp(glob);
+  if (compiledGlobs.size >= GLOB_CACHE_LIMIT) {
+    const oldest = compiledGlobs.keys().next().value;
+    if (oldest !== undefined) compiledGlobs.delete(oldest);
+  }
+  compiledGlobs.set(glob, compiled);
+  return compiled;
+}
+
 export function globMatch(glob: string, value: string): boolean {
-  return globToRegExp(glob).test(value);
+  return compileGlob(glob).test(value);
 }
 
 function kindAllowed(kinds: SurfaceKind[] | undefined, kind: SurfaceKind): boolean {
