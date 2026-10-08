@@ -11,6 +11,17 @@
 
 import { layoutManager } from 'resource:///org/gnome/shell/ui/main.js';
 import Gio from 'gi://Gio';
+import type { Settings as GioSettings } from 'gi://Gio';
+import type { ClutterStage } from 'gi://Clutter';
+import type {
+  MetaDisplay,
+  MetaMonitorManager,
+  MetaRectangle,
+  MetaWindow,
+  MetaWorkspace,
+  MetaWorkspaceManager,
+} from 'gi://Meta';
+import type { LayoutMonitor } from 'resource:///org/gnome/shell/ui/main.js';
 
 import { Layer } from '../../core/types.js';
 import type { Rect, Screen, Size, Surface } from '../../core/types.js';
@@ -26,7 +37,7 @@ type Listener = (payload: unknown) => void;
 /** If `startup-complete` never arrives, unblock the first drain after this long. */
 const STARTUP_FALLBACK_MS = 1500;
 
-function frameOf(win: any): Rect {
+function frameOf(win: MetaWindow): Rect {
   const rect = win.get_frame_rect();
   return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
 }
@@ -55,7 +66,7 @@ export class GnomeHost implements PlatformHost {
    */
   private screensByIndex = new Map<number, Screen>();
   /** `org.gnome.mutter`: whether workspaces exist only on the primary monitor. */
-  private mutter: any = null;
+  private mutter: GioSettings | null = null;
   private primaryMonitorIndex = 0;
   /**
    * Diagnostics (§24): window lookups and full `list_all_windows()` scans. A
@@ -74,6 +85,20 @@ export class GnomeHost implements PlatformHost {
 
   constructor(onError: (context: string, error: unknown) => void = () => undefined) {
     this.onError = onError;
+  }
+
+  // The GJS globals are declared `any` in `gi.d.ts`; read each one once here so
+  // the rest of the host works against the accurate surface it actually uses.
+  private get display(): MetaDisplay {
+    return global.display;
+  }
+
+  private get workspaceManager(): MetaWorkspaceManager {
+    return global.workspace_manager;
+  }
+
+  private get stage(): ClutterStage {
+    return global.stage;
   }
 
   /**
@@ -116,9 +141,9 @@ export class GnomeHost implements PlatformHost {
   }
 
   /** The single place the window list is fetched, so the counter is honest. */
-  private listAllWindows(): any[] {
+  private listAllWindows(): MetaWindow[] {
     this.scanCount += 1;
-    return global.display.list_all_windows();
+    return this.display.list_all_windows();
   }
 
   enable(): void {
@@ -141,13 +166,13 @@ export class GnomeHost implements PlatformHost {
         this.onError('host:startup-fallback', error);
       }
     });
-    this.signals.add('host', global.display, 'window-created', this.guard('window-created', (_display: any, win: any) => {
+    this.signals.add('host', this.display, 'window-created', this.guard('window-created', (_display: MetaDisplay, win: MetaWindow) => {
       this.emit({ type: 'surface-created', surface: this.ensureSurface(win) });
     }));
-    this.signals.add('host', global.display, 'notify::focus-window', this.guard('focus-window', () => {
-      this.emit({ type: 'focus-changed', id: global.display.get_focus_window()?.get_id() ?? null });
+    this.signals.add('host', this.display, 'notify::focus-window', this.guard('focus-window', () => {
+      this.emit({ type: 'focus-changed', id: this.display.get_focus_window()?.get_id() ?? null });
     }));
-    this.signals.add('host', global.window_manager, 'switch-workspace', this.guard('switch-workspace', (_wm: any, from: number, to: number) => {
+    this.signals.add('host', global.window_manager, 'switch-workspace', this.guard('switch-workspace', (_wm: unknown, from: number, to: number) => {
       this.emit({ type: 'workspace-switched', from, to, phase: 'active' });
     }));
     this.signals.add('host', layoutManager, 'monitors-changed', this.guard('monitors-changed', () => {
@@ -155,7 +180,7 @@ export class GnomeHost implements PlatformHost {
       this.emit({ type: 'screens-changed' });
     }));
     // Panels, docks and autohide change the usable area without changing monitors.
-    this.signals.add('host', global.display, 'workareas-changed', this.guard('workareas-changed', () => {
+    this.signals.add('host', this.display, 'workareas-changed', this.guard('workareas-changed', () => {
       this.refreshScreens();
       this.emit({ type: 'screens-changed' });
     }));
@@ -174,7 +199,7 @@ export class GnomeHost implements PlatformHost {
    * does to it, not just what the tiler does. Connected once per window and
    * disconnected with `unmanaged` (§22: the per-window `on()` helper).
    */
-  private watchWindow(win: any, id: number): void {
+  private watchWindow(win: MetaWindow, id: number): void {
     if (this.watched.has(id)) return;
     this.watched.add(id);
     const group = `window:${id}`;
@@ -220,7 +245,7 @@ export class GnomeHost implements PlatformHost {
       /* no pointer (a headless shell before injection) */
     }
     try {
-      const op = global.display.get_grab_op?.();
+      const op = this.display.get_grab_op?.();
       return typeof op === 'number' ? op !== 0 : false;
     } catch {
       return false;
@@ -263,7 +288,7 @@ export class GnomeHost implements PlatformHost {
     return out;
   }
 
-  ensureSurface(win: any): GnomeSurface {
+  ensureSurface(win: MetaWindow): GnomeSurface {
     const id: number = win.get_id();
     let surface = this.surfaceCache.get(id);
     if (surface === undefined) {
@@ -312,7 +337,7 @@ export class GnomeHost implements PlatformHost {
    * as a miss fallback, so behaviour is identical if a surface is somehow
    * absent (PERFORMANCE_PLAN stage 2, carried into v2).
    */
-  windowFor(id: number): any | null {
+  windowFor(id: number): MetaWindow | null {
     return this.windowById(id);
   }
 
@@ -386,7 +411,7 @@ export class GnomeHost implements PlatformHost {
   }
 
   activeWorkspaceId(): number {
-    return global.workspace_manager.get_active_workspace_index();
+    return this.workspaceManager.get_active_workspace_index();
   }
 
   applyFrame(id: number, rect: Rect): void {
@@ -461,9 +486,10 @@ export class GnomeHost implements PlatformHost {
     const px = Math.trunc(x);
     const py = Math.trunc(y);
     const once = (): boolean => {
+      const display = this.display;
       try {
-        if (typeof (global.display as any)?.warp_pointer === 'function') {
-          (global.display as any).warp_pointer(px, py);
+        if (typeof display?.warp_pointer === 'function') {
+          display.warp_pointer(px, py);
           return true;
         }
       } catch {
@@ -494,7 +520,7 @@ export class GnomeHost implements PlatformHost {
     return { width: Number(min?.[base] ?? 0), height: Number(min?.[base + 1] ?? 0) };
   }
 
-  private windowById(id: number): any | null {
+  private windowById(id: number): MetaWindow | null {
     this.lookupCount += 1;
     const cached = this.surfaceCache.get(id);
     if (cached !== undefined) return cached.win;
@@ -516,10 +542,10 @@ export class GnomeHost implements PlatformHost {
       this.refreshSource = 'simulated';
       return;
     }
-    const monitors: any[] = layoutManager.monitors;
+    const monitors: LayoutMonitor[] = layoutManager.monitors;
     const connectors = this.monitorConnectors();
     this.primaryMonitorIndex = layoutManager.primaryIndex ?? 0;
-    const workspace = global.workspace_manager.get_active_workspace();
+    const workspace = this.workspaceManager.get_active_workspace();
     const stageRate = this.stageRefreshRate();
     // §Shell stability: the live logical-monitor count, re-read here rather than
     // derived from `layoutManager.monitors`. During a removal the layout list
@@ -570,7 +596,7 @@ export class GnomeHost implements PlatformHost {
    * holds; `get_work_area_for_monitor` asserts on that. Skip (never call) when
    * the index is out of range, and treat a raced read as "no work area yet".
    */
-  private workAreaFor(workspace: any, monitorIndex: number, liveCount: number): any | null {
+  private workAreaFor(workspace: MetaWorkspace | null | undefined, monitorIndex: number, liveCount: number): MetaRectangle | null {
     if (workspace === null || workspace === undefined) return null;
     if (liveCount < 0) liveCount = this.liveMonitorCount();
     if (monitorIndex < 0 || monitorIndex >= liveCount) return null;
@@ -584,7 +610,7 @@ export class GnomeHost implements PlatformHost {
   /** The live logical-monitor count, or -1 when the manager is unreachable. */
   private liveMonitorCount(): number {
     try {
-      const manager = global.backend.get_monitor_manager();
+      const manager: MetaMonitorManager = global.backend.get_monitor_manager();
       // The logical monitor list is what index-based calls (work-area reads,
       // `move_to_monitor`) resolve against. The physical list can still hold a
       // monitor whose logical entry was just removed, so bounding against it
@@ -617,9 +643,9 @@ export class GnomeHost implements PlatformHost {
    */
   private backendRefreshRate(index: number): number {
     try {
-      const manager = global.backend.get_monitor_manager();
-      const monitors: any[] = manager.get_monitors();
-      const monitor = monitors.find((m: any) => (typeof m.get_index === 'function' ? m.get_index() : -1) === index) ?? monitors[index];
+      const manager: MetaMonitorManager = global.backend.get_monitor_manager();
+      const monitors = manager.get_monitors();
+      const monitor = monitors.find((m) => (typeof m.get_index === 'function' ? m.get_index() : -1) === index) ?? monitors[index];
       if (typeof monitor?.get_current_mode !== 'function') return 0;
       const mode = monitor.get_current_mode();
       const rate = typeof mode?.get_refresh_rate === 'function' ? mode.get_refresh_rate() : undefined;
@@ -632,10 +658,11 @@ export class GnomeHost implements PlatformHost {
   /** The stage's own frame-clock rate, a last real reading; 0 when unavailable. */
   private stageRefreshRate(): number {
     try {
-      const view = global.stage?.get_view?.();
+      const stage = this.stage;
+      const view = stage?.get_view?.();
       const fromView = typeof view?.get_refresh_rate === 'function' ? view.get_refresh_rate() : undefined;
       if (typeof fromView === 'number' && fromView > 0) return fromView;
-      const clock = global.stage?.get_frame_clock?.();
+      const clock = stage?.get_frame_clock?.();
       const fromClock = typeof clock?.get_refresh_rate === 'function' ? clock.get_refresh_rate() : undefined;
       return typeof fromClock === 'number' && fromClock > 0 ? fromClock : 0;
     } catch {
@@ -651,9 +678,9 @@ export class GnomeHost implements PlatformHost {
   private monitorConnectors(): Map<number, string> {
     const map = new Map<number, string>();
     try {
-      const manager = global.backend.get_monitor_manager();
-      const monitors: any[] = manager.get_monitors();
-      monitors.forEach((monitor: any, position: number) => {
+      const manager: MetaMonitorManager = global.backend.get_monitor_manager();
+      const monitors = manager.get_monitors();
+      monitors.forEach((monitor, position) => {
         const index = typeof monitor.get_index === 'function' ? monitor.get_index() : position;
         map.set(index, monitor.get_connector());
       });
