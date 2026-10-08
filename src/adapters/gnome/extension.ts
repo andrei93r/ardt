@@ -15,37 +15,34 @@ import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
-import { notify, overview, sessionMode, wm } from 'resource:///org/gnome/shell/ui/main.js';
+import { notify, overview, wm } from 'resource:///org/gnome/shell/ui/main.js';
 
-import type { AdaptationRecord, Bundle, ImportMode } from '../../core/config.js';
-import { BUNDLE_FORMAT, BUNDLE_VERSION, normalizeBundle, serializeBundle } from '../../core/config.js';
 import { BorderState } from '../../core/border.js';
 import type { SuppressionReason } from '../../core/border.js';
 import { SessionMachine } from '../../core/session.js';
-import type { SessionMode } from '../../core/session.js';
 import { ChangeLog } from '../../core/undo.js';
-import { migrateRulesJson } from '../../core/rules.js';
-import type { SplitAxis } from '../../core/tiler.js';
-import { ratioKey } from '../../core/tiler.js';
-import type { MemoryEntry } from '../../core/displays.js';
 import { NoticeGate, isAlwaysNotice, noticeTitle } from '../../core/notify.js';
 import { TRIGGERS, buildDispatch } from '../../core/triggers.js';
 import { clamp, Layer } from '../../core/types.js';
-import type { Rect, Screen } from '../../core/types.js';
-import type { GestureKind } from '../../core/gestures.js';
-import type { DbusHandlers } from '../../platform/dbus.js';
+import type { Rect } from '../../core/types.js';
 import { PLATFORM_EVENT_TYPES } from '../../platform/events.js';
-import { dataDir, readJson, readText, writeAtomic } from './adapt.js';
+import { dataDir, readJson } from './adapt.js';
 import * as compat from './compat.js';
+import { ConfigTransfer } from './config-transfer.js';
+import { Diagnostics } from './dump-state.js';
 import { GnomeDbus } from './dbus.js';
 import { createAnimationLedger } from './frame-clock.js';
 import type { Animator } from './frame-clock.js';
 import { GestureInput } from './gesture-input.js';
+import { Harness } from './harness.js';
+import type { Handlers, WorkspaceAnimationController } from './harness.js';
 import { GnomeHost } from './host.js';
 import { History } from './history.js';
 import { GnomeIndicator } from './indicator.js';
 import { EventJournal } from './journal.js';
 import { PerfProbe } from './perf.js';
+import { Persistence } from './persistence.js';
+import { Recovery } from './recovery.js';
 import { SignalRegistry, TimeoutRegistry } from './lifecycle.js';
 import { Recorder } from './recorder.js';
 import { RecordingPrompt } from './recording-prompt.js';
@@ -55,9 +52,10 @@ import { ShellTracker } from './shell-tracker.js';
 import type { ShellTrackerEvent } from './shell-tracker.js';
 import type { TrackedWindow } from './tracked-window.js';
 import { GnomeSettings } from './settings.js';
+import { SessionModeController } from './session-mode.js';
 import { GnomeTiming } from './timing.js';
 import { Tiling } from './tiling.js';
-import type { TraceInitial, TraceWorkspace, TraceEntry } from '../../core/replay.js';
+
 
 /**
  * The release version the user sees (metadata.json / package.json). Distinct
@@ -84,57 +82,6 @@ const COHERENCE_SWEEP_MS = 700;
 const NORMALIZE_ON_ENABLE_MS = 400;
 /** §23.2: a workspace-switch animation still running after this is torn down. */
 const SWITCH_WATCHDOG_MS = 1500;
-/** §Self-heal: N caught errors inside this window triggers one in-place restart. */
-const RECOVERY_WINDOW_MS = 60_000;
-/** §Self-heal: the error burst size that asks for a restart. */
-const RECOVERY_THRESHOLD = 3;
-/** §Self-heal: restarts are capped per window, so a persistent fault cannot loop. */
-const RESTART_WINDOW_MS = 10 * 60_000;
-/** §Self-heal: beyond this many restarts the extension self-disables instead. */
-const RESTART_CAP = 3;
-
-/**
- * Parse the `SpawnWindow` argv argument. A JSON array is the supported form; a
- * plain string keeps the original single-string trigger working (split on
- * spaces, no shell — exactly the old behaviour).
- */
-function parseSpawnArgv(argvJson: string): string[] {
-  const text = argvJson.trim();
-  if (text.startsWith('[')) {
-    try {
-      const parsed: unknown = JSON.parse(text);
-      if (Array.isArray(parsed)) return parsed.map((part) => String(part)).filter((part) => part.length > 0);
-    } catch {
-      /* fall through to the legacy split */
-    }
-  }
-  return text.split(' ').filter((part) => part.length > 0);
-}
-
-/**
- * Parse the `SpawnWindow` env argument: a JSON object of `KEY: value`, or a
- * JSON array of `KEY=value` strings. Empty / `null` / `[]` means inherit only.
- */
-function parseSpawnEnv(envJson: string): [string, string][] {
-  const text = envJson.trim();
-  if (text.length === 0 || text === 'null' || text === '{}' || text === '[]') return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return [];
-  }
-  const out: [string, string][] = [];
-  if (Array.isArray(parsed)) {
-    for (const item of parsed) {
-      const equals = String(item).indexOf('=');
-      if (equals > 0) out.push([String(item).slice(0, equals), String(item).slice(equals + 1)]);
-    }
-  } else if (parsed !== null && typeof parsed === 'object') {
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) out.push([key, String(value)]);
-  }
-  return out;
-}
 
 /**
  * Structural views of the GJS/Shell surfaces `extension.ts` reads. `gi.d.ts`
@@ -143,26 +90,9 @@ function parseSpawnEnv(envJson: string): [string, string][] {
  * as `compat.ts`/`host.ts`, one structural boundary per API.
  */
 
-/** The private `WorkspaceAnimationController` behind `Main.wm._workspaceAnimation` (§23.2). */
-interface WorkspaceAnimationController {
-  gestureActive?: boolean;
-  _switchData?: unknown;
-  _swipeTracker?: {
-    _touchpadGesture?: { _state?: number };
-  };
-  cancelSwitchAnimation(): void;
-  _prepareWorkspaceSwitch?(): void;
-  _finishWorkspaceSwitch(data: unknown): void;
-}
-
 /** The private `path` GNOME Shell assigns to an `Extension` instance. */
 interface ShellExtensionPath {
   path?: string;
-}
-
-/** The legacy GJS `imports` global; only `misc.config` is read here. */
-interface GjsImports {
-  misc?: { config?: { PACKAGE_VERSION?: unknown } };
 }
 
 /**
@@ -196,45 +126,6 @@ function stackingId(win: unknown): number {
   return (win as IdentifiedWindow).get_id();
 }
 
-interface ExtraHandlers {
-  ActivateWindow(id: number): boolean;
-  ActivateWorkspace(index: number): boolean;
-  ToggleFloat(id: number): boolean;
-  SimulateResize(a: number, b: number, ratio: number): boolean;
-  SwapPair(a: number, b: number): boolean;
-  InjectVerifyFailure(id: number, count: number): boolean;
-  FocusDirection(direction: string): boolean;
-  FocusCycle(): boolean;
-  MoveToward(direction: string): boolean;
-  CloseWindow(id: number): boolean;
-  BeginDrag(id: number): boolean;
-  EndDrag(id: number): boolean;
-  MoveWindow(id: number, x: number, y: number, width: number, height: number): boolean;
-  MinimizeWindow(id: number): boolean;
-  MaximizeWindow(id: number): boolean;
-  UnmaximizeWindow(id: number): boolean;
-  ResetLayoutState(): boolean;
-  SimulateOverview(visible: boolean): boolean;
-  SimulateWorkspaceSwitch(holdMs: number): boolean;
-  MoveToWorkspace(id: number, index: number): boolean;
-  MarkWorkspaceCached(id: number, index: number): boolean;
-  MoveDirection(direction: string): boolean;
-  ToggleFullscreen(id: number): boolean;
-  QuitFocused(): boolean;
-  SimulateAbove(id: number): boolean;
-  SimulateSticky(id: number, sticky: boolean): boolean;
-  SimulateWorkspaceReorder(from: number, to: number): boolean;
-  SimulateWorkspaceOrientation(vertical: boolean): boolean;
-  CursorToCentre(): boolean;
-  TogglePause(): boolean;
-  InjectFault(context: string): boolean;
-  SimulateChromeTeardown(): boolean;
-  StartFrameRecording(): boolean;
-  StopFrameRecording(): boolean;
-}
-
-type Handlers = DbusHandlers & ExtraHandlers;
-
 export default class AdrtExtension extends Extension {
   private settings!: GnomeSettings;
   private host!: GnomeHost;
@@ -242,7 +133,15 @@ export default class AdrtExtension extends Extension {
   private registry!: RegistryStore;
   private history!: History;
   private journal!: EventJournal;
+  /** §9/§12: state.json, display memory and the one-shot migrations. */
+  private persistence!: Persistence;
   private changes!: ChangeLog;
+  /** §12: ExportConfig/ImportConfig over the live settings and registry. */
+  private configTransfer!: ConfigTransfer;
+  /** §40.4: the probe, the state dump and the replayable trace snapshot. */
+  private diagnostics!: Diagnostics;
+  /** §22/§40.4: the D-Bus handler map and the harness/test utilities. */
+  private harness!: Harness;
   private indicator!: GnomeIndicator;
   private animator!: Animator;
   private tiling!: Tiling;
@@ -259,8 +158,8 @@ export default class AdrtExtension extends Extension {
   private recorder: Recorder | null = null;
   /** The observation prompt shown after a user stop; null outside `enable()`. */
   private recordingPrompt: RecordingPrompt | null = null;
-  /** A mode injected by the test trigger, overriding the live session mode. */
-  private injectedMode: SessionMode | null = null;
+  /** §19: the session-mode/pause policy and the test-injected mode. */
+  private mode!: SessionModeController;
 
   private readonly notices = new NoticeGate();
   /** Why focus last moved, as far as adrt knows (the shell moves it itself). */
@@ -271,28 +170,8 @@ export default class AdrtExtension extends Extension {
   private injectKeyboard: InjectedVirtualDevice | null = null;
   /** Errors caught by the outer boundaries (enable, signal handlers). */
   private errorCount = 0;
-  /**
-   * §Self-heal: caught errors never propagate into the Shell; when they come
-   * in bursts the extension restarts itself in place, and when a persistent
-   * fault outlives the restart cap it self-disables and leaves the Shell
-   * running. Hard truth: a JS try/catch cannot catch the failures that
-   * actually take GNOME down (`already disposed`, `clutter_actor_remove_child`,
-   * `g_closure_unref`, Mutter monitor assertions are C-level) — that is what
-   * the dispose-safe teardown and the monitor-index bounds prevent. This
-   * machinery recovers from what JS *can* catch, and never claims more.
-   */
-  /** Timestamps of caught errors inside the current window. */
-  private recoveryErrors: number[] = [];
-  /** Timestamps of in-place restarts, for the per-window cap. */
-  private restartTimes: number[] = [];
-  private restartPending = false;
-  private restarting = false;
-  private restartDeferred = false;
-  private selfDisabled = false;
-  /** True while GNOME itself is disabling the extension (never restart then). */
-  private gnomeDisable = false;
-  private restarts = 0;
-  private selfDisables = 0;
+  /** §Self-heal: the caught-error restart policy (created on first `enable`). */
+  private recovery: Recovery | undefined;
   private lastErrorAt = 0;
   /** Owns every compositor/shell signal connection, per teardown group (§36). */
   private signals!: SignalRegistry;
@@ -335,20 +214,21 @@ export default class AdrtExtension extends Extension {
   private keybindings: string[] = [];
   private hostUnsubscribers: (() => void)[] = [];
   private frameSamples = 0;
-  /** §22/Stage 6: the model state recording started from, for a replayable trace. */
-  private recordInitial: TraceInitial | null = null;
 
   enable(): void {
     const started = GLib.get_monotonic_time();
-    // §Self-heal: a real enable (GNOME entry point) resets the recovery state —
-    // a re-enabled extension is a fresh start. The cumulative counters stay
-    // (add-only diagnostics).
-    this.gnomeDisable = false;
-    this.selfDisabled = false;
-    this.restartPending = false;
-    this.restarting = false;
-    this.restartDeferred = false;
-    this.recoveryErrors = [];
+    // §Self-heal: the recovery policy is created once and survives re-enables,
+    // so its cumulative counters stay; a real enable only resets its per-enable
+    // state.
+    const recovery = (this.recovery ??= new Recovery({
+      history: () => this.history,
+      journal: () => this.journal,
+      interactionActive: () => this.interactionActive(),
+      teardown: () => this.disableWith(),
+      reinitialize: () => this.enableWith(GLib.get_monotonic_time()),
+      reportError: (context, error) => this.reportError(context, error),
+    }));
+    recovery.resetForEnable();
     // §36/§Self-heal (1.11): the entry point is the most important boundary; a
     // throw here is routed through the recovery policy in the catch below,
     // never allowed to escape unhandled into the Shell.
@@ -364,7 +244,7 @@ export default class AdrtExtension extends Extension {
       // GNOME already disabling us, or the restart cap reached — do we rethrow,
       // so GNOME calls `disable()` and removes the half-built extension instead
       // of leaving it "enabled".
-      if (!this.considerRecovery('enable')) throw error;
+      if (!recovery.considerRecovery('enable')) throw error;
     }
   }
 
@@ -416,7 +296,14 @@ export default class AdrtExtension extends Extension {
     );
     this.history.setSink((event) => this.journal.decide(event.ev, event));
     this.history.prune();
-    this.migrate();
+    this.persistence = new Persistence({
+      settings: this.settings,
+      history: this.history,
+      journal: this.journal,
+      tiling: () => this.tiling,
+      session: () => this.session,
+    });
+    this.persistence.migrate(EXTENSION_VERSION);
     this.registry = new RegistryStore({ onError: (context, error) => this.reportError(context, error) });
     this.registry.load();
     // §12: fold the legacy stores in exactly once (copy-verify-delete).
@@ -428,7 +315,7 @@ export default class AdrtExtension extends Extension {
     this.registry.setEnabled(this.settings.boolean('adaptation-enabled', true));
     // §23: fold legacy rule floats into the Never-tile list once, before any
     // window is classified, and drop the dead global gate.
-    this.migrateRuleFloats();
+    this.persistence.migrateRuleFloats();
     this.changes = new ChangeLog();
     this.border = new BorderState();
 
@@ -453,8 +340,8 @@ export default class AdrtExtension extends Extension {
       animator: this.animator,
       changes: this.changes,
       windows: () => this.session.windows,
-      isPaused: () => this.isPaused(),
-      onRatiosChanged: () => this.saveState(),
+      isPaused: () => this.mode.isPaused(),
+      onRatiosChanged: () => this.persistence.saveState(),
       onStubborn: (appId) => this.onStubborn(appId),
       noteSelfUnmaximize: (id) => this.session.noteSelfUnmaximize(id),
     });
@@ -468,7 +355,7 @@ export default class AdrtExtension extends Extension {
       registry: this.registry,
       changes: this.changes,
       probe: this.probe,
-      isPaused: () => this.isPaused(),
+      isPaused: () => this.mode.isPaused(),
       onStateChanged: () => this.onStateChanged(),
       onStubborn: (appId) => this.onStubborn(appId),
       onClosed: (id, rect) => this.onWindowClosed(id, rect),
@@ -478,8 +365,72 @@ export default class AdrtExtension extends Extension {
         this.toast(key, subject);
       },
       onModelEvent: (event, fields) => this.onModelEvent(event, fields),
-      onDisplayMemoryChanged: () => this.saveDisplayMemory(),
+      onDisplayMemoryChanged: () => this.persistence.saveDisplayMemory(),
       isAnimating: () => this.animator.activeCount > 0,
+    });
+    this.configTransfer = new ConfigTransfer({
+      settings: this.settings,
+      registry: this.registry,
+      history: this.history,
+      session: this.session,
+      floatingWindows: () => this.floatingWindows(),
+    });
+    // §19: the session-mode/pause policy, constructed with the session it gates.
+    this.mode = new SessionModeController({
+      settings: this.settings,
+      session: this.session,
+      sessionMachine: this.sessionMachine,
+      border: this.border,
+      history: this.history,
+      stopMotionWatch: () => this.stopMotionWatch(),
+      suppressBorder: (reason) => this.suppressBorder(reason),
+      unsuppressBorder: (reason) => this.unsuppressBorder(reason),
+      syncIndicator: () => this.syncIndicator(),
+      syncPreview: () => this.syncPreview(),
+    });
+    // §40.4: the diagnostics/probe/trace snapshot owner. Constructed after the
+    // live objects it reads; the scalar readers are lazy (they change over time).
+    this.diagnostics = new Diagnostics({
+      settings: this.settings,
+      host: this.host,
+      timing: this.timing,
+      history: this.history,
+      registry: this.registry,
+      tiling: this.tiling,
+      session: this.session,
+      indicator: this.indicator,
+      animator: this.animator,
+      signals: this.signals,
+      border: this.border,
+      probe: this.probe,
+      journal: this.journal,
+      sessionMachine: this.sessionMachine,
+      releaseVersion: RELEASE_VERSION,
+      extensionVersion: EXTENSION_VERSION,
+      normalizeOnEnableMs: NORMALIZE_ON_ENABLE_MS,
+      coherenceSweepMs: COHERENCE_SWEEP_MS,
+      switchWatchdogMs: SWITCH_WATCHDOG_MS,
+      motionSelfMs: MOTION_SELF_MS,
+      recorder: () => this.recorder,
+      injectionEnabled: () => this.injectionEnabled,
+      isPaused: () => this.mode.isPaused(),
+      pauseDuringSharing: () => this.mode.pauseDuringSharing(),
+      derivedMotionPollMs: () => this.derivedMotionPollMs(),
+      derivedMotionRetileTicks: () => this.derivedMotionRetileTicks(),
+      workspaceAnimationActive: () => this.workspaceAnimationActive(),
+      focusReason: () => this.focusReason,
+      errorCount: () => this.errorCount,
+      restarts: () => this.recovery?.restartCount ?? 0,
+      selfDisables: () => this.recovery?.selfDisableCount ?? 0,
+      lastErrorAt: () => this.lastErrorAt,
+      buildDirMtimeMs: () => this.buildDirMtimeMs,
+      animationsBaseline: () => this.animationsBaseline,
+      animationsMutated: () => this.animationsMutated,
+      wsSwitchEvents: () => this.wsSwitchEvents,
+      motionSuppressions: () => this.motionSuppressions,
+      motionRetiles: () => this.motionRetiles,
+      motionTicks: () => this.motionTicks,
+      motionSkip: () => this.motionSkip,
     });
 
     // §22 extension: the bug recorder. Constructed inert: it attaches no
@@ -488,10 +439,10 @@ export default class AdrtExtension extends Extension {
       journal: this.journal,
       build: () => ({ version: RELEASE_VERSION, dirMtimeMs: this.buildDirMtimeMs }),
       mode: () => this.sessionMachine.state.mode,
-      paused: () => this.isPaused(),
+      paused: () => this.mode.isPaused(),
       monitors: () => this.host.screens().map((screen) => ({ ...screen })),
       settings: () => this.settings.snapshot(),
-      snapshot: () => this.recordSnapshot(),
+      snapshot: () => this.diagnostics.recordSnapshot(),
       onChanged: () => undefined,
     });
     // §22 extension: the observation prompt. Built empty; `show()` is lazy so
@@ -509,14 +460,55 @@ export default class AdrtExtension extends Extension {
       swapPair: (direction) => this.guard('gesture:swap-pair', () => this.session.moveToward(direction))(),
       custom: (action) => this.guard('gesture:custom', () => this.history.log('gesture', { custom: action }))(),
     });
+    // §22/§40.4: the D-Bus dispatch + harness utilities, built from the one
+    // trigger table. Constructed once all the live objects it reads exist.
+    this.harness = new Harness({
+      settings: this.settings,
+      host: this.host,
+      session: this.session,
+      registry: this.registry,
+      tiling: this.tiling,
+      history: this.history,
+      journal: this.journal,
+      animator: this.animator,
+      gestures: this.gestures,
+      changes: this.changes,
+      diagnostics: this.diagnostics,
+      configTransfer: this.configTransfer,
+      persistence: this.persistence,
+      sessionMachine: this.sessionMachine,
+      timers: this.timers,
+      indicator: this.indicator,
+      recorder: () => this.recorder,
+      recordingPrompt: () => this.recordingPrompt,
+      floatingWindows: () => this.floatingWindows(),
+      toast: (key, subject) => this.toast(key, subject),
+      setFocusReason: (reason) => this.noteFocus(reason),
+      setTilingPaused: (paused) => this.mode.setTilingPaused(paused),
+      unsuppressBorder: (reason) => this.unsuppressBorder(reason),
+      syncIndicator: () => this.syncIndicator(),
+      onOverviewChanged: (visible) => this.onOverviewChanged(visible),
+      onFocusChanged: (id) => this.onFocusChanged(id),
+      onWorkspaceSwitched: (payload) => this.onWorkspaceSwitched(payload),
+      onStateChanged: () => this.onStateChanged(),
+      workspaceAnimation: () => this.workspaceAnimation(),
+      writeSetting: (schema, key, value) => this.writeSetting(schema, key, value),
+      reportError: (context, error) => this.reportError(context, error),
+      injectPointerMove: (x, y) => this.injectPointerMove(x, y),
+      injectPointerButton: (button, pressed) => this.injectPointerButton(button, pressed),
+      injectKey: (keyval, pressed) => this.injectKey(keyval, pressed),
+      injectFault: (context) => this.simulateFault(context),
+      simulateChromeTeardown: () => this.simulateChromeTeardown(),
+      simulateSessionMode: (mode) => this.mode.simulate(mode),
+    });
 
-    this.restoreState();
-    this.restoreDisplayMemory();
+    this.persistence.restoreState();
+    this.persistence.restoreDisplayMemory();
     this.subscribeHost();
     this.watchSettings();
 
     // §22: the trace's initial state is the model before any window is adopted.
-    this.captureRecordInitial();
+    this.diagnostics.captureRecordInitial();
     for (const win of global.display.list_all_windows()) this.session.register(win);
     // §20: every enable normalises the existing workspaces. Adoption finishes on
     // the first ready timeout, so normalisation is deferred just past it; the
@@ -542,7 +534,7 @@ export default class AdrtExtension extends Extension {
       emit: (event) => this.onTrackerEvent(event),
     });
     this.tracker.enable();
-    this.applySessionMode(this.currentMode(), true);
+    this.mode.applySessionMode(this.mode.currentMode(), true);
     // §23: hide the border if the extension is enabled while the overview is
     // already open (e.g. a headless shell that starts in it); the `showing`
     // signal has already fired by then. Tiling itself keeps running.
@@ -553,14 +545,14 @@ export default class AdrtExtension extends Extension {
     // never be left untiled next to a sibling.
     this.timers.addInterval('coherence', COHERENCE_SWEEP_MS, this.guard('coherence-sweep', () => {
       this.session.coherenceSweep();
-      this.refreshSessionMode();
+      this.mode.refreshSessionMode();
       this.watchWorkspaceAnimation();
       this.refreshWorkspaceSwitchSuppression();
-      this.refreshSharingSuppression();
+      this.mode.refreshSharingSuppression();
     }));
 
     this.onStateChanged();
-    this.firstRun();
+    this.persistence.firstRun();
     // Swap pairs are keyed by window id, which does not survive a restart.
     this.tiling.pruneSwapPairs(new Set(this.session.windows.keys()));
     this.history.log('tile', {
@@ -578,7 +570,7 @@ export default class AdrtExtension extends Extension {
     // not on lock; the lock transition is handled by `applySessionMode`.
     // §Self-heal: a GNOME-initiated disable is never a moment to restart; mark
     // it so the recovery policy stays quiet through the teardown below.
-    this.gnomeDisable = true;
+    this.recovery?.markGnomeDisable();
     // §36: idempotent — a second disable is a no-op, so a re-entrant teardown
     // can never re-destroy a disposed actor.
     if (this.disabled) return;
@@ -631,8 +623,8 @@ export default class AdrtExtension extends Extension {
     this.teardown('indicator', () => this.indicator?.destroy());
     this.teardown('host', () => this.host?.disable());
     this.teardown('registry', () => this.registry?.destroy());
-    this.teardown('display-memory', () => this.saveDisplayMemory());
-    this.teardown('state', () => this.saveState());
+    this.teardown('display-memory', () => this.persistence.saveDisplayMemory());
+    this.teardown('state', () => this.persistence.saveState());
     // §18: restore GNOME's animations to what we found, never force them on for
     // a user who had turned them off.
     this.teardown('animation-baseline', () => this.restoreAnimationSetting());
@@ -739,7 +731,7 @@ export default class AdrtExtension extends Extension {
     }
     // §Self-heal: a caught error is also a recovery signal. It is still an
     // error — the policy decides whether to restart, never whether to report.
-    this.noteRecoveryError(context);
+    this.recovery?.noteError(context);
   }
 
   // -------------------------------------------------------------- self-heal
@@ -752,125 +744,6 @@ export default class AdrtExtension extends Extension {
       this.animator?.activeCount > 0 ||
       this.workspaceAnimationActive()
     );
-  }
-
-  /** Feed one caught error into the sliding recovery window. */
-  private noteRecoveryError(context: string): void {
-    if (this.selfDisabled || this.gnomeDisable) return;
-    const now = Date.now();
-    this.recoveryErrors = this.recoveryErrors.filter((t) => now - t < RECOVERY_WINDOW_MS);
-    this.recoveryErrors.push(now);
-    if (this.recoveryErrors.length >= RECOVERY_THRESHOLD) this.considerRecovery(context);
-  }
-
-  /**
-   * The recovery policy. Runs whenever the error window fills, and again when
-   * a deferred restart's obstacle (a drag, a transition) clears. Never restarts
-   * inline: the work is scheduled on idle, always outside the emission that
-   * caught the error.
-   *
-   * Returns true when a restart is pending, scheduled or deferred; false only
-   * when recovery is impossible (self-disabled, GNOME disable, or the cap
-   * reached) — `enable()` uses that to rethrow so GNOME disables cleanly (1.11).
-   */
-  private considerRecovery(context: string): boolean {
-    if (this.selfDisabled || this.gnomeDisable) return false;
-    if (this.restarting || this.restartPending) return true;
-    const now = Date.now();
-    this.restartTimes = this.restartTimes.filter((t) => now - t < RESTART_WINDOW_MS);
-    if (this.restartTimes.length >= RESTART_CAP) {
-      this.selfDisable(context);
-      return false;
-    }
-    // Never restart mid-gesture or mid-transition; defer until it ends (the
-    // drag-end path and the motion tick re-run this check).
-    if (this.interactionActive()) {
-      this.restartDeferred = true;
-      return true;
-    }
-    this.restartPending = true;
-    this.restartTimes.push(now);
-    this.recoveryErrors = [];
-    GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-      this.restartPending = false;
-      this.restartDeferred = false;
-      this.restartInPlace(context);
-      return GLib.SOURCE_REMOVE;
-    });
-    return true;
-  }
-
-  /**
-   * Re-check a deferred restart once the interaction that blocked it has
-   * ended (a released drag). The threshold was already met; this only waits
-   * for the obstacle to clear.
-   */
-  private reconsiderDeferredRestart(): void {
-    if (!this.restartDeferred || this.interactionActive()) return;
-    this.restartDeferred = false;
-    this.considerRecovery('interaction-ended');
-  }
-
-  /**
-   * The in-process restart: a full internal teardown and re-init inside the
-   * same loaded extension — never `Main.extensionManager` reload/enable (that
-   * unloads and reloads modules mid-signal). Runs on idle, never inline, and
-   * is visible: a log line, a history entry and a DumpState counter.
-   */
-  private restartInPlace(context: string): void {
-    if (this.selfDisabled || this.gnomeDisable) return;
-    this.restarting = true;
-    try {
-      this.history?.log('extension_restart', { reason: context, at: Date.now(), restarts: this.restarts + 1 });
-      this.journal?.record('model', 'extension_restart', { reason: context });
-    } catch {
-      /* the journal may be gone already; the restart itself is the fix */
-    }
-    console.warn(`[adrt] restarting in place after repeated caught errors (${context})`);
-    this.restarts += 1;
-    try {
-      this.disableWith();
-    } catch (error) {
-      this.reportError('restart-teardown', error);
-    }
-    try {
-      this.enableWith(GLib.get_monotonic_time());
-    } catch (error) {
-      this.reportError('restart-enable', error);
-    } finally {
-      this.restarting = false;
-    }
-  }
-
-  /**
-   * The last resort: the fault outlived the restart cap. Tear everything down
-   * and leave the Shell running, with a toast pointing the user at Extensions.
-   * The Shell still sees the extension as enabled; the next `enable()` (from
-   * Extensions, or the harness) starts fresh.
-   */
-  private selfDisable(context: string): void {
-    if (this.selfDisabled) return;
-    this.selfDisabled = true;
-    this.restartPending = false;
-    this.restartDeferred = false;
-    console.warn(`[adrt] self-disabling after repeated caught errors (${context}); re-enable from Extensions`);
-    try {
-      this.history?.log('extension_self_disable', { reason: context, at: Date.now() });
-      this.journal?.record('model', 'extension_self_disable', { reason: context });
-    } catch {
-      /* journal gone: the counters still record it */
-    }
-    try {
-      notify('Adrt', 'Adrt stopped itself after repeated internal errors. Re-enable it from the Extensions app.');
-    } catch {
-      /* no notification tray mid-shutdown */
-    }
-    this.selfDisables += 1;
-    try {
-      this.disableWith();
-    } catch (error) {
-      this.reportError('self-disable', error);
-    }
   }
 
   /**
@@ -897,112 +770,6 @@ export default class AdrtExtension extends Extension {
     if (GLib.getenv('ADRT_TEST_TRIGGERS') !== '1') return false;
     this.indicator?.destroyChromeActors();
     return true;
-  }
-
-  // ---------------------------------------------------------------- session
-
-  private currentMode(): SessionMode {
-    return sessionMode.currentMode as SessionMode;
-  }
-
-  private isPaused(): boolean {
-    // §19: while the drain finishes the backlog a pause caught, policy runs as
-    // if unpaused; new work is still refused where it is pushed.
-    if (this.session?.isDrainingBacklog() ?? false) return false;
-    // The one pause predicate: the session machine (lock or a manual pause) and
-    // — only when the user opted in — screen sharing. Sharing is re-derived from
-    // the live mode plus the setting on every call (this is the drain's gate),
-    // never latched by a signal handler, so a missed transition cannot strand it.
-    if (this.sessionMachine.isPaused) return true;
-    return this.sessionMachine.state.mode === 'screen-sharing' && this.pauseDuringSharing();
-  }
-
-  /** §19: whether the user asked adrt to pause while sharing/remote desktop. */
-  private pauseDuringSharing(): boolean {
-    return this.settings.boolean('pause-during-sharing', false);
-  }
-
-  /**
-   * §19: the user pause (`kb-toggle-pause` and the `TogglePause` trigger). It
-   * lives in the session machine (folded into `isPaused`), so the tiling engine,
-   * the drain and the indicator all see it with no extra plumbing. Resuming asks
-   * for one reconcile so windows that moved while paused are re-tiled.
-   */
-  private setTilingPaused(paused: boolean): void {
-    if (this.sessionMachine.manualPause === paused) {
-      return;
-    }
-    this.sessionMachine.setManualPause(paused);
-    if (paused) {
-      this.stopMotionWatch();
-      // Reuse the session pause suppression so the border state and every
-      // `border_visible` reader see a manual pause exactly like a locked session.
-      this.suppressBorder('pause');
-    } else {
-      this.unsuppressBorder('pause');
-      this.session.scheduleReconcile('manual-resume');
-    }
-    this.syncIndicator();
-    this.syncPreview();
-    this.history.log('session_mode', { mode: this.sessionMachine.state.mode, paused: this.isPaused(), manualPaused: paused });
-  }
-
-  private applySessionMode(mode: SessionMode, initial = false): void {
-    // §19: read the pre-transition sharing-pause before the machine moves, so
-    // resuming retiles exactly when the mode we are leaving was actually paused.
-    const leftSharingPaused = this.sessionMachine.state.mode === 'screen-sharing' && this.pauseDuringSharing();
-    const effects = this.sessionMachine.setMode(mode);
-    // Gate the sharing suppression on the setting: with it off, sharing is
-    // ignored entirely (no highlight suppression, tiling continues); with it on,
-    // the highlight hides and `isPaused()` stops reflowing.
-    const suppression = effects.indicatorSuppression === 'sharing' && !this.pauseDuringSharing()
-      ? null
-      : effects.indicatorSuppression;
-    if (suppression !== null) {
-      this.suppressBorder(suppression);
-    } else {
-      this.unsuppressBorder('sharing');
-      // A manual pause is a suppression of its own; do not clear it on an
-      // unrelated session transition.
-      if (this.sessionMachine.manualPause) this.suppressBorder('pause');
-      else this.unsuppressBorder('pause');
-    }
-    this.session.setScanning(effects.scanTickRunning);
-    this.syncIndicator();
-    if (!initial && (effects.retileOnResume || (mode === 'user' && leftSharingPaused))) {
-      this.session.scheduleReconcile('session-resume');
-    }
-    this.history.log('session_mode', { mode, paused: effects.paused, sharingPaused: leftSharingPaused });
-  }
-
-  /**
-   * §19: the sharing suppression is a property of the mode and the setting, not
-   * of the signal that entered it. Re-derived on the periodic pass so a missed
-   * transition (or a setting flip while already sharing) cannot leave it stale.
-   */
-  private refreshSharingSuppression(): void {
-    const want = this.sessionMachine.state.mode === 'screen-sharing' && this.pauseDuringSharing();
-    const active = this.border.isSuppressed('sharing');
-    if (want === active) return;
-    if (want) this.suppressBorder('sharing');
-    else this.unsuppressBorder('sharing');
-    this.syncIndicator();
-  }
-
-  /**
-   * §19: re-derive the session-mode property from the live `sessionMode` on the
-   * periodic pass. The `notify::current-mode` signal is the primary path, but a
-   * missed or raced transition (a lock during a Shell restart) must not leave
-   * adrt unpaused while the session is locked. Reads only; `applySessionMode`
-   * runs the effects on a real change.
-   */
-  private refreshSessionMode(): void {
-    // A test-injected mode (SimulateSessionMode) owns the state until a real
-    // session transition clears it; re-deriving would revert the injection.
-    if (this.injectedMode !== null) return;
-    const mode = this.currentMode();
-    if (mode === this.sessionMachine.state.mode) return;
-    this.applySessionMode(mode);
   }
 
   private subscribeHost(): void {
@@ -1112,8 +879,7 @@ export default class AdrtExtension extends Extension {
     switch (event.type) {
       case 'session-mode':
         // A live session transition always wins over a test-injected mode.
-        this.injectedMode = null;
-        this.applySessionMode(this.currentMode());
+        this.mode.onLiveTransition();
         break;
       case 'overview':
         this.onOverviewChanged(event.visible);
@@ -1131,7 +897,7 @@ export default class AdrtExtension extends Extension {
   }
 
   private onWorkspaceAnimation(): void {
-    if (this.isPaused()) return;
+    if (this.mode.isPaused()) return;
     this.suppressForWorkspaceSwitch();
   }
 
@@ -1177,7 +943,7 @@ export default class AdrtExtension extends Extension {
       this.unsuppressBorder('drag');
       this.startMotionWatch();
       // §Self-heal: the gesture a deferred restart was waiting for has ended.
-      this.reconsiderDeferredRestart();
+      this.recovery?.reconsiderDeferredRestart();
     }
     this.syncPreview();
     this.syncIndicator();
@@ -1230,12 +996,12 @@ export default class AdrtExtension extends Extension {
   private onMotionTick(): boolean {
     // §Self-heal: a restart deferred by a live interaction is re-checked here,
     // on the periodic tick, so it lands as soon as the obstacle clears.
-    this.reconsiderDeferredRestart();
+    this.recovery?.reconsiderDeferredRestart();
     // §22 extension: the recorder's ~20 Hz state sample rides this existing tick
     // (a no-op with no recording). It runs before the pause/park returns below so
     // a still recording still sees the state that changed.
     this.recorder?.tick();
-    if (this.isPaused()) {
+    if (this.mode.isPaused()) {
       this.stopMotionWatch();
       return GLib.SOURCE_REMOVE;
     }
@@ -1408,7 +1174,7 @@ export default class AdrtExtension extends Extension {
    * plan it applies nothing.
    */
   private periodicRetile(): void {
-    if (this.isPaused()) {
+    if (this.mode.isPaused()) {
       this.motionSkip = 'paused';
       return;
     }
@@ -1445,7 +1211,7 @@ export default class AdrtExtension extends Extension {
       this.border.updateRect(focused.surface.frame);
     }
     const snapshot = this.border.snapshot();
-    const visible = snapshot.visible && snapshot.rect !== null && !this.isPaused() && !overview.visible;
+    const visible = snapshot.visible && snapshot.rect !== null && !this.mode.isPaused() && !overview.visible;
     if (visible && snapshot.rect !== null) {
       this.indicator.show(snapshot.rect);
     } else {
@@ -1480,7 +1246,7 @@ export default class AdrtExtension extends Extension {
    */
   private syncPreview(): void {
     const target = this.session.isDragging ? this.session.previewTarget() : null;
-    const hidden = target === null || this.isPaused() || overview.visible;
+    const hidden = target === null || this.mode.isPaused() || overview.visible;
     if (hidden) {
       this.indicator.hidePreview();
     } else {
@@ -1509,7 +1275,7 @@ export default class AdrtExtension extends Extension {
   }
 
   private onWorkspaceActorMoved(): void {
-    if (this.isPaused()) return;
+    if (this.mode.isPaused()) return;
     this.suppressForWorkspaceSwitch();
   }
 
@@ -1630,7 +1396,7 @@ export default class AdrtExtension extends Extension {
       ['disable-animations', () => this.applyAnimationSetting()],
       // §19: flipping the sharing option re-derives the suppression at once
       // (on or off) without waiting for a session transition.
-      ['pause-during-sharing', () => this.refreshSharingSuppression()],
+      ['pause-during-sharing', () => this.mode.refreshSharingSuppression()],
       // Changing a shortcut re-registers the bindings so it takes effect at once.
       ...this.keybindingSettingNames().map((key): [string, () => void] => [key, () => {
         this.unregisterKeybindings();
@@ -1759,12 +1525,12 @@ export default class AdrtExtension extends Extension {
       case 'kb-recording-toggle':
         // The hotkey goes through the same one action as the D-Bus trigger, so
         // both always agree.
-        this.toggleRecording();
+        this.harness.toggleRecording();
         break;
       case 'kb-toggle-pause':
         // The user's pause home: the same predicate the old panel row and the
         // D-Bus TogglePause trigger drive.
-        this.setTilingPaused(!this.sessionMachine.manualPause);
+        this.mode.setTilingPaused(!this.sessionMachine.manualPause);
         break;
       case 'kb-focus-next':
         this.session.focusCycle();
@@ -1847,101 +1613,6 @@ export default class AdrtExtension extends Extension {
     this.session.nudgeFocused(direction, this.settings.int('nudge-step', 5));
   }
 
-  // ------------------------------------------------------------ persistence
-
-  private stateFile(): string {
-    return `${dataDir()}/state.json`;
-  }
-
-  private restoreState(): void {
-    const text = readText(this.stateFile());
-    if (text === null) return;
-    let raw: unknown;
-    try {
-      raw = JSON.parse(text);
-    } catch (e) {
-      console.error(`[adrt] state.json is corrupt: ${(e as Error).message}`);
-      return;
-    }
-    if (typeof raw !== 'object' || raw === null) return;
-    const state = raw as Record<string, unknown>;
-    if (state.ratios !== undefined) {
-      this.tiling.loadRatios(
-        state.ratios as Record<string, number>,
-        (state.swapPairs as string[] | undefined) ?? [],
-      );
-    }
-  }
-
-  private saveState(): void {
-    if (this.tiling === undefined) return;
-    const payload = {
-      version: 1,
-      ratios: this.tiling.getRatios(),
-      swapPairs: this.tiling.getSwapPairs(),
-    };
-    writeAtomic(this.stateFile(), JSON.stringify(payload));
-  }
-
-  /** §9: display memory keyed by connector, persisted beside the state. */
-  private displayMemoryFile(): string {
-    return `${dataDir()}/display-memory.json`;
-  }
-
-  private restoreDisplayMemory(): void {
-    const raw = readJson(this.displayMemoryFile());
-    if (raw === null || typeof raw !== 'object') return;
-    const entries = (raw as { entries?: unknown }).entries;
-    if (!Array.isArray(entries)) return;
-    this.session.setDisplayMemory(entries as MemoryEntry[]);
-  }
-
-  private saveDisplayMemory(): void {
-    if (this.session === undefined) return;
-    writeAtomic(
-      this.displayMemoryFile(),
-      JSON.stringify({ version: 1, at: Date.now(), entries: this.session.getDisplayMemory() }),
-    );
-  }
-
-  private migrate(): void {
-    const current = this.settings.int('settings-version', 0);
-    if (current >= EXTENSION_VERSION) return;
-    this.settings.write('settings-version', EXTENSION_VERSION);
-    this.history.log('config_imported', { migratedFrom: current, to: EXTENSION_VERSION });
-  }
-
-  /**
-   * §23 decisions 91-93: fold legacy rule floats into the Never-tile list and
-   * carry a legacy global `rules-enabled:false` over as per-rule
-   * `enabled:false`. Idempotent: after the first run `rules-json` holds no
-   * legacy flags and `changed` is false.
-   */
-  private migrateRuleFloats(): void {
-    const migration = migrateRulesJson(
-      this.settings.string('rules-json', '[]'),
-      this.settings.boolean('rules-enabled', true),
-    );
-    if (migration.neverTile.length > 0) {
-      const merged = [...this.settings.strv('exception-apps')];
-      for (const glob of migration.neverTile) {
-        if (!merged.includes(glob)) merged.push(glob);
-      }
-      this.settings.write('exception-apps', merged);
-      this.history.log('rules_migrated', { neverTile: migration.neverTile });
-    }
-    if (migration.changed) this.settings.write('rules-json', JSON.stringify(migration.rules));
-    if (migration.errors.length > 0) {
-      this.journal.record('model', 'rules_invalid', { errors: migration.errors });
-    }
-  }
-
-  private firstRun(): void {
-    if (this.settings.boolean('first-run-complete', false)) return;
-    this.settings.write('first-run-complete', true);
-    notify('Adrt', 'Adrt tiles windows into pairs per monitor. Press Super+Z to undo a retile.');
-  }
-
   // ------------------------------------------------------------ notifications
 
   /**
@@ -1984,10 +1655,6 @@ export default class AdrtExtension extends Extension {
     this.focusReason = reason;
   }
 
-  private simulateNotice(key: string, subject: string): boolean {
-    return this.toast(key, subject);
-  }
-
   // --------------------------------------------------- trace (Stage 6, §22)
 
   /** Journal one model-level event for the replayable trace. */
@@ -1995,68 +1662,7 @@ export default class AdrtExtension extends Extension {
     this.journal.record('model', event, fields);
   }
 
-  /** The model state a trace replays from: the workspaces and their occupants. */
-  private buildTraceInitial(): TraceInitial {
-    const count = Math.max(1, this.session.countWorkspaces());
-    const workspaces: TraceWorkspace[] = [];
-    for (let index = 0; index < count; index++) {
-      workspaces.push({ id: index, slots: [null, null], minimized: [], floats: [] });
-    }
-    const windows: TraceInitial['windows'] = [];
-    const slots = new Map<number, 0 | 1>();
-    for (const tracked of this.session.windows.values()) {
-      const workspace = workspaces[tracked.surface.workspaceId];
-      if (workspace === undefined) continue;
-      tracked.surface.refresh();
-      windows.push({
-        id: tracked.id,
-        appId: tracked.surface.appId,
-        title: tracked.surface.title,
-        screenId: tracked.surface.screenId,
-        rect: tracked.surface.frame,
-        min: tracked.minSize,
-        max: tracked.maxSize,
-        maximized: tracked.surface.flags.maximized,
-      });
-      if (tracked.surface.flags.minimized) {
-        (workspace.minimized ??= []).push(tracked.id);
-        continue;
-      }
-      if (tracked.surface.flags.floating) {
-        (workspace.floats ??= []).push(tracked.id);
-        continue;
-      }
-      const slot = this.slotOf(tracked.surface.frame, this.workAreaOf(tracked.surface.screenId), this.axisOf(tracked.surface.screenId));
-      if ((slot === 0 || slot === 1) && workspace.slots[slot] === null && !slots.has(tracked.id)) {
-        workspace.slots[slot] = tracked.id;
-        slots.set(tracked.id, slot);
-      } else {
-        (workspace.floats ??= []).push(tracked.id);
-      }
-    }
-    return { viewed: this.host.activeWorkspaceId(), workspaces, windows };
-  }
-
-  /** Capture the recording's initial model state (called at enable). */
-  private captureRecordInitial(): void {
-    this.recordInitial = this.buildTraceInitial();
-  }
-
-  /** §22/Stage 6: the recorded journal + decisions as a replayable trace. */
-  private dumpTrace(limit: number): string {
-    const initial = this.recordInitial ?? this.buildTraceInitial();
-    const events: TraceEntry[] = this.journal.tail(4000, 'model');
-    const decisions: TraceEntry[] = this.journal.decisionsTail(limit);
-    return JSON.stringify({ version: 1, initial, events, decisions });
-  }
-
-  // ------------------------------------------------ platform probe, injection
-
-  /** The capability JSON the harness depends on (§40.4, Stage 0). */
-  /** The screen with this Mutter index, from the last screen read (§10). */
-  private screenAt(monitor: number): Screen | undefined {
-    return this.host.screenByIndex(monitor) ?? undefined;
-  }
+  // ----------------------------------------------------- input injection
 
   /** The screen whose geometry contains a rect's centre, if any. */
   private screenIndexForRect(rect: Rect): number | undefined {
@@ -2067,87 +1673,6 @@ export default class AdrtExtension extends Extension {
       if (cx >= g.x && cx <= g.x + g.width && cy >= g.y && cy <= g.y + g.height) return screen.index;
     }
     return undefined;
-  }
-
-  /** The work area of one monitor, from the last screen read (§10). */
-  private workAreaOf(monitor: number): Rect {
-    const screen = this.screenAt(monitor);
-    if (screen === undefined) return { x: 0, y: 0, width: 0, height: 0 };
-    return screen.workArea ?? screen.geometry;
-  }
-
-  private probePlatform(): string {
-    let virtualInput = false;
-    try {
-      // GNOME 51 removes Clutter.get_default_backend(); go through compat.
-      const seat = compat.defaultSeat();
-      virtualInput = typeof seat?.create_virtual_device === 'function';
-    } catch {
-      virtualInput = false;
-    }
-    let remoteDesktop = false;
-    try {
-      const reply = Gio.DBus.session.call_sync(
-        'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus', 'NameHasOwner',
-        new GLib.Variant('(s)', ['org.gnome.Mutter.RemoteDesktop']),
-        new GLib.VariantType('(b)'), Gio.DBusCallFlags.NONE, 200, null);
-      remoteDesktop = (reply.deepUnpack() as [boolean])[0] === true;
-    } catch {
-      remoteDesktop = false;
-    }
-    let gnome = 'unknown';
-    try {
-      const config = (globalThis as { imports?: GjsImports }).imports?.misc?.config;
-      if (typeof config?.PACKAGE_VERSION === 'string') gnome = config.PACKAGE_VERSION;
-    } catch {
-      gnome = 'unknown';
-    }
-    return JSON.stringify({
-      format: 'adrt.probe',
-      version: RELEASE_VERSION,
-      platform: 'gnome',
-      gnome,
-      session: Meta.is_wayland_compositor?.() === true ? 'wayland' : 'x11',
-      monitors: this.host.screens().length,
-      layoutRows: global.workspace_manager.layout_rows,
-      // §11.3: what the Shell exposes about refresh and adaptive sync, so a
-      // diagnostic can see whether a fixed or variable mode is active.
-      refresh: {
-        source: this.host.refreshRateSource,
-        screens: this.timing.screens().map((screen) => ({
-          index: screen.index,
-          refreshRate: screen.refreshRate,
-          frameIntervalMs: screen.frameIntervalMs,
-        })),
-        observedFrameIntervalMs: this.timing.resolve().observedFrameIntervalMs,
-        variableRefresh: this.timing.resolve().variableRefresh,
-        adaptiveSyncSupported: this.host.adaptiveSyncSupported(),
-        adaptiveSyncReason: this.host.adaptiveSyncSupported()
-          ? 'org.gnome.mutter experimental-features includes variable-refresh-rate'
-          : 'Mutter exposes no VRR capability and the experimental feature is off',
-      },
-      // §18: the OS animation state adrt reads (and never writes).
-      animations: {
-        enabled: this.timing.animationsEnabled(),
-        reducedMotion: this.timing.reducedMotion(),
-        slowDownFactor: this.timing.slowDownFactor(),
-      },
-      laters: {
-        available: typeof global.compositor?.get_laters === 'function',
-        beforeRedraw: true,
-      },
-      virtualInput,
-      remoteDesktop,
-      cursor: {
-        ...compat.cursorCapabilities(),
-        method: compat.cursorWarpMethod(),
-      },
-      injection: this.injectionEnabled,
-      grabOp: this.host.canDetectUserGrab(),
-      devkit: compat.hasDevkit(),
-      paused: this.isPaused(),
-      journal: this.journal.lastSeq,
-    });
   }
 
   /**
@@ -2282,590 +1807,9 @@ export default class AdrtExtension extends Extension {
    * the arities still hold.
    */
   private guardedHandlers(): Handlers {
-    const raw = this.handlers() as unknown as Record<string, (...args: unknown[]) => unknown>;
+    const raw = this.harness.handlers() as unknown as Record<string, (...args: unknown[]) => unknown>;
     const dispatch = buildDispatch(TRIGGERS, raw, (name, handler) => this.guardValue(`dbus:${name}`, handler));
     return Object.assign({} as Handlers, dispatch);
-  }
-
-  private handlers(): Handlers {
-    return {
-      DumpState: () => this.dumpState(),
-      ProbePlatform: () => this.probePlatform(),
-      DumpEvents: (limit, filter) => JSON.stringify(this.journal.tail(limit, filter)),
-      DumpDecisions: (limit) => JSON.stringify(this.journal.decisionsTail(limit)),
-      DumpTrace: (limit) => this.dumpTrace(limit),
-      InjectPointerMove: (x, y) => this.injectPointerMove(x, y),
-      InjectPointerButton: (button, pressed) => this.injectPointerButton(button, pressed),
-      InjectKey: (keyval, pressed) => this.injectKey(keyval, pressed),
-      SimulateNotice: (key, subject) => this.simulateNotice(key, subject),
-      SimulateBurst: (count, reason) => this.session.simulateBurst(count, reason),
-      LookupWindow: (id) => this.lookupWindow(id),
-      ListWindows: () => JSON.stringify(this.listWindows()),
-      ListMonitors: () => JSON.stringify(this.host.screens().map((screen) => screen.connector)),
-      GetSplitRatio: (workspace, monitor, axis) => this.tiling.getSplitRatioFor(workspace, monitor, axis as SplitAxis),
-      SetSplitRatio: (workspace, monitor, axis, ratio) => this.tiling.setSplitRatioFor(workspace, monitor, axis as SplitAxis, ratio),
-      Undo: () => this.session.undo(),
-      NudgeSplit: (direction, step) => this.session.nudgeFocused(direction, step),
-      MoveFocusedToWorkspace: (index) => this.session.moveFocusedToWorkspace(index),
-      ReloadRules: () => {
-        this.session.invalidateAll();
-        return true;
-      },
-      ResetPerApp: (appId) => this.session.forgetApp(appId),
-      GetAdaptations: () => JSON.stringify(this.registry.legacyRows()),
-      ForgetAdaptation: (appId) => this.session.forgetApp(appId),
-      GetFloats: () => JSON.stringify(this.floatState()),
-      ForgetFloat: (appId) => this.session.setNeverTile(appId, false),
-      GetRegistry: () => JSON.stringify(this.registry.entries()),
-      SetNeverTile: (appId, value) => this.session.setNeverTile(appId, value),
-      ToggleNeverTile: (appId) => {
-        const value = this.registry.toggleNeverTile(appId);
-        this.session.setNeverTile(appId, value);
-        return value;
-      },
-      ForgetApp: (appId) => this.session.forgetApp(appId),
-      GetDisplayMemory: () => JSON.stringify(this.session.getDisplayMemory()),
-      ForgetDisplayMemory: () => {
-        this.session.setDisplayMemory([]);
-        this.saveDisplayMemory();
-        return true;
-      },
-      SimulateScreens: (json) => this.simulateScreens(json),
-      SimulateWorkArea: (connector, x, y, width, height) =>
-        this.host.setSimulatedWorkArea(connector, { x, y, width, height }),
-      ExportConfig: () => this.exportConfig(),
-      ImportConfig: (json, merge) => this.importConfig(json, merge ? 'merge' : 'replace'),
-      ListHistoryDays: () => JSON.stringify(this.history.days()),
-      SimulateGesture: (kind, dx, dy, points) => this.gestures.simulate(kind as GestureKind, dx, dy, points),
-      InjectSignal: (type, payload) => this.injectSignal(type, payload),
-      SimulateSessionMode: (mode) => this.simulateSessionMode(mode),
-      SimulateOverview: (visible) => {
-        if (overview.visible !== visible) {
-          if (visible) overview.show();
-          else overview.hide();
-        }
-        // Drive the same handler the overview signals use, so the state is
-        // consistent even if the shell reports visibility inconsistently.
-        this.onOverviewChanged(visible);
-        return true;
-      },
-      SimulateWorkspaceSwitch: (holdMs) => this.simulateWorkspaceSwitch(holdMs),
-      ActivateWindow: (id) => {
-        this.noteFocus('activate-window');
-        this.session.focus(id);
-        return true;
-      },
-      ActivateWorkspace: (index) => {
-        this.session.activateWorkspace(index);
-        return true;
-      },
-      ToggleFloat: (id) => this.session.toggleFloat(id),
-      SimulateResize: (a, b, ratio) => this.simulateResize(a, b, ratio),
-      SwapPair: (a, b) => this.session.swapPair(a, b),
-      InjectVerifyFailure: (id, count) => this.injectVerifyFailure(id, count),
-      FocusDirection: (direction) => {
-        this.noteFocus(`focus-${direction}`);
-        this.session.focusDirection(direction);
-        return true;
-      },
-      FocusCycle: () => {
-        this.noteFocus('focus-cycle');
-        this.session.focusCycle();
-        return true;
-      },
-      MoveToward: (direction) => {
-        this.session.moveToward(direction);
-        return true;
-      },
-      SpawnWindow: (argvJson, envJson) => this.spawnWindow(argvJson, envJson),
-      CloseWindow: (id) => this.closeWindow(id),
-      BeginDrag: (id) => this.session.beginDrag(id),
-      EndDrag: (id) => this.session.endDrag(id),
-      MoveWindow: (id, x, y, width, height) => this.moveWindow(id, x, y, width, height),
-      MoveToWorkspace: (id, index) => this.moveToWorkspace(id, index),
-      MarkWorkspaceCached: (id, index) => this.session.markWorkspaceCached(id, index),
-      MoveDirection: (direction) => {
-        this.noteFocus(`move-${direction}`);
-        this.session.moveToward(direction);
-        return true;
-      },
-      ToggleFullscreen: (id) => this.session.toggleFullscreen(id),
-      QuitFocused: () => this.session.closeFocused(),
-      SimulateAbove: (id) => this.session.simulateAbove(id),
-      SimulateSticky: (id, sticky) => this.session.simulateSticky(id, sticky),
-      SimulateWorkspaceReorder: (from, to) => this.session.simulateWorkspaceReorder(from, to),
-      SimulateWorkspaceOrientation: (vertical) => this.session.simulateWorkspaceOrientation(vertical),
-      CursorToCentre: () => this.session.centreCursorNow(),
-      TogglePause: () => {
-        this.setTilingPaused(!this.sessionMachine.manualPause);
-        return true;
-      },
-      InjectFault: (context) => this.simulateFault(context),
-      SimulateChromeTeardown: () => this.simulateChromeTeardown(),
-      StartFrameRecording: () => {
-        this.animator.startRecording();
-        return true;
-      },
-      StopFrameRecording: () => {
-        this.animator.stopRecording();
-        return true;
-      },
-      StartRecording: (maxSeconds) => this.startRecording(maxSeconds),
-      StopRecording: () => this.stopRecording(),
-      RecordingStatus: () => this.recordingStatus(),
-      ToggleRecording: () => this.toggleRecordingState(),
-      SubmitRecordingNote: (text) => this.submitRecordingNote(text),
-      PromptSetText: (text) => this.recordingPrompt?.setText(text) ?? false,
-      PromptPressSave: () => this.recordingPrompt?.pressSave() ?? false,
-      PromptPressCancel: () => this.recordingPrompt?.pressCancel() ?? false,
-      SetSetting: (key, value) => this.writeSetting('org.gnome.shell.extensions.adrt', key, value),
-      SetSchemaSetting: (schema, key, value) => this.writeSetting(schema, key, value),
-      MinimizeWindow: (id) => {
-        if (!this.session.windows.has(id)) return false;
-        this.host.minimize(id);
-        return true;
-      },
-      MaximizeWindow: (id) => {
-        if (!this.session.windows.has(id)) return false;
-        this.host.maximize(id);
-        return true;
-      },
-      UnmaximizeWindow: (id) => {
-        if (!this.session.windows.has(id)) return false;
-        this.host.unmaximize(id);
-        return true;
-      },
-      ResetLayoutState: () => {
-        this.tiling.loadRatios({}, []);
-        this.changes.clear();
-        this.saveState();
-        this.session.clearSignatures();
-        // Test isolation: a layout reset also clears a manual pause, so a
-        // scenario that forgot to resume cannot leak a paused session into the
-        // next one on the same worker.
-        if (this.sessionMachine.manualPause) {
-          this.sessionMachine.setManualPause(false);
-          if (this.sessionMachine.state.mode === 'user') this.unsuppressBorder('pause');
-          this.syncIndicator();
-        }
-        this.session.scheduleReconcile('reset-layout');
-        return true;
-      },
-    };
-  }
-
-  /**
-   * Test trigger (§40.4): open a client window from inside the shell.
-   *
-   * `argvJson` is a JSON array (or a legacy space-separated command string) and
-   * `envJson` is a JSON object/array of extra environment variables. The
-   * launcher inherits the Shell's environment (the nested Wayland socket, the
-   * private session bus and the isolated XDG tree) and overlays the requested
-   * entries, so a flatpak/snap/AppImage or an Electron client can be launched
-   * with the flags it needs.
-   */
-  private spawnWindow(argvJson: string, envJson: string): number {
-    const argv = parseSpawnArgv(argvJson);
-    if (argv.length === 0) return 0;
-    try {
-      const launcher = Gio.SubprocessLauncher.new(Gio.SubprocessFlags.NONE);
-      for (const [key, value] of parseSpawnEnv(envJson)) launcher.setenv(key, value, true);
-      const process = launcher.spawnv(argv);
-      const identifier = process.get_identifier();
-      return identifier === null ? 0 : Number.parseInt(identifier, 10);
-    } catch (e) {
-      console.error(`[adrt] SpawnWindow failed: ${(e as Error).message}`);
-      return 0;
-    }
-  }
-
-  /** Test trigger (§40.4): close one window without killing its process. */
-  private closeWindow(id: number): boolean {
-    const tracked = this.session.windows.get(id);
-    if (tracked === undefined) return false;
-    // Never delete a popup: Mutter has no `close` vfunc for `xdg_popup`, so this
-    // segfaults the Shell (the live crash). `register()` refuses them now; this
-    // is the last line of defence.
-    if (compat.isPopupWindow(tracked.win)) return false;
-    tracked.win.delete(global.get_current_time());
-    return true;
-  }
-
-  /** Test trigger: place a window directly, to emulate a drag. */
-  private moveWindow(id: number, x: number, y: number, width: number, height: number): boolean {
-    if (!this.session.windows.has(id)) return false;
-    this.host.applyFrame(id, { x, y, width, height });
-    return true;
-  }
-
-  /** Test trigger: move a window to another workspace the way the overview
-   * does — straight through Mutter, so the session sees a `workspace-changed`
-   * signal and must retile both the old and the new workspace. */
-  private moveToWorkspace(id: number, index: number): boolean {
-    if (!this.session.windows.has(id)) return false;
-    if (index < 0 || index >= global.workspace_manager.get_n_workspaces()) return false;
-    this.host.applyWorkspace(id, index);
-    return true;
-  }
-
-  /** The pair axis of a monitor: portrait screens and vertical workspaces stack. */
-  private axisOf(monitor: number): 'horizontal' | 'vertical' {
-    const screen = this.screenAt(monitor);
-    const rows = global.workspace_manager.layout_rows;
-    if (rows === -1) return 'vertical';
-    if (screen !== undefined && screen.geometry.height > screen.geometry.width) return 'vertical';
-    return 'horizontal';
-  }
-
-  /**
-   * Which slot a window occupies, derived from its rectangle: 0 for the first
-   * half of the work area along the axis, 1 for the second, null when it spans
-   * the middle (a maximized single, a float, a window that refuses to shrink).
-   * Stage 2's placement module makes this authoritative; today it is a reading.
-   */
-  private slotOf(rect: Rect, area: Rect, axis: 'horizontal' | 'vertical'): number | null {
-    const span = axis === 'vertical' ? area.height : area.width;
-    if (span <= 0) return null;
-    const start = (axis === 'vertical' ? rect.y - area.y : rect.x - area.x) + (axis === 'vertical' ? rect.height : rect.width) / 2;
-    if (Math.abs(start - span / 2) < span * 0.1) return null;
-    return start < span / 2 ? 0 : 1;
-  }
-
-  /** §1: the live workspace-mode settings, for diagnostics and the D-Bus test. */
-  private readWorkspaceModeSettings(): { dynamic: boolean; onlyPrimary: boolean; numWorkspaces: number } {
-    try {
-      const mutter = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
-      const wm = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.preferences' });
-      return {
-        dynamic: mutter.get_boolean('dynamic-workspaces'),
-        onlyPrimary: mutter.get_boolean('workspaces-only-on-primary'),
-        numWorkspaces: wm.get_int('num-workspaces'),
-      };
-    } catch {
-      return { dynamic: true, onlyPrimary: true, numWorkspaces: 1 };
-    }
-  }
-
-  // -------------------------------------------- bug recorder (§22 extension)
-
-  /** Start the bug recorder; returns its file path or a clear error string. */
-  private startRecording(maxSeconds: number): string {
-    if (this.recorder === null) return 'error: recorder unavailable';
-    try {
-      return this.recorder.start(maxSeconds);
-    } catch (error) {
-      this.reportError('start-recording', error);
-      return `error: ${(error as Error).message}`;
-    }
-  }
-
-  /**
-   * Stop the bug recorder (a user stop). Returns the path; the footer is
-   * deferred so the observation prompt can write a note first.
-   */
-  private stopRecording(): string {
-    if (this.recorder === null) return 'error: recorder unavailable';
-    try {
-      const path = this.recorder.stop('user', true);
-      if (!path.startsWith('error:')) this.showRecordingPrompt();
-      return path;
-    } catch (error) {
-      this.reportError('stop-recording', error);
-      return `error: ${(error as Error).message}`;
-    }
-  }
-
-  private recordingStatus(): string {
-    if (this.recorder === null) {
-      return '{"recording":false,"path":null,"elapsedMs":0,"bytes":0,"events":0,"snapshots":0,"stopReason":null,"promptOpen":false,"note":"","promptMechanism":null,"promptGrab":false,"promptFocus":false,"promptRect":null}';
-    }
-    // The prompt fields are the extension's view of the UI (add-only), so a test
-    // can prove the modal grab, the key focus and the on-screen rect are real.
-    return JSON.stringify({
-      ...this.recorder.describe(),
-      promptMechanism: this.recordingPrompt?.kind ?? null,
-      promptGrab: this.recordingPrompt?.hasGrab ?? false,
-      promptFocus: this.recordingPrompt?.hasKeyFocus ?? false,
-      promptRect: this.recordingPrompt?.contentRect ?? null,
-    });
-  }
-
-  /**
-   * The one action shared by the Super+Shift+R hotkey and the D-Bus
-   * `ToggleRecording` trigger: flip recording on/off in place. Stopping shows
-   * the observation prompt; starting closes any prompt left from a previous
-   * stop so its file is closed with no note.
-   */
-  private toggleRecording(): void {
-    if (this.recorder === null) return;
-    if (this.recorder.isRecording) {
-      this.stopRecording();
-      return;
-    }
-    this.recordingPrompt?.close();
-    this.recorder.start(0);
-  }
-
-  /** The D-Bus `ToggleRecording` trigger: toggle, then return the new status. */
-  private toggleRecordingState(): string {
-    this.toggleRecording();
-    return this.recordingStatus();
-  }
-
-  /** Show the observation prompt for a deferred user stop. */
-  private showRecordingPrompt(): void {
-    if (this.recordingPrompt === null) return;
-    this.recordingPrompt.show({
-      onSubmit: (text) => this.submitRecordingNote(text),
-      onCancel: () => {
-        this.recorder?.cancelNote();
-      },
-    });
-  }
-
-  /**
-   * D-Bus `SubmitRecordingNote` and the prompt's Save: close the deferred stop
-   * with the note. Returns false when no stop is awaiting one.
-   */
-  private submitRecordingNote(text: string): boolean {
-    if (this.recorder === null || !this.recorder.isAwaitingNote) return false;
-    this.recordingPrompt?.close();
-    const path = this.recorder.finalizeNote(text);
-    return !path.startsWith('error:');
-  }
-
-  /**
-   * The model subset one `state` line carries: every window, the focused id, the
-   * border, the drop preview, the drag state, the monitors and the counters.
-   * Deliberately not the full `dumpState()` (z-order, registry, …), which would
-   * be written 20 times a second.
-   */
-  private recordSnapshot(): Record<string, unknown> {
-    const windows = [...this.session.windows.values()].map((tracked) => {
-      tracked.surface.refresh();
-      return {
-        id: tracked.id,
-        appId: tracked.surface.appId,
-        monitor: tracked.surface.screenId,
-        workspace: tracked.surface.workspaceId,
-        rect: { ...tracked.surface.frame },
-        layer: tracked.surface.layer,
-        minimized: tracked.surface.flags.minimized,
-        maximized: tracked.surface.flags.maximized,
-        fullscreen: tracked.surface.flags.fullscreen,
-        tileable: this.session.classify(tracked).tileable,
-      };
-    });
-    const preview = this.indicator.describePreview();
-    const target = this.session.isDragging ? this.session.previewTarget() : null;
-    return {
-      windows,
-      focused: this.session.focused()?.id ?? null,
-      border: this.border.snapshot(),
-      preview: { visible: preview.visible, rect: preview.rect, kind: target?.kind ?? null },
-      drag: this.session.dragState(),
-      monitors: this.host.screens().map((screen) => ({ ...screen })),
-      counters: this.session.counters(),
-    };
-  }
-
-  private dumpState(): string {
-    const monitors = this.host.screens().map((screen) => ({ ...screen }));
-    // §23: the rules the tiler would use, with the parse errors surface — the
-    // runtime never silently drops an invalid rule.
-    const rulesParse = this.settings.rules();
-    const windows = [...this.session.windows.values()].map((tracked) => {
-      tracked.surface.refresh();
-      tracked.surface.captureZ();
-      return {
-        id: tracked.id,
-        windowType: tracked.win.get_window_type(),
-        cls: tracked.surface.appId,
-        identity: tracked.identityKey,
-        identitySource: tracked.identitySource,
-        provisional: tracked.provisional,
-        instanceId: tracked.instanceId,
-        ordinal: this.registry.ordinalFor(tracked.appKey, tracked.instanceId) ?? null,
-        neverTile: this.registry.isNeverTile(tracked.appKey),
-        title: tracked.surface.title,
-        version: tracked.surface.appVersion,
-        workspace: tracked.surface.workspaceId,
-        monitor: tracked.surface.screenId,
-        rect: tracked.surface.frame,
-        layer: tracked.surface.layer,
-        z: tracked.surface.zPosition,
-        maximized: tracked.surface.flags.maximized,
-        minimized: tracked.surface.flags.minimized,
-        fullscreen: tracked.surface.flags.fullscreen,
-        above: tracked.surface.flags.above,
-        transient: tracked.surface.flags.transient,
-        slot: this.slotOf(tracked.surface.frame, this.workAreaOf(tracked.surface.screenId), this.axisOf(tracked.surface.screenId)),
-        axis: this.axisOf(tracked.surface.screenId),
-        tileable: this.session.classify(tracked).tileable,
-        reason: this.session.classify(tracked).reason,
-        profile: tracked.profile.name,
-        stubborn: tracked.stubborn,
-        clamped: tracked.clamped,
-        min: tracked.minSize,
-        max: tracked.maxSize,
-      };
-    });
-    return JSON.stringify({
-      format: 'adrt.state',
-      version: EXTENSION_VERSION,
-      platform: 'gnome',
-      paused: this.isPaused(),
-      mode: this.sessionMachine.state.mode,
-      userPaused: this.sessionMachine.manualPause,
-      pauseDuringSharing: this.pauseDuringSharing(),
-      panel: {
-        present: false,
-        paused: this.isPaused(),
-        indicatorEnabled: this.settings.boolean('active-window-indicator', true),
-        recording: this.recorder?.isRecording ?? false,
-        pauseLabel: '',
-        indicatorLabel: '',
-        recordLabel: '',
-      },
-      rules: { count: rulesParse.rules.length, errors: rulesParse.errors },
-      recording: this.recorder?.describe() ?? {
-        recording: false,
-        path: null,
-        elapsedMs: 0,
-        bytes: 0,
-        events: 0,
-        snapshots: 0,
-        stopReason: null,
-        promptOpen: false,
-        note: '',
-      },
-      workspaceMode: this.readWorkspaceModeSettings(),
-      errors: this.errorCount,
-      // §Self-heal diagnostics (add-only): the recovery counters and the last
-      // caught error, so a restart is never silent in DumpState.
-      restarts: this.restarts,
-      selfDisables: this.selfDisables,
-      lastErrorAt: this.lastErrorAt,
-      flags: {
-        debug: {
-          enabled: this.settings.boolean('debug-enabled', false),
-          tiling: this.settings.boolean('debug-tiling', false),
-          focus: this.settings.boolean('debug-focus', false),
-          displays: this.settings.boolean('debug-displays', false),
-          undo: this.settings.boolean('debug-undo', false),
-          session: this.settings.boolean('debug-session', false),
-        },
-        record: this.settings.boolean('record', false),
-        perf: this.settings.boolean('perf-enabled', true),
-      },
-      activeWorkspace: this.host.activeWorkspaceId(),
-      workspaceLayoutRows: global.workspace_manager.layout_rows,
-      build: { version: RELEASE_VERSION, dirMtimeMs: this.buildDirMtimeMs },
-      timing: {
-        ...this.timing.describe(),
-        // The pre-enable accessibility state we found and never changed.
-        baseline: {
-          enableAnimations: this.animationsBaseline.enableAnimations,
-          slowDownFactor: this.animationsBaseline.slowDownFactor,
-        },
-        mutated: this.animationsMutated,
-        motionPollMs: this.derivedMotionPollMs(),
-        motionRetileTicks: this.derivedMotionRetileTicks(),
-        normaliseOnEnableMs: NORMALIZE_ON_ENABLE_MS,
-        coherenceSweepMs: COHERENCE_SWEEP_MS,
-        switchWatchdogMs: SWITCH_WATCHDOG_MS,
-        motionSelfMs: MOTION_SELF_MS,
-      },
-      tileAxis: this.session.tileAxis(),
-      focusedReason: this.focusReason,
-      gaps: {
-        base: this.settings.int('gaps-base', 8),
-        landscape: this.settings.int('gaps-landscape', -1),
-        portrait: this.settings.int('gaps-portrait', -1),
-      },
-      workspaceAnimating: this.workspaceAnimationActive(),
-      focused: this.session.focused()?.id ?? null,
-      pointer: (() => {
-        try {
-          const [px, py] = global.get_pointer();
-          return { x: px, y: py };
-        } catch {
-          return null;
-        }
-      })(),
-      workspaces: this.session.countWorkspaces(),
-      monitors,
-      windows,
-      ratios: this.tiling.getRatios(),
-      swapPairs: this.tiling.getSwapPairs(),
-      border: this.border.snapshot(),
-      indicator: {
-        ...this.indicator.describe(),
-        visible: this.indicator.isVisible,
-        ghosts: this.indicator.ghostCount,
-        suppressed: this.border.activeSuppressions,
-        preview: this.indicator.describePreview(),
-      },
-      overview: overview.visible,
-      workspaceActors: this.signals.groupSize('workspace-actors') / 2,
-      coherenceSweeps: this.session.coherenceSweepCount(),
-      coherenceFixes: this.session.coherenceFixCount(),
-      wsSwitchEvents: this.wsSwitchEvents,
-      motionSuppressions: this.motionSuppressions,
-      motionRetiles: this.motionRetiles,
-      motionTicks: this.motionTicks,
-      motionSkip: this.motionSkip,
-      drag: this.session.dragState(),
-      adaptations: this.registry.size,
-      registry: this.registry.entries(),
-      registrySize: this.registry.size,
-      neverTile: this.registry.entries().filter((entry) => entry.neverTile).map((entry) => entry.appId),
-      displayMemory: this.session.getDisplayMemory().map((entry) => entry.connector),
-      perf: this.session.perf(),
-      perfStats: {
-        queueDepth: this.session.counters().queuePending,
-        drains: this.session.counters().drains,
-        drainMsP50: this.session.counters().drainMsP50,
-        drainMsP95: this.session.counters().drainMsP95,
-        applyMsP50: this.session.counters().applyMsP50,
-        applyMsP95: this.session.counters().applyMsP95,
-        // P6e (add-only): named section call counts and total ms. Empty
-        // (`{}`) while the `trace-enabled` gate never turned the probe on.
-        sections: this.probe.snapshot(),
-      },
-      counters: {
-        ...this.session.counters(),
-        configBuilds: this.settings.configBuilds,
-        rulesParses: this.settings.rulesParses,
-        plansApplied: this.tiling.plansApplied,
-        hostLookups: this.host.hostLookups,
-        hostScans: this.host.hostScans,
-        logEvents: this.history.logEvents,
-      },
-      bounds: this.session.memoryBounds(),
-      animRecords: this.animator.recordsSnapshot(),
-    });
-  }
-
-  private lookupWindow(id: number): string {
-    const tracked = this.session.windows.get(id);
-    if (tracked === undefined) return 'null';
-    return JSON.stringify({
-      id,
-      cls: tracked.surface.appId,
-      title: tracked.surface.title,
-      rect: tracked.surface.frame,
-      workspace: tracked.surface.workspaceId,
-      tileable: this.session.classify(tracked).tileable,
-    });
-  }
-
-  private listWindows(): { id: number; cls: string; title: string }[] {
-    return [...this.session.windows.values()].map((tracked) => ({
-      id: tracked.id,
-      cls: tracked.surface.appId,
-      title: tracked.surface.title,
-    }));
   }
 
   /** Current floating windows keyed by app class. */
@@ -2878,225 +1822,6 @@ export default class AdrtExtension extends Extension {
       out[tracked.surface.appId] = list;
     }
     return out;
-  }
-
-  /** Current floating windows plus the durable neverTile app ids. */
-  private floatState(): { windows: Record<string, number[]>; neverTile: string[] } {
-    return {
-      windows: this.floatingWindows(),
-      neverTile: this.registry.entries().filter((entry) => entry.neverTile).map((entry) => entry.appId),
-    };
-  }
-
-  private exportConfig(): string {
-    const settings: Record<string, unknown> = {};
-    for (const key of this.settings.keys()) settings[key] = this.settings.read(key);
-    const adaptations: Record<string, AdaptationRecord> = {};
-    for (const entry of this.registry.entries()) {
-      if (Object.keys(entry.adapt).length === 0) continue;
-      adaptations[entry.appId] = {
-        appId: entry.appId,
-        firstSeen: entry.firstSeen,
-        lastSeen: entry.lastSeen,
-        observations: entry.windowsSeen,
-        unmaximizeDelayEma: entry.adapt.unmaximizeDelayMs,
-        settleTimeEma: entry.adapt.settleMs,
-        skipAnimation: entry.adapt.skipAnimation,
-      };
-    }
-    const bundle: Bundle = {
-      format: BUNDLE_FORMAT,
-      version: BUNDLE_VERSION,
-      exportedAt: new Date().toISOString(),
-      settings: settings as Bundle['settings'],
-      tracked: {
-        adaptations,
-        behavior: { floats: this.floatingWindows() },
-        registry: this.registry.toJSON(),
-      },
-    };
-    return serializeBundle(bundle);
-  }
-
-  private importConfig(json: string, mode: ImportMode): string {
-    const errors: string[] = [];
-    let incoming;
-    try {
-      incoming = normalizeBundle(JSON.parse(json), errors);
-    } catch (e) {
-      return JSON.stringify({ ok: false, errors: [(e as Error).message] });
-    }
-    if (incoming === null) return JSON.stringify({ ok: false, errors });
-    for (const [key, value] of Object.entries(incoming.settings)) {
-      if (this.settings.keys().includes(key)) this.settings.write(key, value);
-    }
-    const applied: string[] = [];
-    const incomingRegistry = incoming.tracked.registry;
-    if (mode === 'replace' && incomingRegistry !== undefined) {
-      this.registry.adopt({ version: 1, entries: incomingRegistry.entries as never[] });
-      applied.push(...this.registry.entries().map((entry) => entry.appId));
-    } else {
-      for (const [appId, record] of Object.entries(incoming.tracked.adaptations)) {
-        // §12: only the timing fields survive; a legacy geometric field is
-        // dropped by setAdapt, never imported.
-        this.registry.setAdapt(appId, {
-          unmaximizeDelayMs: record.unmaximizeDelayEma,
-          settleMs: record.settleTimeEma,
-          skipAnimation: record.skipAnimation,
-        });
-        applied.push(appId);
-      }
-      if (mode === 'replace' && incomingRegistry !== undefined) {
-        for (const entry of incomingRegistry.entries as Array<{ appId?: unknown }>) {
-          if (typeof entry.appId === 'string') this.registry.observe(entry.appId);
-        }
-      }
-    }
-    const importedFloats = incoming.tracked.behavior.floats;
-    if (importedFloats !== null && typeof importedFloats === 'object') {
-      const appIds = Object.keys(importedFloats as Record<string, unknown>);
-      for (const appId of appIds) this.registry.setNeverTile(appId, true);
-    }
-    this.session.refreshIdentities();
-    this.session.invalidateAll();
-    this.history.log('config_imported', { mode, applied: applied.length });
-    return JSON.stringify({ ok: true, applied, skipped: [] });
-  }
-
-  /** §9 `SimulateScreens`: hand the extension a fixture screen list, or clear it. */
-  private simulateScreens(json: string): boolean {
-    if (json.length === 0 || json === 'null') {
-      this.host.setSimulatedScreens(null);
-      return true;
-    }
-    let raw: unknown;
-    try {
-      raw = JSON.parse(json);
-    } catch {
-      return false;
-    }
-    if (!Array.isArray(raw)) return false;
-    const screens: Screen[] = [];
-    raw.forEach((item, position) => {
-      if (typeof item !== 'object' || item === null) return;
-      const m = item as Record<string, unknown>;
-      const geometry = {
-        x: Number(m.x ?? 0),
-        y: Number(m.y ?? 0),
-        width: Number(m.width ?? 0),
-        height: Number(m.height ?? 0),
-      };
-      if (geometry.width <= 0 || geometry.height <= 0) return;
-      const work = m.workArea;
-      screens.push({
-        index: typeof m.index === 'number' ? m.index : position,
-        connector: typeof m.connector === 'string' ? m.connector : `M${position}`,
-        geometry,
-        workArea:
-          typeof work === 'object' && work !== null
-            ? {
-                x: Number((work as Record<string, unknown>).x ?? 0),
-                y: Number((work as Record<string, unknown>).y ?? 0),
-                width: Number((work as Record<string, unknown>).width ?? 0),
-                height: Number((work as Record<string, unknown>).height ?? 0),
-              }
-            : undefined,
-        scale: typeof m.scale === 'number' ? m.scale : 1,
-        refreshRate: typeof m.refreshRate === 'number' ? m.refreshRate : 60,
-        isPrimary: m.isPrimary === true,
-      });
-    });
-    if (screens.length > 0 && !screens.some((screen) => screen.isPrimary)) screens[0].isPrimary = true;
-    this.host.setSimulatedScreens(screens.length > 0 ? screens : null);
-    return true;
-  }
-
-  private simulateResize(a: number, b: number, ratio: number): boolean {
-    const first = this.session.windows.get(a);
-    const second = this.session.windows.get(b);
-    if (first === undefined || second === undefined) return false;
-    const screen = this.host.screenByIndex(first.surface.screenId);
-    if (screen === null) return false;
-    const axis = screen.geometry.width >= screen.geometry.height ? 'horizontal' : 'vertical';
-    this.session.capturePairChange(a, b);
-    this.tiling.setRatio(ratioKey(screen.connector, first.surface.workspaceId, axis), ratio);
-    this.session.clearSignatures();
-    this.session.retile(first.surface.workspaceId, 'simulate-resize');
-    if (this.settings.boolean('dry-run-mode', false)) this.history.log('dry_run', { ratio });
-    return true;
-  }
-
-  private injectVerifyFailure(id: number, count: number): boolean {
-    if (!this.session.windows.has(id)) return false;
-    // The id matters: a scenario that fails one window's applies must not make
-    // every other window's applies look like a refusal too (that taught a bogus
-    // minimum in A52).
-    this.tiling.injectVerifyFailures(count, id);
-    return true;
-  }
-
-  private injectSignal(type: string, payload: string): boolean {
-    let data: Record<string, unknown> = {};
-    if (payload.length > 0) {
-      try {
-        data = JSON.parse(payload) as Record<string, unknown>;
-      } catch (e) {
-        console.error(`[adrt] InjectSignal payload is not JSON: ${(e as Error).message}`);
-        return false;
-      }
-    }
-    switch (type) {
-      case 'screens-changed':
-        this.host.emit({ type: 'screens-changed' });
-        break;
-      case 'focus-changed':
-        this.onFocusChanged(typeof data.id === 'number' ? data.id : null);
-        break;
-      case 'workspace-switched':
-        this.onWorkspaceSwitched({ from: Number(data.from ?? 0), to: Number(data.to ?? 0) });
-        break;
-      case 'surface-frame-changed': {
-        const tracked = this.session.windows.get(Number(data.id));
-        if (tracked !== undefined) {
-          tracked.refreshFrame();
-          this.onStateChanged();
-        }
-        break;
-      }
-      default:
-        return false;
-    }
-    this.history.log('lookup', { injected: type });
-    return true;
-  }
-  private simulateSessionMode(mode: string): boolean {
-    if (mode !== 'user' && mode !== 'unlock-dialog' && mode !== 'screen-sharing' && mode !== 'suspend') return false;
-    // §19: suspend is treated as lock. The injected mode overrides the live one
-    // until a real `notify::current-mode` transition clears it.
-    const resolved: SessionMode = mode === 'suspend' ? 'unlock-dialog' : mode;
-    this.injectedMode = resolved;
-    this.applySessionMode(resolved);
-    return true;
-  }
-
-  /**
-   * Test hook: hold GNOME's workspace-switch state open for `holdMs`. This is
-   * the exact path a touchpad gesture takes at its start
-   * (`WorkspaceAnimationController._switchWorkspaceBegin`), so the border must
-   * hide for the whole time, then come back.
-   */
-  private simulateWorkspaceSwitch(holdMs: number): boolean {
-    const controller = this.workspaceAnimation();
-    if (controller === null || typeof controller._prepareWorkspaceSwitch !== 'function') return false;
-    const hold = holdMs > 0 ? Math.min(holdMs, 5000) : 600;
-    controller._prepareWorkspaceSwitch();
-    this.timers.add('simulate-workspace-switch', hold, () => {
-      const current = this.workspaceAnimation();
-      if (current !== null && current._switchData != null) {
-        current._finishWorkspaceSwitch(current._switchData);
-      }
-    });
-    return true;
   }
 }
 
