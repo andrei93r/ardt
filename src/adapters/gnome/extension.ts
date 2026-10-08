@@ -45,6 +45,7 @@ import { GnomeHost } from './host.js';
 import { History } from './history.js';
 import { GnomeIndicator } from './indicator.js';
 import { EventJournal } from './journal.js';
+import { PerfProbe } from './perf.js';
 import { SignalRegistry, TimeoutRegistry } from './lifecycle.js';
 import { Recorder } from './recorder.js';
 import { RecordingPrompt } from './recording-prompt.js';
@@ -246,6 +247,8 @@ export default class AdrtExtension extends Extension {
   private animator!: Animator;
   private tiling!: Tiling;
   private session!: WindowSession;
+  /** P6e: dev-gated section profiler, enabled from `trace-enabled` at enable. */
+  private probe!: PerfProbe;
   private gestures!: GestureInput;
   private dbus!: GnomeDbus;
   /** Shell-chrome subscriptions; emits events, keeps no policy (§11). */
@@ -385,6 +388,11 @@ export default class AdrtExtension extends Extension {
       this.buildDirMtimeMs = 0;
     }
     this.settings = new GnomeSettings(this.getSettings());
+    // P6e: the section profiler is gated on the existing trace setting, read
+    // once here (it is not among the watched settings), so no gschema key is
+    // added and no watcher is needed. Every section site guards on `.enabled`.
+    this.probe = new PerfProbe();
+    this.probe.enabled = this.settings.boolean('trace-enabled', false);
     // 1.3: `surface-frame-changed` fires per animated frame; persist it only
     // when tracing (or while the recorder's sink is attached).
     this.journal.setNoisyWrites(this.settings.boolean('trace-enabled', false));
@@ -459,6 +467,7 @@ export default class AdrtExtension extends Extension {
       history: this.history,
       registry: this.registry,
       changes: this.changes,
+      probe: this.probe,
       isPaused: () => this.isPaused(),
       onStateChanged: () => this.onStateChanged(),
       onStubborn: (appId) => this.onStubborn(appId),
@@ -2820,6 +2829,9 @@ export default class AdrtExtension extends Extension {
         drainMsP95: this.session.counters().drainMsP95,
         applyMsP50: this.session.counters().applyMsP50,
         applyMsP95: this.session.counters().applyMsP95,
+        // P6e (add-only): named section call counts and total ms. Empty
+        // (`{}`) while the `trace-enabled` gate never turned the probe on.
+        sections: this.probe.snapshot(),
       },
       counters: {
         ...this.session.counters(),

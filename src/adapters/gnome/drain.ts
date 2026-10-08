@@ -21,6 +21,7 @@ import Meta from 'gi://Meta';
 
 import { EventQueue } from '../../core/queue.js';
 import type { Lane, QueuedEvent } from '../../core/queue.js';
+import type { PerfProbe } from './perf.js';
 
 /** §10: how long a maintenance pass waits for the surface to settle (struts are
  * set asynchronously by the Shell; internal safety, not a frame cadence). */
@@ -55,6 +56,8 @@ export interface DrainHost {
   noteDrainMs(ms: number): void;
   /** Log a caught error through the session boundary, never rethrow. */
   reportError(context: string, error: unknown): void;
+  /** P6e: the dev-gated section profiler (disabled ⇒ never reached). */
+  readonly probe: PerfProbe;
 }
 
 export class DrainScheduler {
@@ -143,6 +146,16 @@ export class DrainScheduler {
 
   /** Run what the queue holds, in lane order. */
   private runDrain(): void {
+    // P6e: guard before constructing anything; when disabled this is one
+    // boolean test and no closure is allocated.
+    if (this.host.probe.enabled) {
+      this.host.probe.section('drain', () => this.runDrainInner());
+      return;
+    }
+    this.runDrainInner();
+  }
+
+  private runDrainInner(): void {
     const started = GLib.get_monotonic_time();
     const events = this.queue.drain();
     if (events.length === 0) return;

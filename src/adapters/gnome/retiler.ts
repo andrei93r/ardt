@@ -36,6 +36,7 @@ import type { GnomeSettings } from './settings.js';
 import type { Tiling } from './tiling.js';
 import type { TrackedWindow } from './tracked-window.js';
 import type { WorkspaceController } from './workspace.js';
+import type { PerfProbe } from './perf.js';
 
 /** The slice of session state the retiler needs. */
 export interface RetilerDeps {
@@ -47,6 +48,8 @@ export interface RetilerDeps {
   readonly workspaces: WorkspaceController;
   readonly signatures: SignatureCache;
   readonly windows: Map<number, TrackedWindow>;
+  /** P6e: the dev-gated section profiler (disabled ⇒ never reached). */
+  readonly probe: PerfProbe;
   /** §22: journal one model-level event (optional; the session owns the gate). */
   readonly onModelEvent?: (event: string, fields: Record<string, unknown>) => void;
   /** The split axis of a screen (§1). */
@@ -181,6 +184,16 @@ export class Retiler {
 
   /** Compute and apply the plan for every monitor of one workspace (§6). */
   retile(workspaceId: number, reason: string, animate = true, rememberUndo = true): void {
+    // P6e: guard before constructing anything; disabled ⇒ no closure allocated
+    // and no clock read, just the one boolean test.
+    if (this.deps.probe.enabled) {
+      this.deps.probe.section('retile', () => this.retileInner(workspaceId, reason, animate, rememberUndo));
+      return;
+    }
+    this.retileInner(workspaceId, reason, animate, rememberUndo);
+  }
+
+  private retileInner(workspaceId: number, reason: string, animate: boolean, rememberUndo: boolean): void {
     if (this.deps.isPaused() || this.deps.isSuspended()) return;
     // §11.3: no reflow while the user is dragging.
     if (this.deps.isDragging()) return;
@@ -301,7 +314,13 @@ export class Retiler {
         tileables: tileables.length,
         placements: plan.placements.length,
       });
-      this.deps.tiling.applyPlan(plan, screen, reason, animate, rememberUndo);
+      // P6e: measure the apply call as its own section; the disabled path is a
+      // single boolean test and never allocates the callback.
+      if (this.deps.probe.enabled) {
+        this.deps.probe.section('applyPlan', () => this.deps.tiling.applyPlan(plan, screen, reason, animate, rememberUndo));
+      } else {
+        this.deps.tiling.applyPlan(plan, screen, reason, animate, rememberUndo);
+      }
       // §36.14: one retile must complete well under 10ms.
       const applyMs = (GLib.get_monotonic_time() - startedUs) / 1000;
       this.deps.diagnostics.noteApply(applyMs);

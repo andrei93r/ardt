@@ -39,6 +39,7 @@ import type { SessionCounters, SessionPerf } from './diagnostics.js';
 import { instanceIdFor, resolveWindowIdentity } from './appidentity.js';
 import type { RegistryStore } from './registry.js';
 import { Retiler } from './retiler.js';
+import type { PerfProbe } from './perf.js';
 import { DragController } from './drag.js';
 import { SelfHeal } from './selfheal.js';
 import type { GnomeSettings } from './settings.js';
@@ -57,6 +58,8 @@ export interface SessionDeps {
   history: History;
   registry: RegistryStore;
   changes: ChangeLog;
+  /** P6e: the dev-gated section profiler, owned by the extension. */
+  probe: PerfProbe;
   isPaused(): boolean;
   onStateChanged(): void;
   onStubborn(appId: string): void;
@@ -187,6 +190,7 @@ export class WindowSession {
       noteDrain: () => this.diagnostics.noteDrain(),
       noteDrainMs: (ms) => this.diagnostics.noteDrainMs(ms),
       reportError: (context, error) => this.reportError(context, error),
+      probe: this.deps.probe,
     });
     this.focusController = new FocusController({
       focused: () => this.focused(),
@@ -249,6 +253,7 @@ export class WindowSession {
       workspaces: this.workspaces,
       signatures: this.signatures,
       windows: this.windows,
+      probe: this.deps.probe,
       onModelEvent: deps.onModelEvent,
       axisFor: (screenId) => this.axisFor(screenId),
       tilerConfig: () => this.tilerConfig(),
@@ -354,6 +359,7 @@ export class WindowSession {
         this.ignoreMismatchUntilMs = 0;
       },
       onStateChanged: () => this.deps.onStateChanged(),
+      probe: this.deps.probe,
     });
   }
 
@@ -1483,6 +1489,16 @@ export class WindowSession {
   }
 
   classify(tracked: TrackedWindow): ReturnType<TrackedWindow['classify']> {
+    // P6e: guard before constructing anything; disabled ⇒ no closure allocated
+    // and no clock read. `classify` is hot (per window per pass), so this is
+    // the only added cost on the disabled path.
+    if (this.deps.probe.enabled) {
+      return this.deps.probe.section('classify', () => this.classifyInner(tracked));
+    }
+    return this.classifyInner(tracked);
+  }
+
+  private classifyInner(tracked: TrackedWindow): ReturnType<TrackedWindow['classify']> {
     this.diagnostics.noteClassifyCall();
     // §24 item 1 / Phase 2: a hit is the common case — `tileables`, the focus
     // cycle, `buildPlacementState` and `refreshOcclusion` classify per window —

@@ -27,6 +27,7 @@ import type { History } from './history.js';
 import type { RegistryStore } from './registry.js';
 import type { Tiling } from './tiling.js';
 import type { TrackedWindow } from './tracked-window.js';
+import type { PerfProbe } from './perf.js';
 
 /** §11/§35: the clamp pass treats an apply this recent as in flight. Matches the
  * window `planMismatch` already uses to leave a landing apply alone, so the
@@ -93,6 +94,8 @@ export interface SelfHealHost {
   /** Clear the plan-mismatch suppression window. */
   resetIgnoreMismatch(): void;
   onStateChanged(): void;
+  /** P6e: the dev-gated section profiler (disabled ⇒ never reached). */
+  readonly probe: PerfProbe;
 }
 
 export class SelfHeal {
@@ -261,6 +264,16 @@ export class SelfHeal {
    * through, clearing the refusal bookkeeping so it is retried.
    */
   coherenceSweep(): void {
+    // P6e: guard before constructing anything; disabled ⇒ no closure allocated
+    // and no clock read, just the one boolean test.
+    if (this.host.probe.enabled) {
+      this.host.probe.section('coherenceSweep', () => this.coherenceSweepInner());
+      return;
+    }
+    this.coherenceSweepInner();
+  }
+
+  private coherenceSweepInner(): void {
     if (this.host.isPaused() || this.host.isSuspended()) return;
     // A drag whose release never arrived must not disable the guarantee below:
     // clear it first, then run the pass.
