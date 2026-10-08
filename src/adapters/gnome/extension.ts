@@ -29,6 +29,7 @@ import type { SplitAxis } from '../../core/tiler.js';
 import { ratioKey } from '../../core/tiler.js';
 import type { MemoryEntry } from '../../core/displays.js';
 import { NoticeGate, isAlwaysNotice, noticeTitle } from '../../core/notify.js';
+import { TRIGGERS, buildDispatch } from '../../core/triggers.js';
 import { clamp, Layer } from '../../core/types.js';
 import type { Rect, Screen } from '../../core/types.js';
 import type { GestureKind } from '../../core/gestures.js';
@@ -2260,6 +2261,11 @@ export default class AdrtExtension extends Extension {
    * with its return value preserved — a throw reports and returns `undefined`
    * to the caller instead of escaping the dispatch.
    *
+   * The map is built from the one trigger table (`core/triggers.ts`, P6a), so
+   * the XML `dbus.ts` exports and this dispatch map always agree. A table entry
+   * with no implementation, or an implementation with no table entry, throws
+   * here — inside `enable()` — rather than silently dropping a method.
+   *
    * Each method has its own signature, so a reflective walk cannot keep those
    * signatures: `Object.keys` erases them. The table is widened to a string-keyed
    * function map once here (the single boundary cast) and the table type is
@@ -2268,11 +2274,8 @@ export default class AdrtExtension extends Extension {
    */
   private guardedHandlers(): Handlers {
     const raw = this.handlers() as unknown as Record<string, (...args: unknown[]) => unknown>;
-    const wrapped: Record<string, (...args: unknown[]) => unknown> = {};
-    for (const name of Object.keys(raw)) {
-      wrapped[name] = this.guardValue(`dbus:${name}`, raw[name]);
-    }
-    return Object.assign({} as Handlers, wrapped);
+    const dispatch = buildDispatch(TRIGGERS, raw, (name, handler) => this.guardValue(`dbus:${name}`, handler));
+    return Object.assign({} as Handlers, dispatch);
   }
 
   private handlers(): Handlers {
