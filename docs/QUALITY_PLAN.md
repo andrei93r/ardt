@@ -253,6 +253,21 @@ Idle targets: `configBuilds` 0, `classifyMisses` 0, `hostScans` 0;
    bounded counters.
 10. **Rule:** every cache names the event that invalidates it, or it does not
     land. A stale cache is a bug.
+11. **Data structures & OS mechanisms (added 2026-10-08).** A frequency-weighted
+    structure review, applied only where it wins: keep the three-lane queue
+    (O(1) per-key coalescing beats a heap below ~64 pending events; a heap loses
+    the coalescing invariant), but make `has()` O(1) with a key→lane index and
+    reuse the drain output buffer; replace `Array.shift()` overflow in the
+    journal/decision rings with a fixed circular buffer (O(1) instead of O(n));
+    back linear scans with indexes (`screenFor` → host-owned Map, registry
+    ordinals → secondary index); keep signals-first wiring (the 700 ms sweep is
+    the only periodic guarantee and gets gated, not tuned); keep GLib scheduling
+    as-is (drains on `LaterType` at default priority, IO flush at low priority,
+    every source owned by a registry); replace-on-write for shared arrays;
+    buffered append-only JSONL + atomic replace for state files. Rejected on
+    purpose: runtime deps (EGO), heap-based global queue, worker threads (not
+    available in the Shell), mmap/journald. Every change here lands with a
+    measured counter delta or it is reverted.
 
 **Exit criteria:** the idle/retile targets above, each with a before/after
 counter sample recorded in the PR/commit message. Revert any item with no
