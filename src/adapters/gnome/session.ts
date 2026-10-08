@@ -11,13 +11,12 @@ import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import type { Settings as GioSettings } from 'gi://Gio';
 import Meta from 'gi://Meta';
-import type { MetaDisplay, MetaWindow, MetaWorkspace } from 'gi://Meta';
+import type { MetaDisplay, MetaWindow } from 'gi://Meta';
 import { wm } from 'resource:///org/gnome/shell/ui/main.js';
 
 import type { HeuristicContext } from '../../core/classify.js';
 import { classifyAdjust } from '../../core/adjust.js';
 import type { AdjustMode } from '../../core/adjust.js';
-import { EventQueue } from '../../core/queue.js';
 import { centreInWorkArea } from '../../core/cursor.js';
 import type { DisplayMove, DisplayState, DisplayWorkspace, MemoryEntry, NewWorkspace } from '../../core/displays.js';
 import { displayPlan } from '../../core/displays.js';
@@ -25,31 +24,22 @@ import { normalizePlan } from '../../core/normalize.js';
 import type { NormalizeWindow } from '../../core/normalize.js';
 import {
   dropPlacement, escapeSize, impossibleSplit, maximizeWindow, refusalLadder, routeNewWindow,
-  swappedSides, unmaximizeWindow, windowCount,
+  swappedSides, unmaximizeWindow,
 } from '../../core/placement.js';
 import type { Axis, Env, Placement, ScreenClass, State, Win, Ws } from '../../core/placement.js';
 import { dragOutcome } from '../../core/drag.js';
 import type { DragOutcome } from '../../core/drag.js';
 import { dragIsWindowMove } from '../../core/windowmove.js';
-import { reapPlan } from '../../core/workspaces.js';
 import type { ChangeLog } from '../../core/undo.js';
 
-/** §10: how long a maintenance pass waits for the surface to settle (struts are
- * set asynchronously by the Shell; internal safety, not a frame cadence). */
-const MAINTENANCE_SETTLE_MS = 200;
-/** §11/§35: the clamp pass treats an apply this recent as in flight. Matches the
- * window `planMismatch` already uses to leave a landing apply alone, so the
- * clamp and the tiler agree on when a transition has finished. Internal timing,
- * not a frame cadence. */
-const CLAMP_DEFER_MS = 500;
 import { checkPlan } from '../../core/invariants.js';
 import { SignatureCache, planSignature, shouldApplyPlan } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
 import { computePlans, ratioKey, resolveGaps, screenArea } from '../../core/tiler.js';
-import { Layer, clampRectToArea, rectEquals } from '../../core/types.js';
+import { Layer, rectEquals } from '../../core/types.js';
 import type { Rect, Screen, Size, TilePlan } from '../../core/types.js';
-import { shouldClampWindow } from '../../core/clamp.js';
 import * as compat from './compat.js';
+import { DrainScheduler } from './drain.js';
 import { FocusController } from './focus.js';
 import type { GnomeHost } from './host.js';
 import type { History } from './history.js';
@@ -57,11 +47,13 @@ import { SessionDiagnostics } from './diagnostics.js';
 import type { SessionCounters, SessionPerf } from './diagnostics.js';
 import { instanceIdFor, resolveWindowIdentity } from './appidentity.js';
 import type { RegistryStore } from './registry.js';
+import { SelfHeal } from './selfheal.js';
 import type { GnomeSettings } from './settings.js';
 import type { GnomeTiming } from './timing.js';
 import type { Tiling } from './tiling.js';
 import { TrackedWindow } from './tracked-window.js';
 import { UndoCoordinator } from './undo.js';
+import { WorkspaceController } from './workspace.js';
 
 export interface SessionDeps {
   host: GnomeHost;
@@ -144,11 +136,6 @@ const DRAG_STALE_MS = 2500;
 const SWEEP_DELAY_MS = 150;
 /** How long the switch-animation patch stays installed, then it is restored. */
 const SWITCH_ANIMATION_PATCH_MS = 400;
-/** Two settle passes after an action, so reaping sees the final state. */
-const PRUNE_FIRST_MS = 300;
-const PRUNE_SECOND_MS = 900;
-/** Backoff before re-trying a lone-window maximize the same window refused. */
-const COHERENCE_RETRY_MS = 3000;
 /**
  * The heuristic modal check is the only reader of the classification context,
  * so a miss with the heuristic disabled skips building the title list and
@@ -162,24 +149,17 @@ export class WindowSession {
   /** §11/§16: our own recent maximize/workspace changes, one per window. */
   private readonly selfEcho = new Map<number, SelfApplyEcho>();
   /**
-   * §11: one scheduling path. Every signal handler pushes here; a single
-   * deferred drain runs the policy, in lane order, with per-key coalescing.
-   * Lane 2 (layout) is armed on the compositor's resize later, lane 3
-   * (maintenance) on idle; both are removed as soon as the drain runs.
+   * §11: one scheduling path, owned by the drain module. Every signal handler
+   * pushes there; a single deferred drain runs the policy, in lane order, with
+   * per-key coalescing. Lane 2 (layout) is armed on the compositor's resize
+   * later, lane 3 (maintenance) on idle; both are removed as soon as it runs.
    */
-  private readonly queue = new EventQueue();
+  private readonly drain: DrainScheduler;
   /** §12: monotonic sequence for provisional `window:<seq>` identity keys. */
   private windowSeq = 0;
   /** §9: display memory keyed by connector, plus the previous screen list. */
   private displayMemory: MemoryEntry[] = [];
   private lastScreens: readonly Screen[] | null = null;
-  /** Re-queued layout passes waiting for an animation to finish. */
-  private drainDeferrals = 0;
-  /** §19: set while the drain finishes the backlog a pause caught. */
-  private drainingBacklog = false;
-  private drainArmed: { 1: boolean; 2: boolean; 3: boolean } = { 1: false, 2: false, 3: false };
-  /** True once `destroy()` has run; a later-deferred drain must then be a no-op. */
-  private destroyed = false;
   /** §21/§36: counters and latency samples, owned by the diagnostics module. */
   private readonly diagnostics = new SessionDiagnostics();
   private readonly timeoutSources = new Set<number>();
@@ -242,8 +222,26 @@ export class WindowSession {
   private readonly focusController: FocusController;
   /** §13: capture/restore/undo, owned by the undo module. */
   private readonly undoCoordinator: UndoCoordinator;
+  /** §5/§7/§16: workspace create/reap/reorder/move, owned by its module. */
+  private readonly workspaces: WorkspaceController;
+  /** §24/§35: the adaptive scan tick, clamp and coherence sweep. */
+  private readonly selfHeal: SelfHeal;
 
   constructor(private readonly deps: SessionDeps) {
+    this.drain = new DrainScheduler({
+      isPaused: () => this.deps.isPaused(),
+      isAnimating: () => this.deps.isAnimating?.() === true,
+      applyCursorCentre: (data) => this.applyCursorCentre(data),
+      reconcileAll: (reason, rememberUndo) => this.reconcileAll(reason, rememberUndo),
+      applyDisplayChange: () => this.applyDisplayChange(),
+      coherenceSweep: () => this.coherenceSweep(),
+      logMaintenance: (kind) => this.deps.history.log('maintenance', { kind }),
+      addTimeout: (ms, cb) => this.addTimeout(ms, cb),
+      frameIntervalFor: () => this.deps.timing.frameIntervalFor(),
+      noteDrain: () => this.diagnostics.noteDrain(),
+      noteDrainMs: (ms) => this.diagnostics.noteDrainMs(ms),
+      reportError: (context, error) => this.reportError(context, error),
+    });
     this.focusController = new FocusController({
       focused: () => this.focused(),
       focus: (id) => this.focus(id),
@@ -267,7 +265,7 @@ export class WindowSession {
       allWindows: () => this.windows.values(),
       screenFor: (index) => this.screenFor(index),
       slotFor: (tracked) => this.slotFor(tracked),
-      moveWindowToWorkspace: (tracked, index) => this.moveWindowToWorkspace(tracked, index),
+      moveWindowToWorkspace: (tracked, index) => this.workspaces.moveWindow(tracked, index),
       withSelfUnmaximize: (tracked, fn) => this.withSelfUnmaximize(tracked, fn),
       activateWorkspace: (index) => this.activateWorkspace(index),
       activeWorkspaceId: () => this.deps.host.activeWorkspaceId(),
@@ -276,19 +274,73 @@ export class WindowSession {
         this.ignoreMismatchUntilMs = until;
       },
     });
+    this.workspaces = new WorkspaceController({
+      allWindows: () => this.windows.values(),
+      window: (id) => this.windows.get(id),
+      hasWindow: (id) => this.windows.has(id),
+      placementState: () => this.buildPlacementState(),
+      noteSelfEcho: (id, expected) => this.noteSelfEcho(id, expected),
+      noteSelfApply: () => this.deps.tiling.noteSelfApply(),
+      cancelApply: (id) => this.deps.tiling.cancel(id),
+      applyWorkspace: (id, index) => this.deps.host.applyWorkspace(id, index),
+      onWindowMoving: () => this.deps.onWindowMoving(),
+      log: (event, fields) => this.deps.history.log(event, fields),
+      reindexRatiosAfterReap: (removed) => this.deps.tiling.reindexRatiosAfterReap(removed),
+      activateWorkspace: (index) => this.activateWorkspace(index),
+      clearSignatures: () => this.signatures.clearAll(),
+      scheduleReconcile: (reason) => this.scheduleReconcile(reason),
+      addTimeout: (ms, cb) => this.addTimeout(ms, cb),
+      isPaused: () => this.deps.isPaused(),
+      isSuspended: () => this.suspended,
+      reorderLoggingEnabled: () => this.deps.settings.boolean('log-workspace-reorder', false),
+    });
+    this.selfHeal = new SelfHeal({
+      tiling: this.deps.tiling,
+      history: this.deps.history,
+      registry: this.deps.registry,
+      host: this.deps.host,
+      diagnostics: this.diagnostics,
+      windows: () => this.windows.values(),
+      windowCount: () => this.windows.size,
+      window: (id) => this.windows.get(id),
+      register: (win) => this.register(win),
+      unregister: (id) => this.unregister(id),
+      reapEmptyWorkspaces: () => this.workspaces.reapEmpty(),
+      retileAll: (reason) => this.retileAll(reason),
+      isPaused: () => this.deps.isPaused(),
+      isSuspended: () => this.suspended,
+      gestureActive: () => this.dragging || this.adjustId !== null,
+      recoverStaleDrag: () => {
+        if (!this.dragIsStale()) return false;
+        this.abandonDrag('stale');
+        return true;
+      },
+      clientInteractionActive: () => this.clientInteracting,
+      endClientInteraction: () => {
+        this.clientInteracting = false;
+      },
+      scheduleReconcile: (reason) => this.scheduleReconcile(reason),
+      runGuarded: (cb) => this.guard('scan-tick', cb)(),
+      debugEnabled: () => this.deps.settings.boolean('debug-enabled', false),
+      scanBaseMs: () => Math.max(1000, this.deps.settings.int('scan-interval', 5000)),
+      clampEnabled: () => this.deps.settings.boolean('clamp-windows-to-screen', true),
+      screenFor: (index) => this.screenFor(index),
+      tileables: (workspaceId) => this.tileables(workspaceId),
+      toTilerWindow: (tracked) => this.toTilerWindow(tracked),
+      tilerConfig: () => this.tilerConfig(),
+      clearSignatures: () => this.signatures.clearAll(),
+      resetIgnoreMismatch: () => {
+        this.ignoreMismatchUntilMs = 0;
+      },
+      onStateChanged: () => this.deps.onStateChanged(),
+    });
   }
 
-  /** §24 item 8: adaptive back-off scan tick. */
-  private scanSource: number | null = null;
-  private scanIntervalMs = 5000;
-  private idleScans = 0;
-
   startScan(): void {
-    if (this.scanSource !== null) return;
-    this.scanIntervalMs = this.scanBaseMs();
-    this.scheduleScan();
+    if (this.selfHeal.scanning()) return;
+    this.selfHeal.startScan();
     // §7.6: user reorders shift every window's workspace index.
-    this.reorderSignal = global.workspace_manager.connect('workspaces-reordered', this.guard('workspaces-reordered', () => this.onWorkspacesReordered()));
+    this.reorderSignal = global.workspace_manager.connect('workspaces-reordered', this.guard('workspaces-reordered', () => this.workspaces.onReordered()));
     // §11.3 / §23.1: never retile or show the border while the user is dragging.
     this.grabBeginSignal = global.display.connect('grab-op-begin', this.guard('grab-op-begin', (_display: MetaDisplay, win: MetaWindow, op: number) =>
       this.onGrabBegin(win, op),
@@ -317,15 +369,8 @@ export class WindowSession {
     );
   }
 
-  private scanBaseMs(): number {
-    return Math.max(1000, this.deps.settings.int('scan-interval', 5000));
-  }
-
   stopScan(): void {
-    if (this.scanSource !== null) {
-      GLib.source_remove(this.scanSource);
-      this.scanSource = null;
-    }
+    this.selfHeal.stopScan();
     if (this.reorderSignal !== 0) {
       global.workspace_manager.disconnect(this.reorderSignal);
       this.reorderSignal = 0;
@@ -880,12 +925,12 @@ export class WindowSession {
     const id = tracked.id;
     let workspaceId = placement.workspace;
     if (placement.createRight === true) {
-      const created = this.createWorkspaceRight(placement.workspace);
+      const created = this.workspaces.createRight(placement.workspace);
       if (created !== null) workspaceId = created;
     }
     const previous = tracked.surface.workspaceId;
     if (workspaceId !== previous) {
-      this.moveWindowToWorkspace(tracked, workspaceId);
+      this.workspaces.moveWindow(tracked, workspaceId);
       this.deps.history.log('ws_switch_empty', { id, from: previous, to: workspaceId, reason });
     }
     if (placement.float === true) {
@@ -984,7 +1029,7 @@ export class WindowSession {
     // Only windows we actually tiled get a close ghost; popups, menus,
     // tooltips and other transient surfaces must not flash a border.
     const wasTiled = tracked.lastTarget !== null;
-    this.coherenceRetryAt.delete(id);
+    this.selfHeal.forgetWindow(id);
     // Defensive: a window we floated carries Mutter's "above" flag; drop it as
     // the window goes away so it cannot linger on a recycled surface.
     this.deps.host.clearAbove(id);
@@ -998,7 +1043,7 @@ export class WindowSession {
     this.deps.history.log('close', { id, workspaceId });
     this.deps.onStateChanged();
 
-    this.switchAwayIfEmpty(workspaceId);
+    this.workspaces.switchAwayIfEmpty(workspaceId);
     this.evaluateLoneMaximize(workspaceId);
     this.scheduleRetile(workspaceId, 'close');
     // A close can leave a window we had floated over a pair with nowhere to
@@ -1137,7 +1182,7 @@ export class WindowSession {
   /** §9: a screen/work-area change is planned in the layout drain, never in
    * the Mutter signal handler. */
   scheduleDisplayPass(reason: string): void {
-    if (this.queue.push(2, 'displays', 'displays', { reason })) this.armDrain(2);
+    if (this.drain.enqueue(2, 'displays', 'displays', { reason })) this.drain.arm(2);
   }
 
   /** §9 display plan: rescue, replay and primary-change handling. */
@@ -1226,7 +1271,7 @@ export class WindowSession {
     // `workspaces-only-on-primary`, a workspace change can drag a window back to
     // the primary; doing it before the monitor move lets the monitor move win
     // (a replay to the reconnected connector must end there, not on the primary).
-    if (workspaceIndex !== tracked.surface.workspaceId) this.moveWindowToWorkspace(tracked, workspaceIndex);
+    if (workspaceIndex !== tracked.surface.workspaceId) this.workspaces.moveWindow(tracked, workspaceIndex);
     // §9: a routed window lands on the screen the plan names — the primary on a
     // rescue, the reconnected connector on a replay. Without this a replay only
     // reassigned the workspace and the pair never left the primary.
@@ -1381,7 +1426,7 @@ export class WindowSession {
   /** §9: create a rescued workspace on the physical side the screen was on. */
   private createWorkspaceForDisplay(create: NewWorkspace): number | null {
     const manager = global.workspace_manager;
-    if (create.side === 'right') return this.createWorkspaceRight(create.anchor);
+    if (create.side === 'right') return this.workspaces.createRight(create.anchor);
     const target = create.leftmost === true ? 0 : Math.max(0, create.anchor - 1);
     const appended = manager.get_n_workspaces();
     manager.append_new_workspace(false, global.get_current_time());
@@ -1422,7 +1467,7 @@ export class WindowSession {
     const rememberUndo = reason === 'user-adjust';
     // One key for every reconcile: a burst of signals is one pass, and the drain
     // runs on the next compositor resize tick rather than on a private timer.
-    if (this.queue.push(2, 'reconcile-all', 'reconcile', { reason, rememberUndo })) this.armDrain(2);
+    if (this.drain.enqueue(2, 'reconcile-all', 'reconcile', { reason, rememberUndo })) this.drain.arm(2);
   }
 
   /**
@@ -1434,15 +1479,15 @@ export class WindowSession {
     // §19: a pause refuses new work; the queue only carries what it held.
     if (this.deps.isPaused()) return 0;
     for (let i = 0; i < Math.max(0, Math.trunc(count)); i++) {
-      this.queue.push(2, 'reconcile-all', 'reconcile', { reason: `${reason}#${i}` });
+      this.drain.enqueue(2, 'reconcile-all', 'reconcile', { reason: `${reason}#${i}` });
     }
-    if (this.queue.depth(2) > 0) this.armDrain(2);
-    return this.queue.depth(2);
+    if (this.drain.depth(2) > 0) this.drain.arm(2);
+    return this.drain.depth(2);
   }
 
   /** Queue a maintenance job (lane 3): cheap, can wait for idle. */
   scheduleMaintenance(kind: string, data?: Record<string, unknown>): void {
-    if (this.queue.push(3, `maintenance:${kind}`, 'maintenance', { kind, ...data })) this.armDrain(3);
+    if (this.drain.enqueue(3, `maintenance:${kind}`, 'maintenance', { kind, ...data })) this.drain.arm(3);
   }
 
   /**
@@ -1454,7 +1499,7 @@ export class WindowSession {
    */
   scheduleCursorCentre(explicit: boolean): void {
     if (this.deps.isPaused() || this.suspended) return;
-    if (this.queue.push(1, 'cursor-centre', 'cursor', { explicit })) this.armDrain(1);
+    if (this.drain.enqueue(1, 'cursor-centre', 'cursor', { explicit })) this.drain.arm(1);
   }
 
   /** The keybinding/trigger path: move now (through the drain). False when
@@ -1484,73 +1529,6 @@ export class WindowSession {
       explicit,
       moved,
     });
-  }
-
-  private armDrain(lane: 1 | 2 | 3): void {
-    if (this.destroyed || this.drainArmed[lane]) return;
-    this.drainArmed[lane] = true;
-    const run = (): boolean => {
-      this.drainArmed[lane] = false;
-      // A later registered before `destroy()` can still fire afterwards; the
-      // queue is already cleared, and running policy on a torn-down session
-      // must be a no-op.
-      if (this.destroyed) return GLib.SOURCE_REMOVE;
-      this.runDrain();
-      return GLib.SOURCE_REMOVE;
-    };
-    if (lane === 3) {
-      // §10: a work-area change can arrive before the shell has set its struts,
-      // so maintenance waits for the surface to settle. Registered so
-      // `destroy()` cancels it while the lane stays armed until it fires.
-      this.addTimeout(MAINTENANCE_SETTLE_MS, run);
-      return;
-    }
-    try {
-      const laters = global.compositor.get_laters();
-      const laterTypes: Record<string, unknown> = Meta.LaterType ?? {};
-      const type = lane === 1
-        ? (laterTypes.BEFORE_REDRAW ?? laterTypes.META_LATER_RESIZE)
-        : lane === 2
-          ? (laterTypes.META_LATER_RESIZE ?? laterTypes.BEFORE_REDRAW)
-          : (laterTypes.IDLE ?? laterTypes.BEFORE_REDRAW);
-      laters.add(type, run);
-    } catch {
-      // No later machinery (or the enum moved): a short timeout is still one
-      // deferred pass, never policy inside the signal handler. One frame at the
-      // screen's refresh, never an assumed 60 Hz. Registered so `destroy()`
-      // cancels it.
-      try {
-        this.addTimeout(Math.max(1, Math.floor(this.deps.timing.frameIntervalFor())), run);
-      } catch (error) {
-        // No deferral source could be armed at all: drop the arm so the next
-        // push retries instead of leaving the lane armed forever.
-        this.drainArmed[lane] = false;
-        this.reportError('arm-drain', error);
-      }
-    }
-  }
-
-  /** Run what the queue holds, in lane order. */
-  private runDrain(): void {
-    const started = GLib.get_monotonic_time();
-    const events = this.queue.drain();
-    if (events.length === 0) return;
-    this.diagnostics.noteDrain();
-    // §19: a pause lets the queue finish what it already holds. `isPaused()` is
-    // consulted through the extension, which returns false while this flag is
-    // set; new work is still refused at push time, so only the backlog runs.
-    this.drainingBacklog = this.deps.isPaused();
-    try {
-      this.drainEvents(events);
-    } catch (error) {
-      // §19/§36: one bad event must not propagate into the compositor's later
-      // callback and take the Shell down; log it and keep the loop alive.
-      this.reportError('drain', error);
-    } finally {
-      this.drainingBacklog = false;
-    }
-    const ms = (GLib.get_monotonic_time() - started) / 1000;
-    this.diagnostics.noteDrainMs(ms);
   }
 
   /**
@@ -1592,43 +1570,9 @@ export class WindowSession {
     return this.errorCount;
   }
 
-  private drainEvents(events: ReturnType<EventQueue['drain']>): void {
-    for (const event of events) {
-      const data = (event.data ?? {}) as Record<string, unknown>;
-      if (event.kind === 'cursor') {
-        // §17 lane-1 feedback: pure geometry, then one warp.
-        this.applyCursorCentre(data);
-      } else if (event.kind === 'reconcile') {
-        // A frame applied while another window is animating lands on a moving
-        // surface and drifts (A72): wait for the animation instead of fighting
-        // it, bounded so a stuck animation cannot starve the layout.
-        if (this.deps.isAnimating?.() === true && this.drainDeferrals < 60) {
-          this.drainDeferrals += 1;
-          this.queue.push(2, event.key, event.kind, data);
-          this.armDrain(2);
-          continue;
-        }
-        this.drainDeferrals = 0;
-        this.reconcileAll(String(data.reason ?? 'queue'), data.rememberUndo === true);
-      } else if (event.kind === 'displays') {
-        this.applyDisplayChange();
-      } else if (event.kind === 'maintenance') {
-        const kind = String(data.kind ?? 'unknown');
-        switch (kind) {
-          case 'sweep':
-            this.coherenceSweep();
-            break;
-          default:
-            break;
-        }
-        this.deps.history.log('maintenance', { kind });
-      }
-    }
-  }
-
   /** §19: true while the drain is finishing the backlog a pause caught. */
   isDrainingBacklog(): boolean {
-    return this.drainingBacklog;
+    return this.drain.isDrainingBacklog();
   }
 
   /** Check every workspace on every screen and correct anything out of place.
@@ -1654,10 +1598,7 @@ export class WindowSession {
     }
     // §7.6/§8: after a user reorder every index moved; re-derive them here,
     // never in the signal handler.
-    if (this.reorderPending) {
-      this.reorderPending = false;
-      this.realignWorkspaces();
-    }
+    this.workspaces.flushPendingReorder();
     // §6: a directional move that crossed a screen edge is arrived from here,
     // but only once Mutter has actually put the window on the target screen —
     // `move_to_monitor` is asynchronous and arriving early floats it against the
@@ -1727,38 +1668,13 @@ export class WindowSession {
     // Keep every window inside its own monitor's full geometry (the whole
     // surface, not the work area) — a property of the pass, not a reaction to
     // the move that put it out of bounds.
-    this.clampWindowsToScreen();
+    this.selfHeal.clampToScreen();
     this.deps.onModelEvent?.('layout', { reason });
     this.deps.onStateChanged();
   }
 
   retileAll(reason: string, rememberUndo = false): void {
     this.reconcileAll(reason, rememberUndo);
-  }
-
-  /** §7.6: the user reordered workspaces; every index moved. */
-  private onWorkspacesReordered(): void {
-    // §11: no policy in a Mutter signal handler. The new indexes are re-derived
-    // in the drain; here we only record the intent.
-    this.reorderPending = true;
-    this.signatures.clearAll();
-    if (this.deps.settings.boolean('log-workspace-reorder', false)) {
-      this.deps.history.log('ws_removed', { reason: 'reorder' });
-    }
-    // Debounced, never synchronous: this handler runs inside Mutter's signal
-    // emission, so the drain does the work.
-    this.scheduleReconcile('workspace-reorder');
-  }
-  /** Set by a reorder signal; the drain re-derives every index from Mutter. */
-  private reorderPending = false;
-  /** Re-derive every tracked window's workspace index from Mutter. */
-  private realignWorkspaces(): void {
-    for (const tracked of this.windows.values()) {
-      const workspace = tracked.win.get_workspace();
-      if (workspace === null) continue;
-      tracked.surface.workspaceId = workspace.index();
-      tracked.lastWorkspaceIdx = workspace.index();
-    }
   }
 
   /** Compute and apply the plan for every monitor of one workspace (§6). */
@@ -2366,12 +2282,10 @@ export class WindowSession {
   }
 
   destroy(): void {
-    this.destroyed = true;
     for (const id of this.signals.keys()) this.disconnectWindow(id);
     this.signals.clear();
     this.stopScan();
-    this.queue.clear();
-    this.drainArmed = { 1: false, 2: false, 3: false };
+    this.drain.destroy();
     for (const id of this.timeoutSources) GLib.source_remove(id);
     this.timeoutSources.clear();
     this.selfEcho.clear();
@@ -2483,37 +2397,6 @@ export class WindowSession {
     }
   }
 
-  /** Create a workspace immediately right of `after`, pushing the spare right. */
-  private createWorkspaceRight(after: number): number | null {
-    const manager = global.workspace_manager;
-    const target = after + 1;
-    if (target < manager.get_n_workspaces()) {
-      const existing = manager.get_workspace_by_index(target);
-      if (existing !== null && this.workspaceIsEmpty(existing)) return target;
-    }
-    const appended = manager.get_n_workspaces();
-    manager.append_new_workspace(false, global.get_current_time());
-    const created = manager.get_workspace_by_index(appended);
-    if (created !== null && target < appended) manager.reorder_workspace(created, target);
-    return Math.min(target, manager.get_n_workspaces() - 1);
-  }
-
-  /** Move one tracked window to a workspace; the echo cancels the resulting signal. */
-  private moveWindowToWorkspace(tracked: TrackedWindow, index: number): void {
-    this.noteSelfEcho(tracked.id, { workspace: index });
-    this.deps.tiling.noteSelfApply();
-    this.deps.onWindowMoving();
-    this.deps.tiling.cancel(tracked.id);
-    this.deps.host.applyWorkspace(tracked.id, index);
-    tracked.surface.workspaceId = index;
-    tracked.lastWorkspaceIdx = index;
-    this.signatures.clearAll();
-  }
-
-  private workspaceIsEmpty(workspace: MetaWorkspace): boolean {
-    return workspace.list_windows().filter((win: MetaWindow) => this.windows.has(win.get_id())).length === 0;
-  }
-
   /** §4: maximize — its own workspace to the right, or in place on `single`. */
   private maximizeTracked(tracked: TrackedWindow): void {
     tracked.maximizeRequested = true;
@@ -2553,7 +2436,7 @@ export class WindowSession {
     this.applyPlacement(tracked, placement, follow, 'unmaximize');
     this.deps.onModelEvent?.('window-unmaximized', { id: tracked.id, workspace: placement.workspace });
     if (env.screen === 'single') this.restoreMinimizedOn(placement.workspace, tracked.surface.screenId);
-    this.schedulePrune();
+    this.workspaces.schedulePrune();
   }
 
   /** §4/§16: fullscreen behaves as maximize; leaving it as unmaximize. */
@@ -2601,12 +2484,12 @@ export class WindowSession {
     }
     const own = tracked.surface.workspaceId;
     const state = this.buildPlacementState(null, tracked.surface.screenId);
-    const created = this.createWorkspaceRight(own);
+    const created = this.workspaces.createRight(own);
     if (created === null) {
       this.deps.tiling.applyFrame(tracked, rect, screen, false, 'escape-clamped', 0);
       return;
     }
-    this.moveWindowToWorkspace(tracked, created);
+    this.workspaces.moveWindow(tracked, created);
     // A float is not our escape: a managed window that does not fit keeps its
     // clamped size, flush at slot 0 and full work-area height (§16).
     tracked.autoFloated = false;
@@ -2692,7 +2575,7 @@ export class WindowSession {
     }
     this.deps.onModelEvent?.('window-minimized', { id: tracked.id, workspace: tracked.surface.workspaceId });
     this.scheduleRetile(tracked.surface.workspaceId, 'minimize');
-    this.schedulePrune();
+    this.workspaces.schedulePrune();
   }
 
   /**
@@ -2735,130 +2618,6 @@ export class WindowSession {
         controller.animateSwitch = original;
       });
     }
-  }
-
-  /**
-   * §5: reaping is a property. At every drain any empty workspace other than
-   * GNOME's trailing spare is removed, wherever it sits; a workspace holding
-   * only minimized windows relocates its occupant first (left, else right, else
-   * it stays, the one legal look-empty workspace); a float pins its workspace.
-   */
-  private reapEmptyWorkspaces(): void {
-    if (this.deps.isPaused() || this.suspended) return;
-    const manager = global.workspace_manager;
-    if (manager.get_n_workspaces() <= 1) return;
-    const state = this.buildPlacementState();
-    const plan = reapPlan(state);
-    if (plan.reap.length === 0 && plan.relocate.length === 0) return;
-    for (const move of plan.relocate) {
-      const tracked = this.windows.get(move.id);
-      if (tracked === undefined) continue;
-      this.moveWindowToWorkspace(tracked, move.to);
-      this.deps.history.log('new_ws', { id: move.id, workspaceId: move.to, reason: 'minimized-relocation' });
-    }
-    const reapSet = new Set(plan.reap);
-    if (reapSet.has(manager.get_active_workspace_index())) {
-      const target = this.nearestIndexHoldingWindows(state, manager.get_active_workspace_index(), reapSet);
-      if (target >= 0) this.activateWorkspace(target);
-    }
-    const removed: number[] = [];
-    for (const index of [...plan.reap].sort((a, b) => b - a)) {
-      if (manager.get_n_workspaces() <= 1) break;
-      const workspace = manager.get_workspace_by_index(index);
-      if (workspace === null) continue;
-      // Never reap a workspace that still holds any window, tracked or not.
-      if (workspace.list_windows().length > 0) continue;
-      if (manager.get_active_workspace_index() === index) continue;
-      manager.remove_workspace(workspace, global.get_current_time());
-      removed.push(index);
-      this.deps.history.log('ws_removed', { workspaceId: index, reason: 'reaped' });
-    }
-    // §10: a reaped workspace's ratio goes with it, and the workspaces to its
-    // right shift down an index, so their ratios move too.
-    this.deps.tiling.reindexRatiosAfterReap(removed);
-    this.realignWorkspaces();
-    this.signatures.clearAll();
-  }
-
-  /**
-   * §5/P4: the one nearest-workspace walk behind the live manager and the pure
-   * placement state. Scan indices from `from` in `step` direction over `count`
-   * slots and return the first that `matches`; if none does and `fallback` is
-   * given, return the first that `fallback` accepts instead. `count` is the
-   * source's own length, so the live and dry scans share the loop. -1 when
-   * nothing matches.
-   */
-  private scanWorkspaceIndices(
-    from: number,
-    step: number,
-    count: number,
-    matches: (index: number) => boolean,
-    fallback?: (index: number) => boolean,
-  ): number {
-    const passes = fallback === undefined ? [matches] : [matches, fallback];
-    for (const predicate of passes) {
-      for (let index = from + step; index >= 0 && index < count; index += step) {
-        if (predicate(index)) return index;
-      }
-    }
-    return -1;
-  }
-
-  /** Nearest non-reaped workspace that holds windows, left first (§5). */
-  private nearestIndexHoldingWindows(state: State, from: number, exclude: Set<number>): number {
-    const count = state.workspaces.length;
-    const holdsWindows = (index: number): boolean => !exclude.has(index) && windowCount(state.workspaces[index]) > 0;
-    const exists = (index: number): boolean => !exclude.has(index);
-    let target = this.scanWorkspaceIndices(from, -1, count, holdsWindows);
-    if (target < 0) target = this.scanWorkspaceIndices(from, 1, count, holdsWindows);
-    if (target < 0) target = this.scanWorkspaceIndices(from, -1, count, exists);
-    return target;
-  }
-
-  /** Reap empty workspaces shortly after an action, once state has settled. */
-  private schedulePrune(): void {
-    this.addTimeout(PRUNE_FIRST_MS, () => this.reapEmptyWorkspaces());
-    this.addTimeout(PRUNE_SECOND_MS, () => this.reapEmptyWorkspaces());
-  }
-
-  /** §7.5 close: leave an empty workspace, then reap it (§16). */
-  private switchAwayIfEmpty(workspaceId: number): void {
-    const manager = global.workspace_manager;
-    if (manager.get_n_workspaces() <= 1) return;
-    const workspace = manager.get_workspace_by_index(workspaceId);
-    if (workspace === null) return;
-    const remaining = workspace.list_windows().filter((win: MetaWindow) => this.windows.has(win.get_id()));
-    if (remaining.length > 0) return;
-
-    if (manager.get_active_workspace_index() === workspaceId) {
-      // "Done" takes you back to the left — the nearest left workspace that
-      // still exists and holds windows. If the left one was removed (or is
-      // empty), fall forward to the right instead.
-      let target = this.nearestWorkspaceWithWindows(workspaceId, -1);
-      if (target < 0) target = this.nearestWorkspaceWithWindows(workspaceId, 1);
-      if (target < 0) target = this.nearestExistingWorkspace(workspaceId, -1);
-      if (target < 0) target = this.nearestExistingWorkspace(workspaceId, 1);
-      if (target >= 0 && target !== workspaceId) {
-        this.deps.history.log('ws_switch_empty', { from: workspaceId, to: target });
-        this.activateWorkspace(target);
-      }
-    }
-    this.schedulePrune();
-  }
-
-  /** Nearest workspace in `step` direction that holds one of our windows. */
-  private nearestWorkspaceWithWindows(from: number, step: number): number {
-    const manager = global.workspace_manager;
-    return this.scanWorkspaceIndices(from, step, manager.get_n_workspaces(), (index) => {
-      const workspace = manager.get_workspace_by_index(index);
-      return workspace !== null && workspace.list_windows().some((win: MetaWindow) => this.windows.has(win.get_id()));
-    });
-  }
-
-  /** Nearest workspace in `step` direction that exists at all. */
-  private nearestExistingWorkspace(from: number, step: number): number {
-    const manager = global.workspace_manager;
-    return this.scanWorkspaceIndices(from, step, manager.get_n_workspaces(), (index) => manager.get_workspace_by_index(index) !== null);
   }
 
   /**
@@ -3402,7 +3161,7 @@ export class WindowSession {
     const workspaceChanged = result.workspace !== tracked.surface.workspaceId;
     // §13: a drop is a user move, so it is undoable; capture the origin first.
     this.captureChange([tracked.id]);
-    if (workspaceChanged) this.moveWindowToWorkspace(tracked, result.workspace);
+    if (workspaceChanged) this.workspaces.moveWindow(tracked, result.workspace);
     switch (result.kind) {
       case 'slot':
         this.pinSlots(result.workspace, tracked, result.slot);
@@ -3563,127 +3322,6 @@ export class WindowSession {
     this.scheduleReconcile('workspace-changed');
   }
 
-  private scheduleScan(): void {
-    this.scanSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this.scanIntervalMs, () => {
-      this.scanSource = null;
-      if (this.deps.isPaused()) return GLib.SOURCE_REMOVE;
-      // §Self-heal containment: never escape the source dispatch uncaught.
-      this.guard('scan-tick', () => this.scanTick())();
-      this.backoff();
-      this.scheduleScan();
-      return GLib.SOURCE_REMOVE;
-    });
-  }
-
-  private backoff(): void {
-    const before = this.windows.size;
-    if (before === this.idleWindows) {
-      this.idleScans += 1;
-    } else {
-      this.idleScans = 0;
-      this.idleWindows = before;
-    }
-    const base = this.scanBaseMs();
-    const steps = [base, base * 2, base * 6, base * 12];
-    const target = steps[Math.min(this.idleScans, steps.length - 1)];
-    if (target !== this.scanIntervalMs) this.scanIntervalMs = target;
-  }
-
-  private idleWindows = 0;
-
-  /** Safety net (§35): reconcile state that signals may have missed. */
-  scanTick(): void {
-    const startedUs = GLib.get_monotonic_time();
-    const live = new Set<number>();
-    for (const win of global.display.list_all_windows()) {
-      const id: number = win.get_id();
-      live.add(id);
-      if (!this.windows.has(id)) this.register(win);
-    }
-    for (const id of [...this.windows.keys()]) {
-      if (!live.has(id)) this.unregister(id);
-    }
-    this.deps.registry.prune();
-    this.deps.registry.save();
-    this.reapEmptyWorkspaces();
-    this.retileAll('scan');
-    const reconcileMs = (GLib.get_monotonic_time() - startedUs) / 1000;
-    const perfDue = this.diagnostics.noteReconcile(reconcileMs);
-    // §21: one perf event every 60 scans, gated on debug-enabled.
-    if (perfDue && this.deps.settings.boolean('debug-enabled', false)) {
-      this.deps.history.log('perf', {
-        last_reconcile_ms: reconcileMs,
-        last_apply_ms: this.diagnostics.lastApplyDurationMs(),
-        windows: this.windows.size,
-      });
-    }
-  }
-
-  /**
-   * Keep every tracked window inside its own monitor's **work area** (the
-   * surface minus struts), the same reference the tiler plans against. Using
-   * the full geometry instead pulled a window under the top bar — `y=679` where
-   * the tiler wanted the work-area top `y=711` — so the clamp and the tiler
-   * wrote two different rects forever. A property re-derived by the lane-2 drain
-   * and the periodic coherence sweep, never a one-shot reaction to a move, so a
-   * window dragged out of bounds is clamped on the next pass after the drag ends
-   * and dragging still feels free.
-   *
-   * Fullscreen windows (they own the screen) and minimized windows (Mutter
-   * manages their frame) are skipped. A tiled/maximized window is already inside
-   * the work area, so in practice the clamp only ever fires for a manual float.
-   * It is idempotent — a window already inside is untouched — and it reuses the
-   * tiler's bounded retry/refusal path for a window that refuses the geometry,
-   * so it can never loop or fight a stubborn client.
-   */
-  private clampWindowsToScreen(): void {
-    if (!this.deps.settings.boolean('clamp-windows-to-screen', true)) return;
-    // No clamping mid-drag: the user owns the geometry until the gesture ends.
-    if (this.dragging || this.adjustId !== null) return;
-    // §11/§35: an apply the tiler has in flight is an intermediate frame, not an
-    // off-screen float. Clamping it writes a rect derived from that frame and
-    // races the animation; worse, its own apply resets the "recently moved"
-    // clock, so `planMismatch` keeps returning false and the next drain clamps
-    // again — an unbounded loop. Defer until the transition has landed. A
-    // skipping app (Chrome/VS Code) never animates, so the recent-apply window
-    // is what catches it there.
-    const settling = this.deps.tiling.activeAnimations > 0 || Date.now() - this.deps.tiling.lastApplyAtMs < CLAMP_DEFER_MS;
-    for (const tracked of this.windows.values()) {
-      const flags = tracked.surface.flags;
-      // A window that has not been adopted or routed yet, that reports a
-      // degenerate frame, or that the tiler is mid-transition for is not an
-      // off-screen float. See `shouldClampWindow`.
-      if (
-        !shouldClampWindow({
-          ready: tracked.ready,
-          routePending: tracked.routePending,
-          fullscreen: flags.fullscreen,
-          minimized: flags.minimized,
-          stubborn: tracked.stubborn,
-          settling,
-          frame: tracked.surface.frame,
-        })
-      ) {
-        tracked.clamped = false;
-        continue;
-      }
-      const screen = this.screenFor(tracked.surface.screenId);
-      if (screen === null) continue;
-      tracked.refreshFrame();
-      const current = tracked.surface.frame;
-      const clamped = clampRectToArea(current, screenArea(screen));
-      if (rectEquals(current, clamped)) {
-        tracked.clamped = false;
-        continue;
-      }
-      tracked.clamped = true;
-      this.diagnostics.noteClamp();
-      this.deps.history.log('clamp_to_screen', { id: tracked.id, from: current, to: clamped });
-      this.deps.tiling.noteSelfApply();
-      this.deps.tiling.applyFrame(tracked, clamped, screen, false, 'clamp-to-screen', 0);
-    }
-  }
-
   /**
    * §35: periodic coherence guarantee. A normal (non-floating, non-modal)
    * window on a workspace with a sibling must be tiled. If one was left untiled
@@ -3691,115 +3329,8 @@ export class WindowSession {
    * through, clearing the refusal bookkeeping so it is retried.
    */
   coherenceSweep(): void {
-    if (this.deps.isPaused() || this.suspended) return;
-    // A drag whose release never arrived must not disable the guarantee below:
-    // clear it first, then run the pass.
-    if (this.dragIsStale()) {
-      this.abandonDrag('stale');
-      return;
-    }
-    // §6: an application DnD froze reflow; once the button is released the
-    // sweep lifts the freeze and reflows exactly once, so the newcomer is
-    // routed and the layout settles even if no frame signal arrives after the
-    // drop.
-    if (this.clientInteracting) {
-      if (compat.button1Pressed()) return;
-      this.clientInteracting = false;
-      this.scheduleReconcile('client-interaction-end');
-    }
-    if (this.dragging || this.adjustId !== null) return;
-    // The backstop for a clamp the lane-2 drain missed: an off-screen window is
-    // pulled back here even if no frame signal scheduled a reconcile.
-    this.clampWindowsToScreen();
-    this.diagnostics.noteCoherenceRun();
-    const sweepStartedUs = GLib.get_monotonic_time();
-    // One config per sweep, not per workspace×screen: the settings half is
-    // memoised and the live ratios/swap-pair set do not vary within the sweep
-    // (PERFORMANCE_PLAN stage 1.3 — "once per pass").
-    const config = this.tilerConfig();
-    const count = global.workspace_manager.get_n_workspaces();
-    for (let index = 0; index < count; index++) {
-      // §24/P2.5: a workspace's tileables cannot change inside the sweep. The
-      // corrections below only maximize/unmaximize/apply frames or clear the
-      // stubborn/refusal bookkeeping; Mutter signals are queued, never run
-      // inline, and `onStateChanged` only reads. Build once per workspace and
-      // filter the same list for each screen.
-      let workspaceTiles: TrackedWindow[] | null = null;
-      for (const screen of this.deps.host.screens()) {
-        const onScreen = (t: TrackedWindow) => t.surface.screenId === screen.index;
-        const busy = (t: TrackedWindow) => this.deps.tiling.isAnimating(t.id);
-
-        workspaceTiles ??= this.tileables(index);
-        const tileables = workspaceTiles.filter(onScreen);
-
-        // A placement is in flight: leave the workspace alone until it settles.
-        // Dropping the animating window from the count instead made a pair that
-        // is still forming look like a lone window, which the lone law then
-        // maximized and the §4 property exiled (S05).
-        if (tileables.some(busy)) continue;
-
-        // §6: a float pins its workspace and is never pulled back; the sweep
-        // leaves a workspace that holds only floats exactly as it is.
-        if (tileables.length === 0) continue;
-
-        // A lone window is maximized (§4): there is no such thing as a single
-        // window left untiled. Retry at most every 3 s per window so a window
-        // that genuinely refuses cannot be hammered every sweep.
-        if (tileables.length === 1) {
-          const only = tileables[0];
-          const due = Date.now() >= (this.coherenceRetryAt.get(only.id) ?? 0);
-          if (!compat.isMaximized(only.win) && !only.surface.flags.floating && due) {
-            this.coherenceRetryAt.set(only.id, Date.now() + COHERENCE_RETRY_MS);
-            only.stubborn = false;
-            this.deps.tiling.noteSelfApply();
-            this.deps.host.maximize(only.id);
-            this.diagnostics.noteCoherenceFix();
-            this.deps.history.log('tile', { reason: 'coherence-maximize', id: only.id, workspaceId: index });
-          }
-          continue;
-        }
-
-        // A pair is the most a workspace holds in v2; extra visible windows are
-        // a routing bug, not something to evict — leave them alone and let the
-        // next reconcile resolve them.
-        if (tileables.length > 2) continue;
-
-        this.diagnostics.notePlanComputed();
-        const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, config);
-        let offender = false;
-        for (const placement of plan.placements) {
-          const tracked = this.windows.get(placement.surfaceId);
-          if (tracked === undefined) continue;
-          this.diagnostics.noteSweepFrameRead();
-          tracked.refreshFrame();
-          const r = tracked.surface.frame;
-          const off =
-            Math.abs(r.x - placement.rect.x) > 2 ||
-            Math.abs(r.y - placement.rect.y) > 2 ||
-            Math.abs(r.width - placement.rect.width) > 2 ||
-            Math.abs(r.height - placement.rect.height) > 2;
-          if (off) {
-            offender = true;
-            // A refused geometry must not exempt the window forever.
-            tracked.stubborn = false;
-            tracked.refusals = 0;
-          }
-        }
-        if (!offender) continue;
-        this.signatures.clearAll();
-        this.ignoreMismatchUntilMs = 0;
-        this.deps.tiling.applyPlan(plan, screen, 'coherence', false, false);
-        this.diagnostics.noteCoherenceFix();
-        this.deps.history.log('tile', { reason: 'coherence', workspaceId: index, screen: screen.index });
-        this.deps.onStateChanged();
-      }
-    }
-    const sweepMs = (GLib.get_monotonic_time() - sweepStartedUs) / 1000;
-    this.diagnostics.noteSweep(sweepMs);
+    this.selfHeal.coherenceSweep();
   }
-
-  /** Per-window throttle for re-maximizing a lone window (ms epoch). */
-  private readonly coherenceRetryAt = new Map<number, number>();
 
   /** How many periodic coherence sweeps have run (diagnostics). */
   coherenceSweepCount(): number {
@@ -3816,15 +3347,14 @@ export class WindowSession {
    * no decision anywhere reads them.
    */
   counters(): SessionCounters {
-    return this.diagnostics.counters(this.queue.pending, this.errorCount);
+    return this.diagnostics.counters(this.drain.pending, this.errorCount);
   }
 
   /** §21: bounded state assertion. */
   memoryBounds(): { windows: number; sources: number; signals: number } {
     let signalCount = 0;
     for (const handlers of this.signals.values()) signalCount += handlers.length;
-    const armed = (this.drainArmed[1] ? 1 : 0) + (this.drainArmed[2] ? 1 : 0) + (this.drainArmed[3] ? 1 : 0);
-    return { windows: this.windows.size, sources: this.queue.pending > 0 ? armed : 0, signals: signalCount };
+    return { windows: this.windows.size, sources: this.drain.pending > 0 ? this.drain.armedCount() : 0, signals: signalCount };
   }
 
   /** §21: retile timings for the perf event. */
