@@ -43,6 +43,9 @@ export interface TilingDeps {
   isPaused(): boolean;
   onRatiosChanged(): void;
   onStubborn(appId: string): void;
+  /** §4/§11: record on the session that an unmaximize we are about to make is
+   * ours, so the asynchronous Mutter signal does not drive the user ladder. */
+  noteSelfUnmaximize(id: number): void;
 }
 
 export class Tiling {
@@ -246,14 +249,14 @@ export class Tiling {
     let delay = 0;
     if (compat.isMaximized(win)) {
       const started = GLib.get_monotonic_time();
-      // §4: this is our own unmaximize to fit a tile, not the user's. Mark it so
-      // `onMaximizeSignal` does not run the unmaximize policy for it.
-      tracked.selfUnmaximize = true;
-      try {
-        this.deps.host.unmaximize(tracked.id);
-      } finally {
-        tracked.selfUnmaximize = false;
-      }
+      // §4: this is our own unmaximize to fit a tile, not the user's. Record the
+      // echo on the session (Mutter emits the signal asynchronously) so
+      // `onMaximizeSignal` does not run the unmaximize policy for it, and mark
+      // the apply time so a stale maximize read is still covered by the global
+      // self-apply window.
+      this.noteSelfApply();
+      this.deps.noteSelfUnmaximize(tracked.id);
+      this.deps.host.unmaximize(tracked.id);
       const observed = Math.round((GLib.get_monotonic_time() - started) / 1000);
       this.deps.registry.observeUnmaximizeDelay(tracked.appKey, observed);
       delay = this.deps.registry.delayFor(tracked.appKey, tracked.profile.unmaximizeDelayMs);

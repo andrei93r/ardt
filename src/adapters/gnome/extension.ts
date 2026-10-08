@@ -376,6 +376,7 @@ export default class AdrtExtension extends Extension {
       isPaused: () => this.isPaused(),
       onRatiosChanged: () => this.saveState(),
       onStubborn: (appId) => this.onStubborn(appId),
+      noteSelfUnmaximize: (id) => this.session.noteSelfUnmaximize(id),
     });
 
     this.session = new WindowSession({

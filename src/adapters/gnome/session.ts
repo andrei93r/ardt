@@ -49,7 +49,7 @@ import type { FocusDirection } from '../../core/focus.js';
 import { cycleOrder, cycleSequence, pickDirectional } from '../../core/focus.js';
 import type { CycleEntry } from '../../core/focus.js';
 import { Layer, clampRectToArea, rectEquals } from '../../core/types.js';
-import type { Rect, Screen, TilePlan } from '../../core/types.js';
+import type { Rect, Screen, Size, TilePlan } from '../../core/types.js';
 import { shouldClampWindow } from '../../core/clamp.js';
 import * as compat from './compat.js';
 import type { GnomeHost } from './host.js';
@@ -92,13 +92,32 @@ interface WindowSignal {
   id: number;
 }
 
+/**
+ * §11/§16: what we expect one of our own state changes to produce. Mutter emits
+ * the matching maximize/workspace signal asynchronously, so a synchronous flag
+ * around the call is already cleared when it arrives; the handler matches this
+ * echo (value + monotonic time) instead. One entry per kind so a workspace move
+ * cannot refresh the timestamp of an in-flight unmaximize.
+ */
+interface SelfApplyEcho {
+  /** GLib monotonic µs of our last maximize/unmaximize apply (0 = none). */
+  maximizeAtUs: number;
+  /** The maximize state our apply is expected to produce. */
+  maximized: boolean;
+  /** GLib monotonic µs of our last workspace apply (0 = none). */
+  workspaceAtUs: number;
+  /** The workspace index our apply is expected to land on. */
+  workspace: number;
+}
+
 /** Quiet period after the last user frame change before a drop is interpreted
  * (internal signal-latency guard, not a frame cadence). */
 const ADJUST_SETTLE_MS = 150;
 /**
- * A maximize/unmaximize signal that arrives within this window of a state
- * change we made (`noteSelfApply`) is our own, not the user's: a signal is
- * emitted asynchronously, so a boolean flag around the call is not enough.
+ * A maximize/unmaximize/workspace signal that arrives within this window of a
+ * state change we made is our own, not the user's: Mutter emits the signal
+ * asynchronously, so the handler matches the recorded echo (see `selfEcho`)
+ * rather than a boolean flag that would already be cleared by then.
  */
 const SELF_APPLY_MS = 200;
 /**
@@ -123,7 +142,8 @@ export class WindowSession {
   readonly windows = new Map<number, TrackedWindow>();
   private readonly signals = new Map<number, WindowSignal[]>();
   private readonly signatures = new SignatureCache();
-  private readonly suppress = new Set<number>();
+  /** §11/§16: our own recent maximize/workspace changes, one per window. */
+  private readonly selfEcho = new Map<number, SelfApplyEcho>();
   /**
    * §11: one scheduling path. Every signal handler pushes here; a single
    * deferred drain runs the policy, in lane order, with per-key coalescing.
@@ -141,6 +161,8 @@ export class WindowSession {
   /** §19: set while the drain finishes the backlog a pause caught. */
   private drainingBacklog = false;
   private drainArmed: { 1: boolean; 2: boolean; 3: boolean } = { 1: false, 2: false, 3: false };
+  /** True once `destroy()` has run; a later-deferred drain must then be a no-op. */
+  private destroyed = false;
   private drains = 0;
   private drainMsMax = 0;
   /** §22 perf: bounded samples for p50/p95 of drain and apply latency. */
@@ -188,6 +210,8 @@ export class WindowSession {
   private suspended = false;
   /** `org.gnome.mutter`, the authority on the screen classes (§1). */
   private mutterSettings: any = null;
+  /** One-shot diagnostic so a persistent schema failure is logged once, not per pass. */
+  private screenClassErrorLogged = false;
   /** The static workspace count (`org.gnome.desktop.wm.preferences`). */
   private wmPreferencesSettings: any = null;
   private adjustId: number | null = null;
@@ -597,12 +621,7 @@ export class WindowSession {
       // maximize: it is unmaximized and tiled with its sibling. A user-requested
       // maximize still gets its own workspace through `onMaximizeSignal`.
       this.deps.tiling.noteSelfApply();
-      tracked.selfUnmaximize = true;
-      try {
-        this.deps.host.unmaximize(tracked.id);
-      } finally {
-        tracked.selfUnmaximize = false;
-      }
+      this.withSelfUnmaximize(tracked, () => this.deps.host.unmaximize(tracked.id));
       tracked.surface.refresh();
       // §3/§16: opening maximized is not a user maximize, so it is never
       // *placed* by it — but it is still an arrival. Route it through the pure
@@ -715,8 +734,14 @@ export class WindowSession {
         this.wmPreferencesSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.preferences' });
       }
       numWorkspaces = this.wmPreferencesSettings.get_int('num-workspaces');
-    } catch {
-      /* keep the defaults: GNOME's dynamic-workspace behaviour */
+    } catch (error) {
+      // Keep the defaults (GNOME's dynamic-workspace behaviour) but report the
+      // failure once: this is called from the retile pass, so logging every
+      // attempt would put file I/O in a hot path.
+      if (!this.screenClassErrorLogged) {
+        this.screenClassErrorLogged = true;
+        this.deps.history.log('error', { reason: 'screen-class', error: this.errorText(error) });
+      }
     }
     if (!dynamic) return numWorkspaces > 1 ? 'fixed' : 'single';
     const screen = this.screenFor(screenId);
@@ -906,14 +931,9 @@ export class WindowSession {
       if (other.id === exceptId) continue;
       if (!compat.isMaximized(other.win)) continue;
       this.deps.tiling.noteSelfApply();
-      // This is our own unmaximize to let the pair form: mark it so the
-      // resulting signal does not run the user unmaximize ladder (A45).
-      other.selfUnmaximize = true;
-      try {
-        this.deps.host.unmaximize(other.id);
-      } finally {
-        other.selfUnmaximize = false;
-      }
+      // This is our own unmaximize to let the pair form: the echo keeps the
+      // resulting signal from running the user unmaximize ladder (A45).
+      this.withSelfUnmaximize(other, () => this.deps.host.unmaximize(other.id));
     }
   }
 
@@ -944,6 +964,7 @@ export class WindowSession {
     this.deps.host.clearAbove(id);
     this.disconnectWindow(id);
     this.windows.delete(id);
+    this.selfEcho.delete(id);
     this.deps.host.forgetSurface(id);
     if (wasTiled) this.deps.onClosed(id, closedRect);
     this.deps.onModelEvent?.('window-closed', { id });
@@ -1031,12 +1052,7 @@ export class WindowSession {
             tracked.pendingSlot = slot.slot;
             if (compat.isMaximized(tracked.win)) {
               this.deps.tiling.noteSelfApply();
-              tracked.selfUnmaximize = true;
-              try {
-                this.deps.host.unmaximize(tracked.id);
-              } finally {
-                tracked.selfUnmaximize = false;
-              }
+              this.withSelfUnmaximize(tracked, () => this.deps.host.unmaximize(tracked.id));
             }
             changed = true;
           }
@@ -1197,8 +1213,15 @@ export class WindowSession {
         if (this.deps.host.isLiveMonitorIndex(target.index)) {
           try {
             tracked.win.move_to_monitor?.(target.index);
-          } catch {
-            /* simulated screen: the policy move still stands */
+          } catch (error) {
+            // The policy move still stands (a simulated screen has no Mutter
+            // monitor to move to); report the failed compositor call.
+            this.deps.history.log('error', {
+              reason: 'move-to-monitor',
+              id: tracked.id,
+              monitor: target.index,
+              error: this.errorText(error),
+            });
           }
         }
       }
@@ -1246,7 +1269,10 @@ export class WindowSession {
     try {
       const index: unknown = win.get_monitor?.();
       return typeof index === 'number' ? index : -1;
-    } catch {
+    } catch (error) {
+      // The window is gone: -1 still lets the caller skip the move, but the
+      // failed compositor read is worth a diagnostic.
+      this.deps.history.log('error', { reason: 'live-monitor', error: this.errorText(error) });
       return -1;
     }
   }
@@ -1428,17 +1454,22 @@ export class WindowSession {
   }
 
   private armDrain(lane: 1 | 2 | 3): void {
-    if (this.drainArmed[lane]) return;
+    if (this.destroyed || this.drainArmed[lane]) return;
     this.drainArmed[lane] = true;
     const run = (): number => {
       this.drainArmed[lane] = false;
+      // A later registered before `destroy()` can still fire afterwards; the
+      // queue is already cleared, and running policy on a torn-down session
+      // must be a no-op.
+      if (this.destroyed) return GLib.SOURCE_REMOVE;
       this.runDrain();
       return GLib.SOURCE_REMOVE;
     };
     if (lane === 3) {
       // §10: a work-area change can arrive before the shell has set its struts,
-      // so maintenance waits for the surface to settle.
-      GLib.timeout_add(GLib.PRIORITY_DEFAULT, MAINTENANCE_SETTLE_MS, run);
+      // so maintenance waits for the surface to settle. Registered so
+      // `destroy()` cancels it while the lane stays armed until it fires.
+      this.addTimeout(MAINTENANCE_SETTLE_MS, run);
       return;
     }
     try {
@@ -1453,8 +1484,16 @@ export class WindowSession {
     } catch {
       // No later machinery (or the enum moved): a short timeout is still one
       // deferred pass, never policy inside the signal handler. One frame at the
-      // screen's refresh, never an assumed 60 Hz.
-      GLib.timeout_add(GLib.PRIORITY_DEFAULT, Math.max(1, Math.floor(this.deps.timing.frameIntervalFor())), run);
+      // screen's refresh, never an assumed 60 Hz. Registered so `destroy()`
+      // cancels it.
+      try {
+        this.addTimeout(Math.max(1, Math.floor(this.deps.timing.frameIntervalFor())), run);
+      } catch (error) {
+        // No deferral source could be armed at all: drop the arm so the next
+        // push retries instead of leaving the lane armed forever.
+        this.drainArmed[lane] = false;
+        this.reportError('arm-drain', error);
+      }
     }
   }
 
@@ -1497,9 +1536,14 @@ export class WindowSession {
     };
   }
 
+  /** The message of a caught unknown, for the diagnostics below. */
+  private errorText(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
   /** Log a caught error (`[adrt] ERROR`-style) and journal it, never rethrow. */
   private reportError(context: string, error: unknown): void {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = this.errorText(error);
     this.errorCount += 1;
     console.error(`[adrt] ERROR ${context}: ${message}`);
     try {
@@ -1748,12 +1792,7 @@ export class WindowSession {
       if (maximized.length > 0) {
         for (const stale of maximized) {
           this.deps.tiling.noteSelfApply();
-          stale.selfUnmaximize = true;
-          try {
-            this.deps.host.unmaximize(stale.id);
-          } finally {
-            stale.selfUnmaximize = false;
-          }
+          this.withSelfUnmaximize(stale, () => this.deps.host.unmaximize(stale.id));
         }
         this.scheduleRetile(workspaceId, 'unmaximize-stale');
         continue;
@@ -1761,7 +1800,11 @@ export class WindowSession {
       const startedUs = GLib.get_monotonic_time();
       this.plansComputed += 1;
       const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, this.tilerConfig());
-      const violations = checkPlan(plan, screen.workArea ?? screen.geometry);
+      // §36: pass the per-window minimum so the below-min invariant actually
+      // runs in production, not just in the tests; a violation is still logged,
+      // never enforced.
+      const mins = new Map<number, Size>(tileables.map((t) => [t.id, t.minSize]));
+      const violations = checkPlan(plan, screen.workArea ?? screen.geometry, mins);
       if (violations.length > 0) {
         // §5: the packing invariant is asserted, not enforced — a violation is
         // logged with its identifier and the state so the long mixed run can
@@ -2168,12 +2211,7 @@ export class WindowSession {
         if (instance.maximized) {
           this.deps.host.maximize(tracked.id);
         } else {
-          tracked.selfUnmaximize = true;
-          try {
-            this.deps.host.unmaximize(tracked.id);
-          } finally {
-            tracked.selfUnmaximize = false;
-          }
+          this.withSelfUnmaximize(tracked, () => this.deps.host.unmaximize(tracked.id));
         }
       }
       tracked.refreshFrame();
@@ -2385,11 +2423,10 @@ export class WindowSession {
     const from = current.surface.workspaceId;
     // §13: a user workspace move is the change undo will revert, on both planes.
     this.capturePlane([from, index], current.surface.screenId);
-    this.suppress.add(current.id);
+    this.noteSelfEcho(current.id, { workspace: index });
     this.deps.tiling.noteSelfApply();
     this.deps.onWindowMoving();
     this.deps.host.applyWorkspace(current.id, index);
-    this.suppress.delete(current.id);
     current.surface.workspaceId = index;
     current.lastWorkspaceIdx = index;
     current.escaped = false;
@@ -2444,6 +2481,7 @@ export class WindowSession {
   }
 
   destroy(): void {
+    this.destroyed = true;
     for (const id of this.signals.keys()) this.disconnectWindow(id);
     this.signals.clear();
     this.stopScan();
@@ -2451,6 +2489,7 @@ export class WindowSession {
     this.drainArmed = { 1: false, 2: false, 3: false };
     for (const id of this.timeoutSources) GLib.source_remove(id);
     this.timeoutSources.clear();
+    this.selfEcho.clear();
     if (this.adjustSource !== null) {
       GLib.source_remove(this.adjustSource);
       this.adjustSource = null;
@@ -2558,14 +2597,13 @@ export class WindowSession {
     return Math.min(target, manager.get_n_workspaces() - 1);
   }
 
-  /** Move one tracked window to a workspace, suppressing the resulting signals. */
+  /** Move one tracked window to a workspace; the echo cancels the resulting signal. */
   private moveWindowToWorkspace(tracked: TrackedWindow, index: number): void {
-    this.suppress.add(tracked.id);
+    this.noteSelfEcho(tracked.id, { workspace: index });
     this.deps.tiling.noteSelfApply();
     this.deps.onWindowMoving();
     this.deps.tiling.cancel(tracked.id);
     this.deps.host.applyWorkspace(tracked.id, index);
-    this.suppress.delete(tracked.id);
     tracked.surface.workspaceId = index;
     tracked.lastWorkspaceIdx = index;
     this.signatures.clearAll();
@@ -2981,12 +3019,7 @@ export class WindowSession {
     tracked.refreshFrame();
     // A maximized window dragged across screens is un-maximized at the drop.
     if (compat.isMaximized(tracked.win)) {
-      tracked.selfUnmaximize = true;
-      try {
-        this.deps.host.unmaximize(tracked.id);
-      } finally {
-        tracked.selfUnmaximize = false;
-      }
+      this.withSelfUnmaximize(tracked, () => this.deps.host.unmaximize(tracked.id));
       tracked.refreshFrame();
     }
     const crossed = this.crossedWindow(tracked);
@@ -3000,8 +3033,10 @@ export class WindowSession {
     // §16: a dialog floats, is centred on its parent and raised.
     try {
       tracked.win.raise();
-    } catch {
-      /* window gone */
+    } catch (error) {
+      // The dialog is gone; centring is skipped but the failed raise is worth a
+      // diagnostic (the fallback below still runs).
+      this.deps.history.log('error', { reason: 'recenter-modal-raise', id: tracked.id, error: this.errorText(error) });
     }
     const parentId = tracked.surface.parentId;
     if (parentId === null) return;
@@ -3468,13 +3503,84 @@ export class WindowSession {
     this.scheduleReconcile('drop');
   }
 
+  /**
+   * §11/§16: record that *we* are about to change a window's maximize or
+   * workspace state. Mutter emits the matching signal asynchronously, so the
+   * expected value is kept with a monotonic timestamp instead of a synchronous
+   * boolean that would already be cleared when the signal arrives.
+   */
+  private noteSelfEcho(id: number, expected: { maximized?: boolean; workspace?: number }): void {
+    const now = GLib.get_monotonic_time();
+    const echo = this.selfEcho.get(id) ?? { maximizeAtUs: 0, maximized: false, workspaceAtUs: 0, workspace: -1 };
+    if (expected.maximized !== undefined) {
+      echo.maximizeAtUs = now;
+      echo.maximized = expected.maximized;
+    }
+    if (expected.workspace !== undefined) {
+      echo.workspaceAtUs = now;
+      echo.workspace = expected.workspace;
+    }
+    this.selfEcho.set(id, echo);
+  }
+
+  /** True while `id` has an unexpired echo matching the reported change. */
+  private hasSelfEcho(id: number, match: { maximized?: boolean; workspace?: number }): boolean {
+    const echo = this.selfEcho.get(id);
+    if (echo === undefined) return false;
+    const now = GLib.get_monotonic_time();
+    let matched = false;
+    if (match.maximized !== undefined && echo.maximizeAtUs !== 0) {
+      if (now - echo.maximizeAtUs > SELF_APPLY_MS * 1000) echo.maximizeAtUs = 0;
+      else if (echo.maximized === match.maximized) matched = true;
+    }
+    if (match.workspace !== undefined && echo.workspaceAtUs !== 0) {
+      if (now - echo.workspaceAtUs > SELF_APPLY_MS * 1000) echo.workspaceAtUs = 0;
+      else if (echo.workspace === match.workspace) matched = true;
+    }
+    if (echo.maximizeAtUs === 0 && echo.workspaceAtUs === 0) this.selfEcho.delete(id);
+    return matched;
+  }
+
+  /** True while `id` still has an unexpired workspace echo (our own move). */
+  private hasWorkspaceEcho(id: number): boolean {
+    const echo = this.selfEcho.get(id);
+    if (echo === undefined || echo.workspaceAtUs === 0) return false;
+    if (GLib.get_monotonic_time() - echo.workspaceAtUs > SELF_APPLY_MS * 1000) {
+      echo.workspaceAtUs = 0;
+      if (echo.maximizeAtUs === 0) this.selfEcho.delete(id);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * §4/§11: record that *we* are about to unmaximize `id` (the tiler calls this
+   * through its deps before its own `applyFrame` unmaximize). The echo must
+   * outlive the call: Mutter emits the matching signal asynchronously.
+   */
+  noteSelfUnmaximize(id: number): void {
+    this.noteSelfEcho(id, { maximized: false });
+  }
+
+  /**
+   * §4/§11: run one of our own unmaximizes. The echo must outlive the call:
+   * Mutter emits the matching signal asynchronously, so the transient boolean
+   * this replaced was already false when the signal arrived.
+   */
+  private withSelfUnmaximize(tracked: TrackedWindow, fn: () => void): void {
+    this.noteSelfUnmaximize(tracked.id);
+    fn();
+  }
+
   private onMaximizeSignal(tracked: TrackedWindow): void {
     if (!tracked.ready) return;
-    if (this.suppress.has(tracked.id)) return;
+    // A maximize that rides our own workspace move is that move's echo, not a
+    // user request; the old `suppress` set was already empty by signal time.
+    if (this.hasWorkspaceEcho(tracked.id)) return;
     tracked.surface.refresh();
     // §11: a Mutter signal records the intent; the drain re-derives the state
-    // and applies it (the A45 pattern). `selfUnmaximize` is our own tiler's
-    // unmaximize and must not drive the ladder.
+    // and applies it (the A45 pattern). An unmaximize we caused (`withSelfUnmaximize`,
+    // or the tiler's own unmaximize in `applyFrame`) must not drive the ladder.
     if (compat.isMaximized(tracked.win)) {
       // A maximize we caused — the lone law, a routed arrival, the coherence
       // sweep — is not a user request. Without this the drain's §4 property
@@ -3486,7 +3592,7 @@ export class WindowSession {
       this.scheduleReconcile('maximize');
       return;
     }
-    if (tracked.selfUnmaximize) {
+    if (this.hasSelfEcho(tracked.id, { maximized: false })) {
       this.scheduleReconcile('self-unmaximize');
       return;
     }
@@ -3497,10 +3603,12 @@ export class WindowSession {
 
   private onWorkspaceSignal(tracked: TrackedWindow): void {
     if (!tracked.ready) return;
-    if (this.suppress.has(tracked.id)) return;
     const workspace = tracked.win.get_workspace();
     if (workspace === null) return;
     const index = workspace.index();
+    // Our own workspace move (`noteSelfEcho`): match the index we applied. The
+    // old `suppress` set was already empty by the time this signal arrived.
+    if (this.hasSelfEcho(tracked.id, { workspace: index })) return;
     // Compare against the index WE last recorded, not `surface.workspaceId`:
     // `refresh()` copies the live workspace into the surface at every frame, so
     // by the time this signal arrives the cached value can already be the new
