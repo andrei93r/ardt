@@ -29,10 +29,10 @@
 | --- | --- | --- |
 | P0 | Land ready refactor + repair the green gate | **done** (gate fixes on `perf-gnome`; nested smoke pending) |
 | P1 | Correctness sweep | **done** — 1.1–1.9, 1.11–1.14 committed; 1.10 done for session.ts (injection/parseSpawnEnv leftovers in extension.ts) |
-| P2 | Main-loop & allocation diet | mostly done — 2.1–2.4, 2.6, 2.8, 2.11-core committed; 2.5 (per-pass reuse), 2.7 (sweep gating, measure first), 2.9 (profiler), 2.11-adapter (ring buffers) next |
-| P3 | Zero `any` | started — 3.2 events + 3.3 compat (48→0) + 3.6 test typecheck committed; 3.1 (`gi.d.ts`), 3.4 (`prefs.ts`), 3.5 (`as unknown as`), eslint enforcement next |
-| P4 | Decomposition & deletion | started — first dead-code sweep committed; session/extension split, JSONL unification, trigger registry next |
-| P5 | Guardrails (CI/tests/docs) | started — `check:types` in CI/test:all; knip, coverage gate in CI, shellcheck, fuzz wiring next |
+| P2 | Main-loop & allocation diet | mostly done — 2.1–2.6, 2.8, 2.11 committed; 2.7 (sweep gating, measure first) and 2.9 (profiler) remain |
+| P3 | Zero `any` | in progress — 3.2 events, 3.3 compat, 3.4 prefs, 3.5 extension, host slice + test typecheck committed; small-file sweep in flight; gi.d.ts finalization and eslint enforcement next |
+| P4 | Decomposition & deletion | in progress — dead-code sweep committed; JSONL unification in flight; session/extension split, helpers dedupe, trigger registry, DumpState schema, ARCHITECTURE.md remain |
+| P5 | Guardrails (CI/tests/docs) | in progress — check:types + scenario-coverage in CI; knip, shellcheck, fuzz wiring remain |
 
 ---
 
@@ -306,6 +306,18 @@ report.
    `exactOptionalPropertyTypes`, and finally `noUncheckedIndexedAccess` (the
    3 `!` in `core/topology.ts` are the canary). Type declarations for the
    unavoidable GJS corners stay `unknown`, not `any`.
+
+**Finalization method (agreed 2026-10-08, additive-slice pattern proven on
+`host.ts`, `prefs.ts` and the small adapters).** Finish in this order:
+
+1. Zero explicit `any` in every consumer file using named interfaces from
+   `gi.d.ts`, while the namespace defaults stay broad (tree stays green).
+2. Flip one namespace at a time — `const Meta: any` → `const Meta: MetaNamespace`,
+   then fix the fallout file-by-file and gate each flip. Order: `Meta`, `Gio`,
+   `St`, `Clutter`, `Adw`/`Gtk`, `GLib`, `Shell`/`Main`/`global`.
+3. Only then flip `no-explicit-any` to `error`, with `**/*.d.ts` exempt until
+   step 2 completes; add type-aware `no-floating-promises` at the same time.
+4. The acceptance grep must return 0 across `src` including `gi.d.ts`.
 
 **Acceptance:** `grep -R ": any\|as any\|<any>" src` returns 0 (including
 `gi.d.ts`); `tsc --noEmit` covers `src` + `tests`; lint clean.
