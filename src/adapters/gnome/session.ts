@@ -9,7 +9,9 @@
 
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import type { Settings as GioSettings } from 'gi://Gio';
 import Meta from 'gi://Meta';
+import type { MetaDisplay, MetaWindow, MetaWorkspace } from 'gi://Meta';
 import { wm } from 'resource:///org/gnome/shell/ui/main.js';
 
 import type { HeuristicContext } from '../../core/classify.js';
@@ -108,6 +110,17 @@ interface SelfApplyEcho {
   workspaceAtUs: number;
   /** The workspace index our apply is expected to land on. */
   workspace: number;
+}
+
+/**
+ * The private `Main.wm._workspaceAnimation` controller (§23.2). `wm` is
+ * declared `any`; this names only the members `instantSwitch` reads and
+ * patches, each optional because Shell internals move between releases — the
+ * same structural boundary `extension.ts` uses for `wm._workspaceAnimation`.
+ */
+interface SwitchAnimationController {
+  animateSwitch?: (from: unknown, to: unknown, direction: unknown, onComplete: unknown) => void;
+  cancelSwitchAnimation?(): void;
 }
 
 /** Quiet period after the last user frame change before a drop is interpreted
@@ -215,11 +228,11 @@ export class WindowSession {
   /** True while a compositor state makes tiling pointless (the overview). */
   private suspended = false;
   /** `org.gnome.mutter`, the authority on the screen classes (§1). */
-  private mutterSettings: any = null;
+  private mutterSettings: GioSettings | null = null;
   /** One-shot diagnostic so a persistent schema failure is logged once, not per pass. */
   private screenClassErrorLogged = false;
   /** The static workspace count (`org.gnome.desktop.wm.preferences`). */
-  private wmPreferencesSettings: any = null;
+  private wmPreferencesSettings: GioSettings | null = null;
   private adjustId: number | null = null;
   private adjustSource: number | null = null;
   /**
@@ -266,10 +279,10 @@ export class WindowSession {
     // §7.6: user reorders shift every window's workspace index.
     this.reorderSignal = global.workspace_manager.connect('workspaces-reordered', this.guard('workspaces-reordered', () => this.onWorkspacesReordered()));
     // §11.3 / §23.1: never retile or show the border while the user is dragging.
-    this.grabBeginSignal = global.display.connect('grab-op-begin', this.guard('grab-op-begin', (_display: any, win: any, op: number) =>
+    this.grabBeginSignal = global.display.connect('grab-op-begin', this.guard('grab-op-begin', (_display: MetaDisplay, win: MetaWindow, op: number) =>
       this.onGrabBegin(win, op),
     ));
-    this.grabEndSignal = global.display.connect('grab-op-end', this.guard('grab-op-end', (_display: any, win: any, op: number) =>
+    this.grabEndSignal = global.display.connect('grab-op-end', this.guard('grab-op-end', (_display: MetaDisplay, win: MetaWindow, op: number) =>
       this.onGrabEnd(win, op),
     ));
     // Anything that can move, restack or re-parent a window triggers a
@@ -357,12 +370,12 @@ export class WindowSession {
     if (!suspended) this.scheduleReconcile('resume');
   }
 
-  private onGrabBegin(win: any, _op: number): void {
+  private onGrabBegin(win: MetaWindow, _op: number): void {
     if (win === null) return;
     this.beginDrag(win.get_id());
   }
 
-  private onGrabEnd(win: any, _op: number): void {
+  private onGrabEnd(win: MetaWindow, _op: number): void {
     if (win === null) return;
     this.endDrag(win.get_id());
   }
@@ -548,7 +561,7 @@ export class WindowSession {
     else this.stopScan();
   }
 
-  register(win: any): void {
+  register(win: MetaWindow): void {
     const id: number = win.get_id();
     if (this.windows.has(id)) return;
     // Popups, menus and tooltips are override-redirect on X11; they are never
@@ -732,14 +745,14 @@ export class WindowSession {
     let numWorkspaces = 1;
     let onlyPrimary = true;
     try {
-      if (this.mutterSettings === null) this.mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
-      dynamic = this.mutterSettings.get_boolean('dynamic-workspaces');
-      onlyPrimary = this.mutterSettings.get_boolean('workspaces-only-on-primary');
+      const mutter: GioSettings = this.mutterSettings ?? new Gio.Settings({ schema_id: 'org.gnome.mutter' });
+      this.mutterSettings = mutter;
+      dynamic = mutter.get_boolean('dynamic-workspaces');
+      onlyPrimary = mutter.get_boolean('workspaces-only-on-primary');
       // The static workspace count lives in the wm preferences, not mutter.
-      if (this.wmPreferencesSettings === null) {
-        this.wmPreferencesSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.preferences' });
-      }
-      numWorkspaces = this.wmPreferencesSettings.get_int('num-workspaces');
+      const wmPrefs: GioSettings = this.wmPreferencesSettings ?? new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.preferences' });
+      this.wmPreferencesSettings = wmPrefs;
+      numWorkspaces = wmPrefs.get_int('num-workspaces');
     } catch (error) {
       // Keep the defaults (GNOME's dynamic-workspace behaviour) but report the
       // failure once: this is called from the retile pass, so logging every
@@ -1276,7 +1289,7 @@ export class WindowSession {
    * this very moment, or -1 when the window is gone. Never the cached
    * `surface.screenId`, which can name a monitor that was just removed.
    */
-  private liveMonitorOf(win: any): number {
+  private liveMonitorOf(win: MetaWindow): number {
     try {
       const index: unknown = win.get_monitor?.();
       return typeof index === 'number' ? index : -1;
@@ -2663,8 +2676,8 @@ export class WindowSession {
     this.signatures.clearAll();
   }
 
-  private workspaceIsEmpty(workspace: any): boolean {
-    return workspace.list_windows().filter((win: any) => this.windows.has(win.get_id())).length === 0;
+  private workspaceIsEmpty(workspace: MetaWorkspace): boolean {
+    return workspace.list_windows().filter((win: MetaWindow) => this.windows.has(win.get_id())).length === 0;
   }
 
   /** §4: maximize — its own workspace to the right, or in place on `single`. */
@@ -2851,6 +2864,15 @@ export class WindowSession {
   }
 
   /**
+   * `Main.wm._workspaceAnimation`, a private Shell field; read through one
+   * structural view because `wm` has no public type (§23.2).
+   */
+  private workspaceAnimation(): SwitchAnimationController | null {
+    const controller = (wm as { _workspaceAnimation?: SwitchAnimationController | null })._workspaceAnimation;
+    return controller ?? null;
+  }
+
+  /**
    * Run a programmatic workspace change with the switch animation suppressed.
    * Mutter draws *clones* of every window during that slide, each carrying the
    * window's shadow, so a window we are moving looks like it casts a shadow of
@@ -2858,9 +2880,9 @@ export class WindowSession {
    * animation.
    */
   private instantSwitch(fn: () => void): void {
-    const controller = (wm as { _workspaceAnimation?: any })._workspaceAnimation;
+    const controller = this.workspaceAnimation();
     const original = controller?.animateSwitch;
-    if (controller === undefined || controller === null || typeof original !== 'function') {
+    if (controller === null || typeof original !== 'function') {
       fn();
       return;
     }
@@ -2871,7 +2893,7 @@ export class WindowSession {
     } catch {
       /* private API changed: carry on */
     }
-    controller.animateSwitch = function (_from: any, _to: any, _direction: any, onComplete: any) {
+    controller.animateSwitch = function (_from: unknown, _to: unknown, _direction: unknown, onComplete: unknown) {
       if (typeof onComplete === 'function') onComplete();
     };
     try {
@@ -2952,7 +2974,7 @@ export class WindowSession {
     if (manager.get_n_workspaces() <= 1) return;
     const workspace = manager.get_workspace_by_index(workspaceId);
     if (workspace === null) return;
-    const remaining = workspace.list_windows().filter((win: any) => this.windows.has(win.get_id()));
+    const remaining = workspace.list_windows().filter((win: MetaWindow) => this.windows.has(win.get_id()));
     if (remaining.length > 0) return;
 
     if (manager.get_active_workspace_index() === workspaceId) {
@@ -2977,7 +2999,7 @@ export class WindowSession {
     for (let index = from + step; index >= 0 && index < manager.get_n_workspaces(); index += step) {
       const workspace = manager.get_workspace_by_index(index);
       if (workspace === null) continue;
-      if (workspace.list_windows().some((win: any) => this.windows.has(win.get_id()))) return index;
+      if (workspace.list_windows().some((win: MetaWindow) => this.windows.has(win.get_id()))) return index;
     }
     return -1;
   }
@@ -3112,7 +3134,7 @@ export class WindowSession {
   private connectWindow(tracked: TrackedWindow): void {
     const win = tracked.win;
     const handlers: WindowSignal[] = [];
-    const on = (signal: string, cb: (...args: any[]) => void) => {
+    const on = (signal: string, cb: (...args: unknown[]) => void) => {
       handlers.push({ id: win.connect(signal, this.guard(`window:${signal}`, cb)) });
     };
 

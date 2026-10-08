@@ -22,6 +22,45 @@ import { layoutManager, overview, sessionMode, wm } from 'resource:///org/gnome/
 
 import type { SignalRegistry } from './lifecycle.js';
 
+/**
+ * Structural views of the private Shell chrome `main.js` exposes as `any`.
+ * Each names only the members read here, optional exactly where the code probes
+ * — the same boundary `extension.ts` uses for `wm._workspaceAnimation`.
+ */
+
+/** One `layoutManager._workspaces` actor, watched for a transitioning position. */
+interface WorkspaceActorLike {
+  connect(signal: string, callback: (...args: never[]) => void): number;
+  disconnect(id: number): void;
+}
+
+/** The private `layoutManager._workspaces` field. */
+interface LayoutManagerLike {
+  _workspaces?: unknown;
+}
+
+/** The swipe tracker behind the private `Main.wm._workspaceAnimation`. */
+interface SwipeTrackerLike {
+  connect(signal: string, callback: (...args: never[]) => void): number;
+  disconnect(id: number): void;
+}
+
+/** The private `layoutManager._workspaces` actor array, or null when the field
+ * is absent or not an array. `layoutManager` is declared `any` by `main.js`. */
+function layoutWorkspaces(): readonly (WorkspaceActorLike | null | undefined)[] | null {
+  const workspaces = (layoutManager as LayoutManagerLike)._workspaces;
+  if (!Array.isArray(workspaces)) return null;
+  const actors: readonly (WorkspaceActorLike | null | undefined)[] = workspaces;
+  return actors;
+}
+
+/** The swipe tracker behind `Main.wm._workspaceAnimation`, or null when the
+ * controller or tracker is absent. `wm` is declared `any` by `main.js`. */
+function workspaceAnimationTracker(): SwipeTrackerLike | null {
+  const animation = (wm as { _workspaceAnimation?: { _swipeTracker?: SwipeTrackerLike | null } | null })._workspaceAnimation;
+  return animation?._swipeTracker ?? null;
+}
+
 /** The shell-chrome events the tracker emits. Layout changes need no event:
  * the tracker re-reads the actors itself. */
 export type ShellTrackerEvent =
@@ -82,8 +121,8 @@ export class ShellTracker {
   refreshWorkspaceActors(): void {
     const { signals, guard, emit } = this.deps;
     signals.disconnect('workspace-actors');
-    const workspaces = (layoutManager as any)._workspaces;
-    if (!Array.isArray(workspaces)) return;
+    const workspaces = layoutWorkspaces();
+    if (workspaces === null) return;
     for (const actor of workspaces) {
       if (actor === null || actor === undefined) continue;
       signals.add('workspace-actors', actor, 'notify::x', guard('workspace-actor-x', () => {
@@ -103,8 +142,8 @@ export class ShellTracker {
    */
   connectWorkspaceAnimation(): void {
     const { signals, guard, emit } = this.deps;
-    const tracker = (wm as any)?._workspaceAnimation?._swipeTracker;
-    if (tracker === null || tracker === undefined || typeof tracker.connect !== 'function') return;
+    const tracker = workspaceAnimationTracker();
+    if (tracker === null || typeof tracker.connect !== 'function') return;
     signals.add('workspace-animation', tracker, 'begin', guard('workspace-animation-begin', () => {
       emit({ type: 'workspace-animation' });
     }));

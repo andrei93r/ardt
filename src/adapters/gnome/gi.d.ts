@@ -136,6 +136,7 @@ declare module 'gi://Meta' {
   export interface MetaWorkspace {
     index(): number;
     get_work_area_for_monitor(index: number): MetaRectangle;
+    list_windows(): MetaWindow[];
   }
 
   /** A Mutter workspace manager (`Meta.WorkspaceManager`). */
@@ -200,7 +201,7 @@ declare module 'gi://Meta' {
     unminimize(): void;
     make_fullscreen(): void;
     unmake_fullscreen(): void;
-    connect(signal: string, callback: (...args: unknown[]) => void): number;
+    connect(signal: string, callback: (...args: never[]) => void): number;
     disconnect(id: number): void;
   }
 
