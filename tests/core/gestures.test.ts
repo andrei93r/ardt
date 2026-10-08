@@ -57,6 +57,20 @@ describe('feedGesture', () => {
     expect(state.phase).toBe('cancel');
   });
 
+  it('hands out a frozen none-action no caller can corrupt for later calls', () => {
+    const cancelled = feedGesture(initialGestureState(), event('swipe-3-horizontal', 'cancel'), config());
+    expect(cancelled).toEqual({ type: 'none' });
+    expect(Object.isFrozen(cancelled)).toBe(true);
+    // A frozen ESM singleton rejects the write; the shared value the next call
+    // reads is therefore untouched.
+    expect(() => {
+      (cancelled as { type: string }).type = 'custom';
+    }).toThrow();
+    const belowThreshold = swipe('swipe-3-horizontal', 5, 0);
+    expect(belowThreshold).toEqual({ type: 'none' });
+    expect(belowThreshold).toBe(cancelled);
+  });
+
   it('returns none and resets on cancel', () => {
     const state = initialGestureState();
     const cfg = config();

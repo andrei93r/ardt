@@ -67,7 +67,11 @@ export type GestureAction =
   | { type: 'custom'; action: string }
   | { type: 'none' };
 
-export const NONE_ACTION: GestureAction = { type: 'none' };
+/**
+ * The shared below-threshold/cancel answer. Frozen so one caller mutating the
+ * object it received cannot corrupt what every later completion returns.
+ */
+export const NONE_ACTION: GestureAction = Object.freeze({ type: 'none' });
 
 export function initialGestureState(): GestureState {
   return {
