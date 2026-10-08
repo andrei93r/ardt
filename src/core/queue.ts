@@ -97,7 +97,11 @@ export class EventQueue {
     this.count = 0;
   }
 
-  /** The newest age in a drained batch, for the perf counters. */
+  /**
+   * The oldest (worst-case) age in a drained batch, for the perf counters. A
+   * batch coalesces one entry per key retaining its earliest position, so the
+   * oldest timestamp is the longest any event waited before this drain.
+   */
   drainAge(now: number, drained: QueuedEvent[]): number {
     let oldest = now;
     for (const event of drained) oldest = Math.min(oldest, event.at);

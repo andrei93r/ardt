@@ -109,6 +109,24 @@ describe('EventQueue', () => {
     expect(q.drainAge(2000, drained)).toBeGreaterThan(0);
   });
 
+  it('reports the oldest wait in a drained batch, not the newest', () => {
+    let now = 1000;
+    const q = new EventQueue(() => now);
+    q.push(2, 'a', 'x');
+    now = 1500;
+    q.push(2, 'b', 'y');
+    now = 2000;
+    const drained = q.drain();
+    // 'a' was enqueued at 1000 and waited 1000 ms; the newest event waited 500.
+    // The perf counter wants the worst case, so the answer is 1000.
+    expect(q.drainAge(now, drained)).toBe(1000);
+  });
+
+  it('reports zero for an empty drained batch', () => {
+    const q = new EventQueue();
+    expect(q.drainAge(5000, [])).toBe(0);
+  });
+
   it('clears everything without draining', () => {
     const q = new EventQueue();
     q.push(1, 'a', 'x');
