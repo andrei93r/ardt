@@ -471,9 +471,7 @@ export class WindowSession {
   }
 
   private pairSibling(tracked: TrackedWindow): TrackedWindow | null {
-    const peers = this.tileables(tracked.surface.workspaceId).filter(
-      (t) => t.id !== tracked.id && t.surface.screenId === tracked.surface.screenId,
-    );
+    const peers = this.tileablesOnScreen(tracked.surface.workspaceId, tracked.surface.screenId, tracked.id);
     return peers.length === 1 ? peers[0] : null;
   }
 
@@ -632,9 +630,7 @@ export class WindowSession {
     }
 
     const workspaceId = tracked.surface.workspaceId;
-    const siblings = this.tileables(workspaceId).filter(
-      (t) => t.id !== tracked.id && t.surface.screenId === tracked.surface.screenId,
-    );
+    const siblings = this.tileablesOnScreen(workspaceId, tracked.surface.screenId, tracked.id);
     if (compat.isFullyMaximized(tracked.win) && siblings.length > 0) {
       // §16: an app that opens maximized (Nautilus, Files, …) is not a user
       // maximize: it is unmaximized and tiled with its sibling. A user-requested
@@ -1702,9 +1698,7 @@ export class WindowSession {
       if (tracked.userMovedTo !== null) {
         const to = tracked.userMovedTo;
         tracked.userMovedTo = null;
-        const others = this.tileables(to).filter(
-          (t) => t.id !== tracked.id && t.surface.screenId === tracked.surface.screenId,
-        );
+        const others = this.tileablesOnScreen(to, tracked.surface.screenId, tracked.id);
         // §6/§34: a user move onto a full workspace floats the window there;
         // the destination keeps its pair and nobody is evicted.
         if (others.length >= 2) this.floatWindow(tracked);
@@ -1959,6 +1953,16 @@ export class WindowSession {
   }
 
   /**
+   * §3/P4: the tiles of `workspaceId` that live on screen `screen`, in
+   * `tileables` order. `excludeId` drops one window (the caller is counting the
+   * rest of a pair); the default -1 matches no real id, so a caller that wants
+   * the whole on-screen set simply omits it.
+   */
+  private tileablesOnScreen(workspaceId: number, screen: number, excludeId = -1): TrackedWindow[] {
+    return this.tileables(workspaceId).filter((t) => t.id !== excludeId && t.surface.screenId === screen);
+  }
+
+  /**
    * §6: float a window adrt places itself — the explicit no-room cases and the
    * escape's single-workspace fallback. The placement is offset and kept inside
    * the work area so it is never exactly on top of what is beneath it. A display
@@ -2121,7 +2125,7 @@ export class WindowSession {
   moveToward(direction: string): void {
     const current = this.focused();
     if (current === null) return;
-    const peers = this.tileables(current.surface.workspaceId).filter((t) => t.surface.screenId === current.surface.screenId);
+    const peers = this.tileablesOnScreen(current.surface.workspaceId, current.surface.screenId);
     if (peers.length === 2) {
       const sibling = peers.find((t) => t.id !== current.id);
       if (sibling === undefined) return;
@@ -2148,9 +2152,7 @@ export class WindowSession {
     const floating = !tracked.surface.flags.floating;
     // §21: un-floating when both slots are taken changes nothing and toasts.
     if (!floating) {
-      const others = this.tileables(tracked.surface.workspaceId).filter(
-        (t) => t.id !== id && t.surface.screenId === tracked.surface.screenId,
-      );
+      const others = this.tileablesOnScreen(tracked.surface.workspaceId, tracked.surface.screenId, id);
       if (others.length >= 2) {
         this.deps.onNotice?.('un-float-full', String(id));
         return false;
@@ -2483,9 +2485,7 @@ export class WindowSession {
     current.escaped = false;
     current.pendingSlot = null;
     this.deps.history.log('ws_switch_empty', { id: current.id, from, to: index, byUser: true });
-    const others = this.tileables(index).filter(
-      (t) => t.id !== current.id && t.surface.screenId === current.surface.screenId,
-    );
+    const others = this.tileablesOnScreen(index, current.surface.screenId, current.id);
     if (others.length >= 2) this.floatWindow(current);
     else if (others.length === 1) this.pinSlots(index, current, index > from ? 0 : 1);
     if (this.deps.settings.boolean('follow-moved-window', true)) {
@@ -2839,9 +2839,7 @@ export class WindowSession {
         this.deps.onStateChanged();
         return;
       }
-      const others = this.tileables(tracked.surface.workspaceId).filter(
-        (t) => t.id !== tracked.id && t.surface.screenId === tracked.surface.screenId,
-      );
+      const others = this.tileablesOnScreen(tracked.surface.workspaceId, tracked.surface.screenId, tracked.id);
       // §10 step 4: restoring makes this window the trigger. If a peer refuses
       // to share (it does not fit its half), the trigger keeps the screen
       // maximized and the peer gives way, and the two trade on each restore.
@@ -2948,18 +2946,39 @@ export class WindowSession {
     this.signatures.clearAll();
   }
 
-  /** Nearest non-reaped workspace that holds windows, left first (§5). */
-  private nearestIndexHoldingWindows(state: State, from: number, exclude: Set<number>): number {
-    for (let index = from - 1; index >= 0; index--) {
-      if (!exclude.has(index) && windowCount(state.workspaces[index]) > 0) return index;
-    }
-    for (let index = from + 1; index < state.workspaces.length; index++) {
-      if (!exclude.has(index) && windowCount(state.workspaces[index]) > 0) return index;
-    }
-    for (let index = from - 1; index >= 0; index--) {
-      if (!exclude.has(index)) return index;
+  /**
+   * §5/P4: the one nearest-workspace walk behind the live manager and the pure
+   * placement state. Scan indices from `from` in `step` direction over `count`
+   * slots and return the first that `matches`; if none does and `fallback` is
+   * given, return the first that `fallback` accepts instead. `count` is the
+   * source's own length, so the live and dry scans share the loop. -1 when
+   * nothing matches.
+   */
+  private scanWorkspaceIndices(
+    from: number,
+    step: number,
+    count: number,
+    matches: (index: number) => boolean,
+    fallback?: (index: number) => boolean,
+  ): number {
+    const passes = fallback === undefined ? [matches] : [matches, fallback];
+    for (const predicate of passes) {
+      for (let index = from + step; index >= 0 && index < count; index += step) {
+        if (predicate(index)) return index;
+      }
     }
     return -1;
+  }
+
+  /** Nearest non-reaped workspace that holds windows, left first (§5). */
+  private nearestIndexHoldingWindows(state: State, from: number, exclude: Set<number>): number {
+    const count = state.workspaces.length;
+    const holdsWindows = (index: number): boolean => !exclude.has(index) && windowCount(state.workspaces[index]) > 0;
+    const exists = (index: number): boolean => !exclude.has(index);
+    let target = this.scanWorkspaceIndices(from, -1, count, holdsWindows);
+    if (target < 0) target = this.scanWorkspaceIndices(from, 1, count, holdsWindows);
+    if (target < 0) target = this.scanWorkspaceIndices(from, -1, count, exists);
+    return target;
   }
 
   /** Reap empty workspaces shortly after an action, once state has settled. */
@@ -2996,21 +3015,16 @@ export class WindowSession {
   /** Nearest workspace in `step` direction that holds one of our windows. */
   private nearestWorkspaceWithWindows(from: number, step: number): number {
     const manager = global.workspace_manager;
-    for (let index = from + step; index >= 0 && index < manager.get_n_workspaces(); index += step) {
+    return this.scanWorkspaceIndices(from, step, manager.get_n_workspaces(), (index) => {
       const workspace = manager.get_workspace_by_index(index);
-      if (workspace === null) continue;
-      if (workspace.list_windows().some((win: MetaWindow) => this.windows.has(win.get_id()))) return index;
-    }
-    return -1;
+      return workspace !== null && workspace.list_windows().some((win: MetaWindow) => this.windows.has(win.get_id()));
+    });
   }
 
   /** Nearest workspace in `step` direction that exists at all. */
   private nearestExistingWorkspace(from: number, step: number): number {
     const manager = global.workspace_manager;
-    for (let index = from + step; index >= 0 && index < manager.get_n_workspaces(); index += step) {
-      if (manager.get_workspace_by_index(index) !== null) return index;
-    }
-    return -1;
+    return this.scanWorkspaceIndices(from, step, manager.get_n_workspaces(), (index) => manager.get_workspace_by_index(index) !== null);
   }
 
   /**
@@ -3704,9 +3718,7 @@ export class WindowSession {
     this.signatures.clearAll();
     // §3: a workspace move keeps the side it came from — a window from the
     // workspace on its left takes slot 0, from the right slot 1.
-    const others = this.tileables(index).filter(
-      (t) => t.id !== tracked.id && t.surface.screenId === tracked.surface.screenId,
-    );
+    const others = this.tileablesOnScreen(index, tracked.surface.screenId, tracked.id);
     if (others.length === 1) {
       tracked.pendingSlot = index > from ? 0 : 1;
       others[0].pendingSlot = tracked.pendingSlot === 0 ? 1 : 0;
