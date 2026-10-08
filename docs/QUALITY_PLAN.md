@@ -29,10 +29,10 @@
 | --- | --- | --- |
 | P0 | Land ready refactor + repair the green gate | **done** (gate fixes on `perf-gnome`; nested smoke pending) |
 | P1 | Correctness sweep | **done** — 1.1–1.9, 1.11–1.14 committed; 1.10 done for session.ts (injection/parseSpawnEnv leftovers in extension.ts) |
-| P2 | Main-loop & allocation diet | in progress — 2.1, 2.2, 2.4 committed; 2.3, 2.5–2.9 todo |
-| P3 | Zero `any` | in progress — 3.2 (typed events) and 3.3 (compat.ts) in flight |
-| P4 | Decomposition & deletion | todo |
-| P5 | Guardrails (CI/tests/docs) | todo |
+| P2 | Main-loop & allocation diet | mostly done — 2.1–2.4, 2.6, 2.8, 2.11-core committed; 2.5 (per-pass reuse), 2.7 (sweep gating, measure first), 2.9 (profiler), 2.11-adapter (ring buffers) next |
+| P3 | Zero `any` | started — 3.2 events + 3.3 compat (48→0) + 3.6 test typecheck committed; 3.1 (`gi.d.ts`), 3.4 (`prefs.ts`), 3.5 (`as unknown as`), eslint enforcement next |
+| P4 | Decomposition & deletion | started — first dead-code sweep committed; session/extension split, JSONL unification, trigger registry next |
+| P5 | Guardrails (CI/tests/docs) | started — `check:types` in CI/test:all; knip, coverage gate in CI, shellcheck, fuzz wiring next |
 
 ---
 

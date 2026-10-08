@@ -6,6 +6,33 @@ code changes, MINOR for features, PATCH for fixes.
 
 ## [Unreleased]
 
+### Performance, correctness and typing (`perf-gnome`)
+
+- **Compositor loop**: journal/history writes are buffered into one
+  low-priority flush per second and flushed on disable, instead of an
+  open/append/close per event; `surface-frame-changed` reaches the ring and
+  any recorder but is only persisted while tracing/recording.
+- **Correctness**: one timestamped echo cancels our own maximize/workspace
+  signals (the synchronous flags were already cleared when Mutter's async
+  signal arrived); every drain timeout is owned and a failed deferral can no
+  longer leave a lane armed; split ratios are keyed by monitor connector with
+  a legacy index-key migration; `checkPlan` receives window minimums; registry
+  saves are guarded and retried; `History.prune` is actually wired.
+- **Allocations**: classification returns its cache without building inputs;
+  animation records/rects are built only while recording; animator hooks are
+  pre-bound; the tiler config and compiled rule globs are built once per pass;
+  resolved timing is cached behind named invalidation events; the event queue
+  `has()` is O(1) and `drain()` reuses a documented buffer; focus/normalize are
+  single-pass; screens are indexed by monitor.
+- **Typing**: `PlatformHost.on` is generic over the `PlatformEvent` union;
+  `compat.ts` drops from 48 `any` to zero via local structural interfaces; a
+  new `check:types` gate type-checks `src` and `tests` locally and in CI.
+- **Dead code**: `platform/gestures.ts`, `RetileScheduler`,
+  `AdaptationStore`/`FloatStore` and five zero-reference compat exports
+  removed.
+- **Build**: `npm run build` cleans `dist/` first and pack/install always
+  rebuild; the core-purity gate no longer false-positives on prose.
+
 ### Added (Stage 4 — app registry, prefs, migration)
 
 - **The app registry** (`core/appregistry.ts`, adapter `registry.ts`) replaces
