@@ -1008,9 +1008,14 @@ export class WindowSession {
     const count = global.workspace_manager.get_n_workspaces();
     let changed = false;
     let normalised = 0;
+    // §24/P2.5: one snapshot of the window map for the whole pass. The filter
+    // reads live fields, and the decisions below neither add nor remove a
+    // window, so membership is stable across every workspace×screen; the copy
+    // per plane was pure allocation.
+    const snapshot = [...this.windows.values()];
     for (let index = 0; index < count; index++) {
       for (const screen of screens) {
-        const plane = [...this.windows.values()].filter(
+        const plane = snapshot.filter(
           (tracked) =>
             tracked.ready &&
             tracked.surface.workspaceId === index &&
@@ -1656,17 +1661,23 @@ export class WindowSession {
         }
       }
     }
+    // §24/P2.5: one snapshot of the window map for the whole pass. Both loops
+    // below read live fields off each `TrackedWindow`, and no branch reachable
+    // from them adds or removes a window (routing, floating and escaping only
+    // rewrite a window's own state), so the membership cannot change mid-pass;
+    // re-copying the map between the loops was pure allocation.
+    const snapshot = [...this.windows.values()];
     // §3/§11: the routing decision is a property of the drain, never of the
     // `onReady` timeout: the newcomer's placement is computed here from live
     // state, so a raced spawn signal cannot leave the layout half-decided.
-    for (const tracked of [...this.windows.values()]) {
+    for (const tracked of snapshot) {
       if (!tracked.routePending) continue;
       tracked.routePending = false;
       if (this.windows.has(tracked.id)) this.routeWindow(tracked);
     }
     // §4/§16: fullscreen and user-unmaximize transitions are re-derived here,
     // never acted on inside the Mutter signal handler that reported them.
-    for (const tracked of [...this.windows.values()]) {
+    for (const tracked of snapshot) {
       if (tracked.surface.flags.fullscreen !== tracked.fullscreenApplied) {
         tracked.fullscreenApplied = tracked.surface.flags.fullscreen;
         this.fullscreenTracked(tracked, tracked.fullscreenApplied);
@@ -1693,7 +1704,7 @@ export class WindowSession {
       this.retile(index, reason, true, rememberUndo);
     }
     // A window can briefly report a workspace beyond the current count.
-    for (const tracked of this.windows.values()) {
+    for (const tracked of snapshot) {
       if (!seen.has(tracked.surface.workspaceId)) this.retile(tracked.surface.workspaceId, reason, true, rememberUndo);
     }
     // Keep every window inside its own monitor's full geometry (the whole
@@ -1746,9 +1757,19 @@ export class WindowSession {
     // and the assembly were rebuilt per screen for no reason
     // (PERFORMANCE_PLAN stage 1.3 — "once per pass").
     const config = this.tilerConfig();
+    // §24/P2.5: one filter+classify+sort for the workspace, reused for every
+    // screen instead of rebuilt per screen. It is re-derived when a branch
+    // below changes the model (an escape or a maximize can move a window to its
+    // own workspace); every other branch only reads. The tiled view and the
+    // non-transient view the lone law needs derive from the same list and cannot
+    // drift between their two uses: the only field written before them is
+    // `maximizeRequested`, which no filter reads.
+    let workspaceTiles: TrackedWindow[] | null = null;
     for (const screen of this.deps.host.screens()) {
       const onScreen = (t: TrackedWindow): boolean => t.surface.screenId === screen.index;
-      const tileables = this.tileables(workspaceId).filter(onScreen).filter((t) => !t.surface.flags.fullscreen);
+      workspaceTiles ??= this.tileables(workspaceId);
+      const onScreenTiles = workspaceTiles.filter(onScreen);
+      const tileables = onScreenTiles.filter((t) => !t.surface.flags.fullscreen);
       if (tileables.length === 0) continue;
       // §4 maximize, as a property: a window the user maximized that still
       // shares its workspace is given its own workspace to the right, and the
@@ -1758,6 +1779,8 @@ export class WindowSession {
         const requested = tileables.find((t) => t.maximizeRequested && compat.isMaximized(t.win));
         if (requested !== undefined) {
           this.maximizeTracked(requested);
+          // It may have moved to its own workspace: drop the cached list.
+          workspaceTiles = null;
           continue;
         }
       } else if (tileables[0].maximizeRequested) {
@@ -1781,6 +1804,8 @@ export class WindowSession {
             this.refusalEscapes(refusing, sibling, screen, this.placementEnv(refusing.surface.screenId), config)
           ) {
             this.escapeRefusal(refusing, sibling);
+            // The refusal moved/minimized a window on this workspace.
+            workspaceTiles = null;
             this.scheduleRetile(workspaceId, 'escape-refusal');
             continue;
           }
@@ -1790,7 +1815,7 @@ export class WindowSession {
         }
       }
       // §4: a lone visible managed window is always maximized.
-      if (this.shouldLoneMaximize(tileables, this.nonTransient(workspaceId).filter(onScreen))) {
+      if (this.shouldLoneMaximize(tileables, onScreenTiles.filter((t) => !t.surface.flags.transient))) {
         const only = tileables[0];
         if (!compat.isMaximized(only.win)) {
           this.deps.tiling.noteSelfApply();
@@ -2590,8 +2615,10 @@ export class WindowSession {
   private evaluateLoneMaximize(workspaceId: number): void {
     for (const screen of this.deps.host.screens()) {
       const onScreen = (t: TrackedWindow): boolean => t.surface.screenId === screen.index;
-      const nonTransient = this.nonTransient(workspaceId).filter(onScreen);
+      // §24/P2.5: one filter+classify+sort per screen; `nonTransient` is the
+      // same list minus the transient windows. The two were derived separately.
       const tileables = this.tileables(workspaceId).filter(onScreen);
+      const nonTransient = tileables.filter((t) => !t.surface.flags.transient);
       if (nonTransient.length === 1 && tileables.length === 1) {
         const only = tileables[0];
         if (!compat.isMaximized(only.win)) {
@@ -3827,11 +3854,18 @@ export class WindowSession {
     const config = this.tilerConfig();
     const count = global.workspace_manager.get_n_workspaces();
     for (let index = 0; index < count; index++) {
+      // §24/P2.5: a workspace's tileables cannot change inside the sweep. The
+      // corrections below only maximize/unmaximize/apply frames or clear the
+      // stubborn/refusal bookkeeping; Mutter signals are queued, never run
+      // inline, and `onStateChanged` only reads. Build once per workspace and
+      // filter the same list for each screen.
+      let workspaceTiles: TrackedWindow[] | null = null;
       for (const screen of this.deps.host.screens()) {
         const onScreen = (t: TrackedWindow) => t.surface.screenId === screen.index;
         const busy = (t: TrackedWindow) => this.deps.tiling.isAnimating(t.id);
 
-        const tileables = this.tileables(index).filter(onScreen);
+        workspaceTiles ??= this.tileables(index);
+        const tileables = workspaceTiles.filter(onScreen);
 
         // A placement is in flight: leave the workspace alone until it settles.
         // Dropping the animating window from the count instead made a pair that
