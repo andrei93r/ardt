@@ -31,7 +31,15 @@ code changes, MINOR for features, PATCH for fixes.
   and in CI.
 - **Dead code**: `platform/gestures.ts`, `RetileScheduler`,
   `AdaptationStore`/`FloatStore` and five zero-reference compat exports
-  removed.
+  removed; a knip gate now holds files, dependencies and exports at zero
+  findings.
+- **Structure**: `session.ts` is decomposed into diagnostics, undo, focus,
+  drain, workspace and self-heal modules (with display/retiler/drag slices
+  in progress), the D-Bus XML and dispatch are generated from one trigger
+  table, and JSONL line/buffer logic is shared.
+- **Tooling**: `check:types` type-checks `src` + `tests`, CI runs the
+  scenario-coverage guard and shellcheck, and `docs/ARCHITECTURE.md`
+  records the layer rules and invariants.
 - **Build**: `npm run build` cleans `dist/` first and pack/install always
   rebuild; the core-purity gate no longer false-positives on prose.
 
