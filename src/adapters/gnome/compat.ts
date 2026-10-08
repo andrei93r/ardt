@@ -16,25 +16,123 @@ import { PACKAGE_VERSION } from 'resource:///org/gnome/shell/misc/config.js';
 
 import { SurfaceKind } from '../../core/types.js';
 
+/**
+ * Structural views of the GJS/GNOME objects this module probes. `gi.d.ts`
+ * declares the whole `gi://` namespaces as `any`, so these describe only the
+ * members the probes below actually read — optional exactly where the code
+ * tests for them with `typeof`, required where the code calls them directly.
+ * Values still enter from the broad declarations; these are the honest shape
+ * at the one version/feature-detection boundary (§41.4).
+ */
+
+/** A `Meta.Window` as read by the maximize/type/workspace/actor probes. */
+interface MetaWindowLike {
+  get_window_type(): number;
+  is_on_all_workspaces(): boolean;
+  get_maximized(): number;
+  get_maximize_flags?(): number;
+  is_attached_dialog?(): boolean;
+  is_skip_taskbar?(): boolean;
+  is_override_redirect?(): boolean;
+  get_compositor_private(): ClutterActorLike | null | undefined;
+}
+
+/** A `Meta.Display` as read by the grab and pointer-warp probes. */
+interface MetaDisplayLike {
+  get_grab_op?(): unknown;
+  is_grabbed?(): unknown;
+  warp_pointer?(x: number, y: number): void;
+}
+
+/** A `Clutter.Actor` (window actor) as read for position and disposal. */
+interface ClutterActorLike {
+  get_transformed_position(): [number, number];
+  get_stage(): unknown | null;
+}
+
+/** A `Clutter.Stage`, which owns the context that owns the backend. */
+interface ClutterStageLike {
+  get_context?(): ClutterContextLike;
+  context?: ClutterContextLike;
+}
+
+/** A `Clutter.Context`, read only for its backend accessor. */
+interface ClutterContextLike {
+  get_backend?(): ClutterBackendLike | null;
+}
+
+/** A `Clutter.Backend`: seat plus cursor renderer/tracker probes. */
+interface ClutterBackendLike {
+  get_default_seat?(): ClutterSeatLike | null;
+  get_cursor_renderer?(): unknown;
+  get_cursor_tracker?(): unknown;
+}
+
+/** A `Clutter.Seat`, read for pointer warp and virtual-device creation. */
+interface ClutterSeatLike {
+  warp_pointer?(x: number, y: number): void;
+  create_virtual_device?(type: number): unknown;
+}
+
+/** The `Clutter.EventType` enum, read for the touchpad gesture kinds. */
+interface ClutterEventTypeLike {
+  TOUCHPAD_SWIPE?: number;
+  TOUCHPAD_PINCH?: number;
+}
+
+/** The `Clutter.TouchpadGesturePhase` enum. */
+interface ClutterTouchpadPhaseLike {
+  BEGIN?: unknown;
+  UPDATE?: unknown;
+  END?: unknown;
+  CANCEL?: unknown;
+}
+
+/** A `Clutter.Event` as read by `readTouchpadGesture`. */
+interface TouchpadGestureEventLike {
+  type(): unknown;
+  get_gesture_phase?(): unknown;
+  get_touchpad_gesture_finger_count?(): unknown;
+  get_gesture_pinch_scale?(): unknown;
+  get_gesture_motion_delta_unaccelerated(): [unknown, unknown];
+}
+
+/** `St.Settings`, read only for the reduced-motion preference. */
+interface StSettingsLike {
+  reduced_motion?: unknown;
+  'reduced-motion'?: unknown;
+}
+
+/** A shell popup menu with either `close()` signature. */
+interface PopupMenuLike {
+  close?(arg?: unknown): void;
+}
+
+/** A `GLib.Variant` as read by `unpackVariant`. */
+interface VariantLike {
+  unpack(): unknown;
+  recursiveUnpack?(): unknown;
+}
+
 export const SHELL_MAJOR: number = Number.parseInt(PACKAGE_VERSION.split('.')[0], 10);
 
-export function isMaximized(win: any): boolean {
+export function isMaximized(win: MetaWindowLike): boolean {
   // Mutter 50 replaced get_maximized() with get_maximize_flags()/is_maximized().
   if (typeof win.get_maximize_flags === 'function') return win.get_maximize_flags() !== 0;
   return win.get_maximized() !== 0;
 }
 
-export function isFullyMaximized(win: any): boolean {
+export function isFullyMaximized(win: MetaWindowLike): boolean {
   const flags = typeof win.get_maximize_flags === 'function' ? win.get_maximize_flags() : win.get_maximized();
   return (flags & Meta.MaximizeFlags.HORIZONTAL) !== 0 && (flags & Meta.MaximizeFlags.VERTICAL) !== 0;
 }
 
-export function isAttachedDialog(win: any): boolean {
+export function isAttachedDialog(win: MetaWindowLike): boolean {
   return typeof win.is_attached_dialog === 'function' && win.is_attached_dialog() === true;
 }
 
 /** Map a Mutter window type onto the platform-neutral surface kind. */
-export function kindFor(win: any): SurfaceKind {
+export function kindFor(win: MetaWindowLike): SurfaceKind {
   switch (win.get_window_type()) {
     case Meta.WindowType.NORMAL:
       return SurfaceKind.NORMAL;
@@ -51,11 +149,11 @@ export function kindFor(win: any): SurfaceKind {
   }
 }
 
-export function isSkipTaskbar(win: any): boolean {
+export function isSkipTaskbar(win: MetaWindowLike): boolean {
   return typeof win.is_skip_taskbar === 'function' && win.is_skip_taskbar() === true;
 }
 
-export function isOverrideRedirect(win: any): boolean {
+export function isOverrideRedirect(win: MetaWindowLike): boolean {
   return typeof win.is_override_redirect === 'function' && win.is_override_redirect() === true;
 }
 
@@ -67,7 +165,7 @@ export function isOverrideRedirect(win: any): boolean {
  * Mutter (`MetaWaylandXdgPopup`), which segfaults the Shell — reproduced live in
  * `docs/shell-crash-audit.md` (windowType 9, `DROPDOWN_MENU`).
  */
-export function isPopupWindow(win: any): boolean {
+export function isPopupWindow(win: MetaWindowLike): boolean {
   switch (win.get_window_type()) {
     case Meta.WindowType.MENU:
     case Meta.WindowType.DROPDOWN_MENU:
@@ -82,7 +180,7 @@ export function isPopupWindow(win: any): boolean {
   }
 }
 
-export function isOnAllWorkspaces(win: any): boolean {
+export function isOnAllWorkspaces(win: MetaWindowLike): boolean {
   return win.is_on_all_workspaces() === true;
 }
 
@@ -92,7 +190,7 @@ export function isOnAllWorkspaces(win: any): boolean {
  * flag (occlusion is a property of the stack, not of how a window is
  * classified). Falls back to the input order when the API is unavailable.
  */
-export function sortByStacking(windows: any[]): any[] {
+export function sortByStacking(windows: MetaWindowLike[]): MetaWindowLike[] {
   try {
     return global.display.sort_windows_by_stacking(windows);
   } catch {
@@ -101,7 +199,7 @@ export function sortByStacking(windows: any[]): any[] {
 }
 
 /** Compositor actor for a window, or null while unmapping (§26). */
-export function compositorActor(win: any): any | null {
+export function compositorActor(win: MetaWindowLike): ClutterActorLike | null {
   try {
     const actor = win.get_compositor_private() ?? null;
     return actor !== null && actorAlive(actor) ? actor : null;
@@ -121,9 +219,9 @@ export function hasDevkit(): boolean {
  * `get_context().get_backend()` — is tried first. The old getter remains the
  * fallback for 48–50. Probed, never assumed.
  */
-export function defaultBackend(): any | null {
+export function defaultBackend(): ClutterBackendLike | null {
   try {
-    const stage: any = (global as any)?.stage;
+    const stage: ClutterStageLike | null | undefined = global?.stage;
     if (stage !== null && stage !== undefined) {
       const context = typeof stage.get_context === 'function' ? stage.get_context() : stage.context;
       const backend = typeof context?.get_backend === 'function' ? context.get_backend() : null;
@@ -133,7 +231,7 @@ export function defaultBackend(): any | null {
     /* no stage/context yet (headless before the stage exists) */
   }
   try {
-    if (typeof (Clutter as any).get_default_backend === 'function') return (Clutter as any).get_default_backend();
+    if (typeof Clutter.get_default_backend === 'function') return Clutter.get_default_backend();
   } catch {
     /* removed in 51 */
   }
@@ -141,7 +239,7 @@ export function defaultBackend(): any | null {
 }
 
 /** The default Clutter seat, through whichever backend accessor this Shell has. */
-export function defaultSeat(): any | null {
+export function defaultSeat(): ClutterSeatLike | null {
   const backend = defaultBackend();
   if (backend === null) return null;
   try {
@@ -157,7 +255,7 @@ export function defaultSeat(): any | null {
  * whichever spelling this Shell exposes; 0 when the mask is unavailable.
  */
 export function stButtonMask(button: 'primary' | 'middle' | 'secondary'): number {
-  const mask: any = (St as any)?.ButtonMask ?? {};
+  const mask: Record<string, unknown> = St?.ButtonMask ?? {};
   const candidates =
     button === 'primary' ? ['PRIMARY', 'ONE'] : button === 'middle' ? ['MIDDLE', 'TWO'] : ['SECONDARY', 'THREE'];
   for (const name of candidates) {
@@ -172,9 +270,9 @@ export function stButtonMask(button: 'primary' | 'middle' | 'secondary'): number
  * Returns true/false, or null when this Shell has no reading.
  */
 export function stReducedMotion(): boolean | null {
-  let settings: any;
+  let settings: StSettingsLike | null | undefined;
   try {
-    settings = (St as any)?.Settings?.get?.();
+    settings = St?.Settings?.get?.();
   } catch {
     return null;
   }
@@ -187,7 +285,7 @@ export function stReducedMotion(): boolean | null {
   }
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') {
-    const reduce = (St as any)?.ReducedMotion?.REDUCE;
+    const reduce: unknown = St?.ReducedMotion?.REDUCE;
     return value === (typeof reduce === 'number' ? reduce : 1);
   }
   return null;
@@ -198,7 +296,7 @@ export function stReducedMotion(): boolean | null {
  * argument with a `{animate, fadeOnly}` parameters object; the object form is
  * tried first and the enum argument is the fallback, so both generations work.
  */
-export function closePopupMenu(menu: any, animate = false): void {
+export function closePopupMenu(menu: PopupMenuLike | null | undefined, animate = false): void {
   if (menu === null || menu === undefined || typeof menu.close !== 'function') return;
   try {
     menu.close({ animate });
@@ -219,12 +317,12 @@ export function closePopupMenu(menu: any, animate = false): void {
  * earlier Shells returned a plain constructor — both are invoked with `new`, so
  * callers get the constructor either way. Null when this GJS has no wrapper.
  */
-export function makeProxyWrapper(interfaceXml: string): any {
-  const factory =
-    typeof (Gio as any)?.DBus?.makeProxyWrapper === 'function'
-      ? (Gio as any).DBus.makeProxyWrapper
-      : typeof (Gio as any)?.DBusProxy?.makeProxyWrapper === 'function'
-        ? (Gio as any).DBusProxy.makeProxyWrapper
+export function makeProxyWrapper(interfaceXml: string): unknown {
+  const factory: ((xml: string) => unknown) | null =
+    typeof Gio?.DBus?.makeProxyWrapper === 'function'
+      ? Gio.DBus.makeProxyWrapper
+      : typeof Gio?.DBusProxy?.makeProxyWrapper === 'function'
+        ? Gio.DBusProxy.makeProxyWrapper
         : null;
   if (factory === null) return null;
   try {
@@ -254,13 +352,13 @@ export interface TouchpadGestureReading {
  * and this are probed, never assumed.
  */
 export function hasPanGesture(): boolean {
-  return typeof (Clutter as any)?.PanGesture === 'function';
+  return typeof Clutter?.PanGesture === 'function';
 }
 
 /** Whether the Shell delivers raw touchpad swipe/pinch gesture events. */
 export function hasTouchpadGestureEvents(): boolean {
   try {
-    const types: any = (Clutter as any)?.EventType;
+    const types: ClutterEventTypeLike | undefined = Clutter?.EventType;
     return typeof types?.TOUCHPAD_SWIPE === 'number' && typeof types?.TOUCHPAD_PINCH === 'number';
   } catch {
     return false;
@@ -269,17 +367,17 @@ export function hasTouchpadGestureEvents(): boolean {
 
 /** The legacy pre-45 gesture action, kept as the last-resort fallback. */
 export function hasLegacyGestureAction(): boolean {
-  return typeof (Clutter as any)?.GestureAction === 'function';
+  return typeof Clutter?.GestureAction === 'function';
 }
 
-function touchpadPhase(event: any): NormalizedGesturePhase | null {
+function touchpadPhase(event: TouchpadGestureEventLike): NormalizedGesturePhase | null {
   let phase: unknown;
   try {
     phase = event.get_gesture_phase?.();
   } catch {
     return null;
   }
-  const phases: any = (Clutter as any)?.TouchpadGesturePhase ?? {};
+  const phases: ClutterTouchpadPhaseLike = Clutter?.TouchpadGesturePhase ?? {};
   if (phase === phases.BEGIN) return 'begin';
   if (phase === phases.UPDATE) return 'update';
   if (phase === phases.END) return 'end';
@@ -292,7 +390,7 @@ function touchpadPhase(event: any): NormalizedGesturePhase | null {
  * phase, finger count and swipe delta / pinch scale. Returns null for anything
  * that is not a touchpad swipe or pinch.
  */
-export function readTouchpadGesture(event: any): TouchpadGestureReading | null {
+export function readTouchpadGesture(event: TouchpadGestureEventLike | null | undefined): TouchpadGestureReading | null {
   if (event === null || event === undefined) return null;
   let type: unknown;
   try {
@@ -300,7 +398,7 @@ export function readTouchpadGesture(event: any): TouchpadGestureReading | null {
   } catch {
     return null;
   }
-  const types: any = (Clutter as any)?.EventType ?? {};
+  const types: ClutterEventTypeLike = Clutter?.EventType ?? {};
   const pinch = type === types.TOUCHPAD_PINCH;
   if (!pinch && type !== types.TOUCHPAD_SWIPE) return null;
   const phase = touchpadPhase(event);
@@ -338,7 +436,7 @@ export function readTouchpadGesture(event: any): TouchpadGestureReading | null {
  * Fully convert a GVariant to JS. `unpack()` leaves nested arrays as Variant
  * objects (so an `as` key would stringify to "[object variant of type s]").
  */
-export function unpackVariant(value: any): any {
+export function unpackVariant(value: VariantLike | null | undefined): unknown {
   if (value === null || value === undefined) return undefined;
   return typeof value.recursiveUnpack === 'function' ? value.recursiveUnpack() : value.unpack();
 }
@@ -346,7 +444,7 @@ export function unpackVariant(value: any): any {
 export const MOVE_OP: number = Meta.GrabOp.MOVING_UNCONSTRAINED;
 
 /** Stage-space position of an actor, including any moving parent (workspace). */
-export function actorStagePosition(actor: any): [number, number] {
+export function actorStagePosition(actor: ClutterActorLike): [number, number] {
   // A window actor can be disposed while we still hold a reference (the window
   // closed); touching it throws. Report "no position" instead of raising.
   try {
@@ -358,7 +456,7 @@ export function actorStagePosition(actor: any): [number, number] {
 }
 
 /** Whether a compositor actor reference is still usable (not disposed). */
-export function actorAlive(actor: any): boolean {
+export function actorAlive(actor: ClutterActorLike | null | undefined): boolean {
   if (actor === null || actor === undefined) return false;
   try {
     return actor.get_stage() !== null;
@@ -391,12 +489,12 @@ export function button1Pressed(): boolean {
  * never be mistaken for adrt's own move gesture.
  */
 export function displayGrabActive(): boolean | null {
-  const display: any = (global as any)?.display;
+  const display: MetaDisplayLike | null | undefined = global?.display;
   try {
     if (typeof display?.get_grab_op === 'function') {
       const op: unknown = display.get_grab_op();
       if (typeof op === 'number') {
-        const base: unknown = (Meta as any)?.GrabOp?.WINDOW_BASE;
+        const base: unknown = Meta?.GrabOp?.WINDOW_BASE;
         const mask = typeof base === 'number' ? base : 1;
         return (op & mask) !== 0;
       }
@@ -427,7 +525,7 @@ export function cursorCapabilities(): {
 } {
   let displayWarp = false;
   try {
-    displayWarp = typeof (global.display as any)?.warp_pointer === 'function';
+    displayWarp = typeof global.display?.warp_pointer === 'function';
   } catch {
     displayWarp = false;
   }
@@ -441,7 +539,7 @@ export function cursorCapabilities(): {
   let cursorRenderer = false;
   let cursorTracker = false;
   try {
-    const backend = (global as any).backend;
+    const backend: ClutterBackendLike | null | undefined = global.backend;
     cursorRenderer = typeof backend?.get_cursor_renderer === 'function';
     cursorTracker = typeof backend?.get_cursor_tracker === 'function';
   } catch {
