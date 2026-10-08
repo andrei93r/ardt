@@ -42,18 +42,14 @@ if ! command -v glib-compile-schemas >/dev/null 2>&1; then
   fi
 fi
 
-# 2. Build if needed -------------------------------------------------------
-needs_build=0
-if [ ! -f "$ROOT/dist/extension.js" ]; then
-  needs_build=1
-elif find "$ROOT/src" -newer "$ROOT/dist/extension.js" -name '*.ts' -print -quit | grep -q .; then
-  needs_build=1
+# 2. Build -----------------------------------------------------------------
+# Always rebuild: newer-source detection cannot see a deleted source, which
+# would leave a stale module in `dist/` (tsc never cleans its outDir).
+if [ ! -d "$ROOT/node_modules" ]; then
+  ( cd "$ROOT" && npm install --no-audit --no-fund )
 fi
-
-if [ "$needs_build" -eq 1 ]; then
-  echo "install: building"
-  ( cd "$ROOT" && npm install --no-audit --no-fund && npm run build )
-fi
+echo "install: building"
+( cd "$ROOT" && npm run build )
 
 # 3. Install ---------------------------------------------------------------
 # Back up an existing install *outside* the extensions directory. A sibling

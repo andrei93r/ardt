@@ -15,9 +15,9 @@ STAGE="$(mktemp -d)"
 cleanup() { rm -rf "$STAGE"; }
 trap cleanup EXIT
 
-if [ ! -f "$ROOT/dist/extension.js" ]; then
-  ( cd "$ROOT" && npm run build )
-fi
+# Always rebuild: `tsc` never removes outputs for deleted sources, so a stale
+# `dist/` could otherwise be packaged. `npm run build` cleans `dist` first.
+( cd "$ROOT" && npm run build )
 
 cp -r "$ROOT/dist/." "$STAGE/"
 cp "$ROOT/packages/gnome/metadata.json" "$STAGE/metadata.json"
