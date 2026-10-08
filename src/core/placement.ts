@@ -87,19 +87,19 @@ export function freeSlot(ws: Ws): 0 | 1 | null {
  * is pushed to the other one — the adapter pins both sides. `null` only when
  * there is no free slot at all.
  */
-export function arrivalSlot(ws: Ws, from: Direction | null = null): 0 | 1 | null {
+function arrivalSlot(ws: Ws, from: Direction | null = null): 0 | 1 | null {
   if (freeSlot(ws) === null) return null;
   if (from !== null) return sideSlot(from);
   return ws.slots[1] === null ? 1 : 0;
 }
 
 /** How many windows are visible in a workspace's two slots (§5). */
-export function visibleCount(ws: Ws): number {
+function visibleCount(ws: Ws): number {
   return (ws.slots[0] === null ? 0 : 1) + (ws.slots[1] === null ? 0 : 1);
 }
 
 /** The visible window ids of a workspace, in slot order. */
-export function visibleIds(ws: Ws): number[] {
+function visibleIds(ws: Ws): number[] {
   const ids: number[] = [];
   if (ws.slots[0] !== null) ids.push(ws.slots[0].id);
   if (ws.slots[1] !== null) ids.push(ws.slots[1].id);
@@ -237,7 +237,7 @@ export function dropPlacement(
 }
 
 /** The nearest workspace with a free slot, right first, then left (§7). */
-export function nearestWithRoom(state: State, from: number): number | null {
+function nearestWithRoom(state: State, from: number): number | null {
   for (let index = from + 1; index < state.workspaces.length; index++) {
     if (freeSlot(state.workspaces[index]) !== null) return index;
   }
@@ -248,7 +248,7 @@ export function nearestWithRoom(state: State, from: number): number | null {
 }
 
 /** Whether a workspace holds exactly one window (minimized counts, §4). */
-export function holdsExactlyOne(ws: Ws): boolean {
+function holdsExactlyOne(ws: Ws): boolean {
   return windowCount(ws) === 1;
 }
 

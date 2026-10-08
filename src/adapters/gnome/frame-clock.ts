@@ -12,12 +12,12 @@ import type { ClutterActor, ClutterTimeline } from 'gi://Clutter';
 
 import type { Rect } from '../../core/types.js';
 
-export function easeOutCubic(t: number): number {
+function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
 }
 
 /** §11.4: ease-out quad for short moves, ease-out cubic otherwise. */
-export function easingFor(_durationMs: number): (t: number) => number {
+function easingFor(_durationMs: number): (t: number) => number {
   // Always ease out cubic: a quadratic start is too abrupt and reads as janky
   // at the short durations a reflow uses.
   return easeOutCubic;
@@ -36,7 +36,7 @@ export interface AnimatorHooks {
  * the target immediately. The returned `rect` is the live interpolated object
  * (mutated in place, never reallocated); `stop()` halts the timeline.
  */
-export interface Tween {
+interface Tween {
   stop(): void;
   /** True when the target was applied immediately (no timeline runs). */
   immediate: boolean;
@@ -44,13 +44,13 @@ export interface Tween {
   rect: Rect;
 }
 
-export interface TweenHooks {
+interface TweenHooks {
   apply(rect: Rect): void;
   frame?(rect: Rect): void;
   complete(): void;
 }
 
-export function tweenRect(
+function tweenRect(
   actor: ClutterActor | null,
   from: Rect,
   to: Rect,
@@ -98,7 +98,7 @@ export function tweenRect(
  * Exposed add-only through `DumpState.animRecords` and driven by the
  * `StartFrameRecording`/`StopFrameRecording` test triggers.
  */
-export interface AnimRecord {
+interface AnimRecord {
   kind: 'start' | 'frame' | 'end' | 'cancel';
   id: number;
   at: number;

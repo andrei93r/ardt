@@ -17,8 +17,8 @@ import type { DBusExportedObject } from 'gi://Gio';
 import { TRIGGERS, buildInterfaceXml } from '../../core/triggers.js';
 import type { DbusBackend, DbusHandlers } from '../../platform/dbus.js';
 
-export const DBUS_NAME = 'org.adrt.Adrt';
-export const DBUS_PATH = '/org/adrt/Adrt';
+const DBUS_NAME = 'org.adrt.Adrt';
+const DBUS_PATH = '/org/adrt/Adrt';
 
 const INTERFACE_XML = buildInterfaceXml(DBUS_NAME, TRIGGERS);
 

@@ -46,7 +46,7 @@ function stringOrNull(value: unknown): string | null {
  * The desktop id the shell's window tracker attributes to this window, or null.
  * `get_window_app` is absent while a window is still being constructed.
  */
-export function desktopIdFor(win: MetaWindow, tracker?: WindowTrackerLike): string | null {
+function desktopIdFor(win: MetaWindow, tracker?: WindowTrackerLike): string | null {
   try {
     const source: WindowTrackerLike = tracker ?? Shell.WindowTracker.get_default();
     const app = source?.get_window_app?.(win);
@@ -74,7 +74,7 @@ function parentPid(pid: number): number {
  * environment. Chromium zeroes its own environment, so the walk must continue
  * past it; `findAppImage` does exactly that.
  */
-export function processSnapshot(pid: number, maxDepth = 32): ProcessEnv[] {
+function processSnapshot(pid: number, maxDepth = 32): ProcessEnv[] {
   const out: ProcessEnv[] = [];
   const seen = new Set<number>();
   let current = pid;
@@ -91,7 +91,7 @@ export function processSnapshot(pid: number, maxDepth = 32): ProcessEnv[] {
 }
 
 /** Read every raw candidate the chain may use for one live window. */
-export function probeIdentity(win: MetaWindow, windowSeq: number, tracker?: WindowTrackerLike): IdentityProbe {
+function probeIdentity(win: MetaWindow, windowSeq: number, tracker?: WindowTrackerLike): IdentityProbe {
   const pid = safe<number>(() => win.get_pid?.());
   const processes = pid !== null && pid > 0 ? processSnapshot(pid) : undefined;
   return {

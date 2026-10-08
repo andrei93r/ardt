@@ -28,7 +28,7 @@ export function rectCentre(rect: Rect): Point {
  * returned unchanged (there is nothing to clamp to); the caller validates the
  * work area before it gets here anyway (§10).
  */
-export function clampPointToArea(point: Point, area: Rect): Point {
+function clampPointToArea(point: Point, area: Rect): Point {
   if (area.width <= 0 || area.height <= 0) return { ...point };
   return {
     x: Math.round(clamp(point.x, area.x, area.x + area.width - 1)),

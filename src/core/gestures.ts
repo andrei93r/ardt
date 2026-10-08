@@ -71,7 +71,7 @@ export type GestureAction =
  * The shared below-threshold/cancel answer. Frozen so one caller mutating the
  * object it received cannot corrupt what every later completion returns.
  */
-export const NONE_ACTION: GestureAction = Object.freeze({ type: 'none' });
+const NONE_ACTION: GestureAction = Object.freeze({ type: 'none' });
 
 export function initialGestureState(): GestureState {
   return {

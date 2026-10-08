@@ -101,7 +101,7 @@ interface VariantLike {
   recursiveUnpack?(): unknown;
 }
 
-export const SHELL_MAJOR: number = Number.parseInt(PACKAGE_VERSION.split('.')[0], 10);
+const SHELL_MAJOR: number = Number.parseInt(PACKAGE_VERSION.split('.')[0], 10);
 
 export function isMaximized(win: MetaWindowLike): boolean {
   // Mutter 50 replaced get_maximized() with get_maximize_flags()/is_maximized().
@@ -206,7 +206,7 @@ export function hasDevkit(): boolean {
  * `get_context().get_backend()` — is tried first. The old getter remains the
  * fallback for 48–50. Probed, never assumed.
  */
-export function defaultBackend(): ClutterBackendLike | null {
+function defaultBackend(): ClutterBackendLike | null {
   try {
     const stage: ClutterStageLike | null | undefined = global?.stage;
     if (stage !== null && stage !== undefined) {
@@ -236,7 +236,7 @@ export function defaultSeat(): ClutterSeatLike | null {
   }
 }
 
-export type NormalizedGesturePhase = 'begin' | 'update' | 'end' | 'cancel';
+type NormalizedGesturePhase = 'begin' | 'update' | 'end' | 'cancel';
 
 export interface TouchpadGestureReading {
   type: 'swipe' | 'pinch';
@@ -358,7 +358,7 @@ export function actorStagePosition(actor: ClutterActorLike): [number, number] {
 }
 
 /** Whether a compositor actor reference is still usable (not disposed). */
-export function actorAlive(actor: ClutterActorLike | null | undefined): boolean {
+function actorAlive(actor: ClutterActorLike | null | undefined): boolean {
   if (actor === null || actor === undefined) return false;
   try {
     return actor.get_stage() !== null;

@@ -5,7 +5,7 @@
 import type { Rect } from '../core/types.js';
 import type { Surface, SurfaceFlags } from './host.js';
 
-export type SessionMode = 'user' | 'unlock-dialog' | 'screen-sharing';
+type SessionMode = 'user' | 'unlock-dialog' | 'screen-sharing';
 
 export type PlatformEvent =
   | { type: 'surface-created'; surface: Surface }

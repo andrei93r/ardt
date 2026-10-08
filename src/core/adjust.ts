@@ -19,7 +19,7 @@ import type { Rect } from './types.js';
 export type AdjustMode = 'move' | 'resize';
 
 /** How much an edge may drift and still count as "did not move" (px). */
-export const ADJUST_TOLERANCE = 8;
+const ADJUST_TOLERANCE = 8;
 
 export function classifyAdjust(start: Rect, now: Rect, tolerance = ADJUST_TOLERANCE): AdjustMode {
   const dx = Math.abs(now.x - start.x);

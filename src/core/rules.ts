@@ -23,7 +23,7 @@ export function contextFor(surface: Surface): RuleContext {
 }
 
 /** A single user-authored rule (§19.1 `rules-json`, §6). */
-export interface RuleMatch {
+interface RuleMatch {
   appId?: string;
   title?: string;
   kind?: SurfaceKind[];

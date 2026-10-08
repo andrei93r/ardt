@@ -45,7 +45,7 @@ export interface NormalizeWindow {
 }
 
 /** The slot a paired window is assigned. */
-export interface NormalizeSlot {
+interface NormalizeSlot {
   id: number;
   slot: 0 | 1;
 }

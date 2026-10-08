@@ -16,8 +16,8 @@
 import type { Rect, Size } from './types.js';
 
 /** Identifies a recording stream in its header, so a reader can tell it apart. */
-export const RECORDING_FORMAT = 'adrt.recording';
-export const RECORDING_VERSION = 1;
+const RECORDING_FORMAT = 'adrt.recording';
+const RECORDING_VERSION = 1;
 
 /** Bounds: ten minutes or fifty megabytes, whichever comes first. */
 export const DEFAULT_MAX_MS = 10 * 60 * 1000;

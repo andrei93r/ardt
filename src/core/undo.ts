@@ -72,7 +72,7 @@ export interface LiveInstance {
   slot: 0 | 1 | null;
 }
 
-export type UndoProblem = 'instance-gone' | 'slot-taken' | null;
+type UndoProblem = 'instance-gone' | 'slot-taken' | null;
 
 export interface UndoValidation {
   ok: boolean;

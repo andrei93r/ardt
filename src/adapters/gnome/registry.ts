@@ -19,7 +19,7 @@ import GLib from 'gi://GLib';
 import type { AppEntry, AppPlacement, AppRegistryData, AdaptRecord, MigrationReport, PlacementInput } from '../../core/appregistry.js';
 import { AppRegistry, DEFAULT_TTL_MS } from '../../core/appregistry.js';
 import * as identity from '../../core/identity.js';
-import { dataDir, readJson, readText, writeAtomic } from './adapt.js';
+import { dataDir, readJson, writeAtomic } from './adapt.js';
 
 const SAVE_DEBOUNCE_MS = 2000;
 const TRUSTED_OBSERVATIONS = 2;
@@ -370,9 +370,4 @@ export class RegistryStore {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** Read a text file, exposed for the migration report. */
-export function legacyText(name: string): string | null {
-  return readText(`${dataDir()}/${name}`);
 }

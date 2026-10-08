@@ -51,7 +51,7 @@ import { TILE_MODES, validateRule } from '../../core/rules.js';
 import type { TileMode } from '../../core/rules.js';
 
 /** The widget a settings row is rendered with. */
-export type RowKind = 'switch' | 'spin' | 'combo' | 'entry' | 'accelerator' | 'picker';
+type RowKind = 'switch' | 'spin' | 'combo' | 'entry' | 'accelerator' | 'picker';
 
 export interface RowSpec {
   /** The GSettings key. */
@@ -68,7 +68,7 @@ export interface RowSpec {
   choices?: string[];
 }
 
-export interface GroupSpec {
+interface GroupSpec {
   title: string;
   description?: string;
   rows: RowSpec[];
@@ -131,6 +131,8 @@ function appChoices(): AppChoice[] {
  * Every user-facing setting, grouped the way it appears in the window. This is
  * the single source of truth for the settings pages; internal and debug keys
  * are intentionally not here.
+ *
+ * @public Read by tests/agent/A140-prefs-options.sh from the built module.
  */
 export const PREFERENCES_LAYOUT: readonly PageSpec[] = [
   {
@@ -351,9 +353,6 @@ export const PREFERENCES_LAYOUT: readonly PageSpec[] = [
     ],
   },
 ];
-
-/** Custom-rendered user-facing keys that are not plain rows. */
-export const CUSTOM_RENDERED_KEYS: readonly string[] = ['rules-json'];
 
 /** The settings surface the rule editor needs (GSettings in the Shell). */
 interface RuleSettings {

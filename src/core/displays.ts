@@ -71,7 +71,7 @@ export interface DisplayState {
 }
 
 /** A window §9 remembers, keyed by the connector entry that holds it. */
-export interface RememberedWindow {
+interface RememberedWindow {
   id: number;
   /** Ordinal of the workspace within the connector's workspace list. */
   workspace: number;
@@ -178,7 +178,7 @@ export function holdsWindows(ws: DisplayWorkspace): boolean {
 }
 
 /** Every window of a workspace, visible first, then minimized, then floats. */
-export function workspaceWindows(ws: DisplayWorkspace): DisplayWindow[] {
+function workspaceWindows(ws: DisplayWorkspace): DisplayWindow[] {
   const windows: DisplayWindow[] = [];
   for (const slot of ws.slots) if (slot !== null) windows.push(slot);
   windows.push(...ws.minimized);
@@ -192,7 +192,7 @@ export function visibleCount(ws: DisplayWorkspace): number {
 }
 
 /** The workspaces a screen displays, in order. */
-export function screenWorkspaces(state: DisplayState, screen: number): DisplayWorkspace[] {
+function screenWorkspaces(state: DisplayState, screen: number): DisplayWorkspace[] {
   return state.workspaces.filter((ws) => ws.screen === screen);
 }
 

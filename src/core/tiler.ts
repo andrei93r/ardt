@@ -186,7 +186,7 @@ export function remapRatiosAfterReap(
   return out;
 }
 
-export function isPortrait(screen: Screen): boolean {
+function isPortrait(screen: Screen): boolean {
   return screen.geometry.height > screen.geometry.width;
 }
 
@@ -200,7 +200,7 @@ export function screenArea(screen: Screen): Rect {
  * override `gaps-base` per orientation; a negative override inherits the base.
  * The between-window gap and any negative per-side gap inherit this value.
  */
-export function effectiveGap(config: TilerConfig, screen: Screen): number {
+function effectiveGap(config: TilerConfig, screen: Screen): number {
   const override = isPortrait(screen) ? config.gapPortrait : config.gapLandscape;
   return override >= 0 ? override : config.gapBase;
 }

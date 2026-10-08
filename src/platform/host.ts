@@ -5,14 +5,7 @@
 import type { Layer, Rect, Screen, Surface } from '../core/types.js';
 import type { PlatformEventPayload, PlatformEventType } from './events.js';
 
-export type { Layer, Rect, Screen, Size, Surface, SurfaceFlags, SurfaceKind } from '../core/types.js';
-
-/**
- * The compositor-facing surface. `Surface` itself is declared in `core/types.ts`
- * (core must not import from platform) and re-exported here so adapter and
- * event code can `import type { Surface } from './host.js'` as in §2.6.
- */
-export type { Surface as PlatformSurface };
+export type { Surface, SurfaceFlags } from '../core/types.js';
 
 export interface PlatformHost {
   readonly platform: 'gnome'; // 'kwin' will be added later

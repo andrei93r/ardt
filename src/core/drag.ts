@@ -19,8 +19,6 @@ import { computePlans } from './tiler.js';
 import type { TilerConfig, TilerWindow } from './tiler.js';
 import type { Rect, Screen } from './types.js';
 
-export type DragOutcomeKind = 'slot' | 'maximize' | 'swap' | 'float' | 'none';
-
 export type DragOutcome =
   | { kind: 'slot'; workspace: number; slot: 0 | 1; rect: Rect }
   | { kind: 'maximize'; workspace: number; rect: Rect }

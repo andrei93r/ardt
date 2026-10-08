@@ -51,7 +51,7 @@ function base36(value: number): string {
   return Math.abs(Math.trunc(value)).toString(36);
 }
 
-export function semverFromTitle(title: string): string | null {
+function semverFromTitle(title: string): string | null {
   const match = SEMVER.exec(title);
   return match === null ? null : match[0];
 }

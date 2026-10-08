@@ -9,7 +9,7 @@
  * redeclared here. `platform/settings.ts` exposes the identical shape.
  */
 
-export type ConfigValue = number | boolean | string | string[];
+type ConfigValue = number | boolean | string | string[];
 
 export const BUNDLE_FORMAT = 'adrt.config';
 /**
@@ -35,7 +35,7 @@ export interface AdaptationRecord {
   skipAnimation?: boolean;
 }
 
-export interface BundleTracked {
+interface BundleTracked {
   adaptations: Record<string, AdaptationRecord>;
   behavior: Record<string, unknown>;
   /** §12: the app registry state (v4). Absent when reading a v3 bundle. */
@@ -43,7 +43,7 @@ export interface BundleTracked {
 }
 
 /** The serialised app registry, as carried by a v4 bundle. */
-export interface BundleRegistry {
+interface BundleRegistry {
   version: number;
   entries: unknown[];
 }
@@ -58,7 +58,7 @@ export interface Bundle {
 
 export type ImportMode = 'merge' | 'replace';
 
-export interface MergeReport {
+interface MergeReport {
   applied: string[];
   skipped: string[];
 }

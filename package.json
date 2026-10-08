@@ -12,7 +12,7 @@
   "test:core:watch": "vitest tests/core",
   "check:types": "tsc --noEmit -p tsconfig.test.json",
   "check:core": "bash scripts/check-core-purity.sh",
-  "check:knip": "knip --include files,dependencies,unlisted",
+  "check:knip": "knip --include files,dependencies,unlisted,exports,types",
   "i18n:update": "bash scripts/update-po.sh",
   "i18n:check": "bash scripts/check-po.sh",
   "test:agent": "bash scripts/agent-test.sh",

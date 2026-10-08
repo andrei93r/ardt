@@ -27,7 +27,7 @@ export type IdentitySource =
   | 'window';
 
 /** Prefix of the session-only provisional key (`window:<seq>`). */
-export const PROVISIONAL_PREFIX = 'window:';
+const PROVISIONAL_PREFIX = 'window:';
 
 const DESKTOP_SUFFIX = '.desktop';
 const APPIMAGE_SUFFIX = /\.?AppImage$/;

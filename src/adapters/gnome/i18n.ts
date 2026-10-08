@@ -22,7 +22,7 @@ import GLib from 'gi://GLib';
 import { bindtextdomain, dgettext } from 'gettext';
 
 /** The domain declared in `metadata.json` (`gettext-domain`). */
-export const GETTEXT_DOMAIN = 'adrt';
+const GETTEXT_DOMAIN = 'adrt';
 
 let localeDir: string | null = null;
 

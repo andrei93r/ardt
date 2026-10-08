@@ -9,7 +9,7 @@ import { Layer, NON_TILEABLE_KINDS, SurfaceKind } from './types.js';
 /**
  * Why a surface is not tiled. Ordered exactly as the checks in §5.
  */
-export type SkipReason =
+type SkipReason =
   | 'skip-taskbar'
   | 'override-redirect'
   | 'on-all-workspaces'
