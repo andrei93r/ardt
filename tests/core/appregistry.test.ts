@@ -5,11 +5,28 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AdaptationRecord } from '../../src/core/config.js';
-import { AppRegistry, sanitizeAdapt } from '../../src/core/appregistry.js';
+import type { AppEntry } from '../../src/core/appregistry.js';
+import { AppRegistry, REGISTRY_VERSION, sanitizeAdapt } from '../../src/core/appregistry.js';
 import type { Rect } from '../../src/core/types.js';
 
 function rect(x = 0, y = 0, width = 960, height = 1080): Rect {
   return { x, y, width, height };
+}
+
+function entry(overrides: Partial<AppEntry> = {}): AppEntry {
+  return {
+    appId: 'files',
+    firstSeen: 1,
+    lastSeen: 2,
+    windowsSeen: 1,
+    lastTitle: '',
+    neverTile: false,
+    profile: {},
+    adapt: {},
+    placements: {},
+    nextOrdinal: 1,
+    ...overrides,
+  };
 }
 
 function adaptation(overrides: Partial<AdaptationRecord> = {}): AdaptationRecord {
@@ -150,6 +167,19 @@ describe('rekey', () => {
     registry.observe({ appId: 'firefox', now: 1 });
     expect(registry.rekey('firefox', 'firefox')).toBe(false);
   });
+
+  it('renumbers every colliding carried ordinal, keeping them unique', () => {
+    const registry = new AppRegistry();
+    registry.place('real', 'r1', { connector: 'eDP-1', slot: 0, rect: rect() });
+    registry.place('real', 'r2', { connector: 'eDP-1', slot: 1, rect: rect() });
+    registry.place('prov', 'p1', { connector: 'HDMI-1', slot: 0, rect: rect() });
+    registry.place('prov', 'p2', { connector: 'HDMI-1', slot: 1, rect: rect() });
+
+    expect(registry.rekey('prov', 'real')).toBe(true);
+    const ordinals = registry.placements('real').map((placement) => placement.ordinal);
+    expect(ordinals).toEqual([1, 2, 3, 4]);
+    expect(new Set(ordinals).size).toBe(4);
+  });
 });
 
 describe('migration', () => {
@@ -247,5 +277,36 @@ describe('serialization', () => {
     restored.place('files', 'win-c', { connector: 'eDP-1', slot: 1, rect: rect() });
     expect(restored.ordinalFor('files', 'win-c')).toBe(3);
     expect(restored.get('files')?.windowsSeen).toBe(1);
+  });
+
+  it('refuses a newer registry version and yields an empty registry', () => {
+    const restored = AppRegistry.fromJSON({ version: REGISTRY_VERSION + 1, entries: [entry()] });
+    expect(restored.size).toBe(0);
+  });
+
+  it('keeps the first entry deterministically when duplicate appIds appear', () => {
+    const restored = AppRegistry.fromJSON({
+      version: REGISTRY_VERSION,
+      entries: [entry({ lastTitle: 'first', windowsSeen: 1 }), entry({ lastTitle: 'second', windowsSeen: 9 })],
+    });
+    expect(restored.size).toBe(1);
+    expect(restored.get('files')?.lastTitle).toBe('first');
+    expect(restored.get('files')?.windowsSeen).toBe(1);
+  });
+
+  it('re-derives the ordinal counter from the highest persisted placement', () => {
+    const restored = AppRegistry.fromJSON({
+      version: REGISTRY_VERSION,
+      entries: [
+        entry({
+          placements: {
+            'win-a': { ordinal: 7, connector: 'eDP-1', slot: 0, maximized: false, fullscreen: false, rect: rect() },
+          },
+          nextOrdinal: 1, // corrupt: below the highest placement
+        }),
+      ],
+    });
+    const placed = restored.place('files', 'win-b', { connector: 'eDP-1', slot: 1, rect: rect() });
+    expect(placed.ordinal).toBe(8);
   });
 });

@@ -137,6 +137,9 @@ function cloneEntry(entry: AppEntry): AppEntry {
   for (const [instanceId, placement] of Object.entries(entry.placements ?? {})) {
     placements[instanceId] = clonePlacement(placement);
   }
+  // The counter is re-derived: a persisted value below the highest placement
+  // ordinal would hand out a duplicate, so the derived floor always wins.
+  const persisted = entry.nextOrdinal;
   return {
     appId: entry.appId,
     firstSeen: entry.firstSeen,
@@ -147,7 +150,10 @@ function cloneEntry(entry: AppEntry): AppEntry {
     profile: { ...(entry.profile ?? {}) },
     adapt: { ...(entry.adapt ?? {}) },
     placements,
-    nextOrdinal: entry.nextOrdinal ?? highestOrdinal(placements) + 1,
+    nextOrdinal: Math.max(
+      typeof persisted === 'number' && Number.isFinite(persisted) ? persisted : 0,
+      highestOrdinal(placements) + 1,
+    ),
   };
 }
 
@@ -358,15 +364,31 @@ export class AppRegistry {
     // Placements from the provisional entry are carried over; the real key's
     // own placements win on an instance-id collision. A carried ordinal that
     // clashes with a real one is renumbered forward so ordinals stay unique.
+    // One pass with a used-ordinal set: the previous `Object.values(...).some`
+    // per placement made this O(n²).
     const merged: Record<string, AppPlacement> = { ...existing.placements };
-    let next = Math.max(existing.nextOrdinal, highestOrdinal(existing.placements) + 1);
+    const used = new Set<number>();
+    let highest = 0;
+    for (const placement of Object.values(merged)) {
+      used.add(placement.ordinal);
+      if (placement.ordinal > highest) highest = placement.ordinal;
+    }
+    let next = Math.max(existing.nextOrdinal, highest + 1);
     for (const [instanceId, placement] of Object.entries(oldEntry.placements)) {
       if (merged[instanceId] !== undefined) continue;
-      const clashes = Object.values(merged).some((candidate) => candidate.ordinal === placement.ordinal);
-      merged[instanceId] = clashes ? { ...placement, ordinal: next++ } : { ...placement };
+      if (used.has(placement.ordinal)) {
+        while (used.has(next)) next += 1;
+        merged[instanceId] = { ...placement, ordinal: next };
+        used.add(next);
+        next += 1;
+      } else {
+        merged[instanceId] = { ...placement };
+        used.add(placement.ordinal);
+        if (placement.ordinal > highest) highest = placement.ordinal;
+      }
     }
     existing.placements = merged;
-    existing.nextOrdinal = Math.max(existing.nextOrdinal, next, highestOrdinal(merged) + 1);
+    existing.nextOrdinal = Math.max(existing.nextOrdinal, next, highest + 1);
     this.table.delete(oldKey);
     return true;
   }
@@ -461,9 +483,19 @@ export class AppRegistry {
 
   static fromJSON(data: AppRegistryData, options: AppRegistryOptions = {}): AppRegistry {
     const registry = new AppRegistry(options);
+    // A newer persisted schema is refused rather than silently downgraded, the
+    // same convention as `config.normalizeBundle`: the caller gets an empty
+    // registry and may choose to overwrite the file.
+    if (typeof data?.version === 'number' && data.version > REGISTRY_VERSION) {
+      return registry;
+    }
     const entries = Array.isArray(data?.entries) ? data.entries : [];
     for (const entry of entries) {
       if (entry === null || typeof entry !== 'object' || typeof entry.appId !== 'string') continue;
+      // The table is keyed by appId, so a duplicate is corruption. Keep the
+      // first occurrence deterministically; a later one must not silently
+      // overwrite the data that was already accepted.
+      if (registry.table.has(entry.appId)) continue;
       registry.table.set(entry.appId, cloneEntry(entry));
     }
     return registry;
