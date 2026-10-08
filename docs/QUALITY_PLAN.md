@@ -1,6 +1,9 @@
 # Adrt — Quality Plan (`master`)
 
 > **Status: proposed, 2026-10-08.** Baseline commit `b2e46d7` (`master`).
+> **Execution:** all work lands on branch `perf-gnome` (created from
+> `refactor/clean-arch-v3`, so P1–P5 of the backlog are already the base).
+> `master` receives the branch once it is green; P0 below is executed there.
 > **Behaviour authority:** `docs/V2_MODEL.md`. This plan changes structure,
 > performance and type safety — not behaviour. If a step would change a
 > user-visible behaviour, stop and route it through the model first.
@@ -24,8 +27,8 @@
 
 | Phase | Content | State |
 | --- | --- | --- |
-| P0 | Land ready refactor + repair the green gate | todo |
-| P1 | Correctness sweep | todo |
+| P0 | Land ready refactor + repair the green gate | **done** (gate fixes on `perf-gnome`; nested smoke pending) |
+| P1 | Correctness sweep | in progress (1.1–1.3, 1.5 delegated) |
 | P2 | Main-loop & allocation diet | todo |
 | P3 | Zero `any` | todo |
 | P4 | Decomposition & deletion | todo |
@@ -84,15 +87,17 @@ fast-forward-quality merge. It brings:
 - `extension.ts` / `host.ts` / `indicator.ts` / `tiling.ts` — dead wiring and
   helpers removed; host/indicator own their registries (P4/P5).
 
-Landing checklist:
+Landing checklist (executed 2026-10-08 on `perf-gnome`):
 
-- [ ] Review the three semantic moves (tracker owns
+- [x] Review the three semantic moves (tracker owns
       `workspace-added`/`removed`; host/indicator own their wiring; the
       animation ledger).
-- [ ] One nested smoke run (the core suite does not exercise `host`/`indicator`).
-- [ ] Fix the 5 new `any` introduced by `lifecycle.ts`/`shell-tracker.ts` while
-      landing (or explicitly carry them into P3).
-- [ ] Merge to `master`; delete/retire `perf/reduce-work` afterwards.
+- [x] Branch base created from `refactor/clean-arch-v3`.
+- [ ] One nested smoke run (the core suite does not exercise `host`/`indicator`)
+      — needs a GNOME Shell; pending.
+- [ ] The 5 new `any` in `lifecycle.ts`/`shell-tracker.ts` are carried into P3.
+- [ ] `master` receives the branch when green (user review); retire
+      `perf/reduce-work` then.
 
 If review rejects a piece, the six commits are individually cherry-pickable.
 
