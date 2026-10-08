@@ -20,9 +20,12 @@ required = ["queueDepth", "drains", "drainMsP50", "drainMsP95", "applyMsP50", "a
 missing = [k for k in required if k not in p]
 if missing:
     print("missing:", missing); sys.exit(1)
-bad = {k: v for k, v in p.items() if not isinstance(v, (int, float)) or v < 0}
-if bad:
-    print("not a non-negative number:", bad); sys.exit(1)
+# DumpState is add-only: validate the required numeric keys, never reject a
+# new field (the dev-gated profiler adds `sections`).
+for k in required:
+    v = p[k]
+    if not isinstance(v, (int, float)) or v < 0:
+        print("not a non-negative number:", k, v); sys.exit(1)
 print("drains=%s p50=%sms p95=%sms" % (p["drains"], p["drainMsP50"], p["drainMsP95"]))
 '
 

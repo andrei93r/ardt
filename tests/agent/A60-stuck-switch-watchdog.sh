@@ -20,7 +20,9 @@ sys.exit(0 if d.get("workspaceAnimating") is False else 1)
 '; then :; else fail "animation still active"; fi
 
 hist="$(history_file)"
-if [ -f "$hist" ] && grep -aq '"reason":"switch-watchdog"' "$hist"; then
+# The log is buffered (history flushes within a second), so poll instead of
+# racing the flush under load.
+if wait_for 10 bash -c "grep -aq '\"reason\":\"switch-watchdog\"' '$hist' 2>/dev/null"; then
   pass "the watchdog recorded the teardown"
 else
   fail "no watchdog teardown recorded"
