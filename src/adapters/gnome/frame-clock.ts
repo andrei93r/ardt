@@ -137,26 +137,52 @@ export function createAnimationLedger(hooks: AnimatorHooks): Animator {
   let records: AnimRecord[] = [];
   let recording = false;
 
-  function record(entry: AnimRecord): void {
+  // §2.1: each recorder helper checks `recording` *before* it spreads a rect
+  // or builds an `AnimRecord`, so a disabled recorder allocates nothing at all —
+  // these run on every animated frame.
+  function recordStart(id: number, from: Rect, to: Rect): void {
     if (!recording || records.length >= MAX_RECORDS) return;
-    records.push(entry);
+    records.push({ kind: 'start', id, at: Date.now(), rect: { ...from }, to: { ...to }, from: { ...from } });
   }
 
+  function recordFrame(id: number, rect: Rect, from: Rect, to: Rect): void {
+    if (!recording || records.length >= MAX_RECORDS) return;
+    records.push({ kind: 'frame', id, at: Date.now(), rect: { ...rect }, to: { ...to }, from: { ...from } });
+  }
+
+  function recordEnd(id: number, to: Rect): void {
+    if (!recording || records.length >= MAX_RECORDS) return;
+    records.push({ kind: 'end', id, at: Date.now(), rect: { ...to } });
+  }
+
+  function recordCancel(id: number, rect: Rect, from: Rect, to: Rect): void {
+    if (!recording || records.length >= MAX_RECORDS) return;
+    records.push({ kind: 'cancel', id, at: Date.now(), rect: { ...rect }, to: { ...to }, from: { ...from } });
+  }
+
+  /** Stop any in-flight tween for `id` without running its `onComplete`: a
+   * cancellation means its target no longer applies, so the verify ladder it
+   * would have scheduled must not fire (1.6). */
   function cancel(id: number): void {
     const entry = entries.get(id);
     if (entry === undefined) return;
     entry.stop();
     entries.delete(id);
-    record({ kind: 'cancel', id, at: Date.now(), rect: { ...entry.rect }, to: { ...entry.to }, from: { ...entry.from } });
+    recordCancel(id, entry.rect, entry.from, entry.to);
   }
 
   function animate(actor: any, id: number, from: Rect, to: Rect, durationMs: number, onComplete: (() => void) | null = null, bounds: Rect | null = null): void {
+    // 1.6: a new target always supersedes an in-flight tween for this id, so
+    // cancel it first — including on the immediate path below. Otherwise a
+    // still-running tween would later re-apply its stale target over the one
+    // applied here, and its `onComplete` would verify the wrong target. The
+    // caller that supersedes supplies its own completion.
+    cancel(id);
     if (actor === null || durationMs <= 0) {
       hooks.apply(id, to);
       if (onComplete !== null) onComplete();
       return;
     }
-    cancel(id);
     let dead = false;
     const tween = tweenRect(actor, from, to, durationMs, {
       apply: (rect) => {
@@ -169,7 +195,7 @@ export function createAnimationLedger(hooks: AnimatorHooks): Animator {
       },
       frame: (rect) => {
         if (dead) return;
-        record({ kind: 'frame', id, at: Date.now(), rect: { ...rect }, to: { ...to }, from: { ...from } });
+        recordFrame(id, rect, from, to);
         hooks.onFrame?.(id, rect);
       },
       complete: () => {
@@ -180,13 +206,13 @@ export function createAnimationLedger(hooks: AnimatorHooks): Animator {
         }
         entries.delete(id);
         hooks.apply(id, to);
-        record({ kind: 'end', id, at: Date.now(), rect: { ...to } });
+        recordEnd(id, to);
         onComplete?.();
       },
     }, bounds);
     if (tween.immediate) return;
     entries.set(id, { stop: () => tween.stop(), rect: tween.rect, from: { ...from }, to: { ...to } });
-    record({ kind: 'start', id, at: Date.now(), rect: { ...from }, to: { ...to }, from: { ...from } });
+    recordStart(id, from, to);
   }
 
   return {

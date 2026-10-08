@@ -296,6 +296,12 @@ export class Tiling {
 
   private performApply(tracked: TrackedWindow, target: Rect, screen: Screen, animate: boolean, reason: string, attempt: number): void {
     if (this.destroyed || this.deps.isPaused()) return;
+    // 1.6: every apply supersedes an in-flight tween for this window. Cancel it
+    // up front — otherwise the non-animated branch below is immediately
+    // overwritten by the stale tween, and that tween's dropped `onComplete`
+    // cannot verify the abandoned target. The animated branch re-cancels (a
+    // no-op) before it starts the new tween.
+    this.deps.animator.cancel(tracked.id);
     this.lastAppliedAtMs = Date.now();
     // Record the intended geometry immediately: a window counts as tiled from
     // the moment we aim a plan at it, not only once verification succeeds.

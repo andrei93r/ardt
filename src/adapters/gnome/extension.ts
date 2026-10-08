@@ -284,17 +284,27 @@ export default class AdrtExtension extends Extension {
     this.restarting = false;
     this.restartDeferred = false;
     this.recoveryErrors = [];
-    // §36: the entry point is the most important boundary — a throw here makes
-    // GNOME disable the extension (and can cascade in the Shell). Catch it, log
-    // it, and let `disable()` clean up whatever was half-built.
+    // §36/§Self-heal (1.11): the entry point is the most important boundary; a
+    // throw here is routed through the recovery policy in the catch below,
+    // never allowed to escape unhandled into the Shell.
     try {
       this.enableWith(started);
     } catch (error) {
       this.reportError('enable', error);
+      // §Self-heal (1.11): a failed enable is already a half-built extension, so
+      // it counts as the *first* recovery signal instead of waiting for the
+      // usual 3-error burst. `considerRecovery` still schedules on idle and
+      // still honours the restart cap and any in-flight interaction (nothing
+      // restarts inline). Only when recovery is impossible — self-disabled,
+      // GNOME already disabling us, or the restart cap reached — do we rethrow,
+      // so GNOME calls `disable()` and removes the half-built extension instead
+      // of leaving it "enabled".
+      if (!this.considerRecovery('enable')) throw error;
     }
   }
 
-  /** The enable body, guarded by `enable()` so one error cannot disable adrt. */
+  /** The enable body. `enable()` contains its throw and decides between an
+   * in-place restart and letting GNOME disable the half-built extension. */
   private enableWith(started: number): void {
     // The journal comes first: everything below it may log a decision.
     this.journal = new EventJournal(30);
@@ -359,9 +369,9 @@ export default class AdrtExtension extends Extension {
     this.animator = createAnimationLedger({
       isAlive: (id) => this.session.windows.has(id),
       // §Self-heal containment: these run inside Clutter timeline signal
-      // emissions — a throw must never propagate out of them.
-      apply: (id, rect) => this.guard('animator-apply', () => this.host.applyFrame(id, rect))(),
-      onFrame: (id, rect) => this.guard('animator-frame', () => this.onAnimatedFrame(id, rect))(),
+      // emissions — a throw must never propagate out of them. Bound once (2.1).
+      apply: this.onAnimatorApply,
+      onFrame: this.onAnimatorFrame,
     });
 
     this.tiling = new Tiling({
@@ -572,6 +582,28 @@ export default class AdrtExtension extends Extension {
   }
 
   /**
+   * §2.1/§Self-heal: the animation-frame hooks, bound once at construction so a
+   * compositor frame allocates no `guard()` closure. They run inside Clutter
+   * timeline emissions, so each keeps a direct boundary and reports with the
+   * same `[adrt] ERROR` marker `guard` would have used.
+   */
+  private readonly onAnimatorApply = (id: number, rect: Rect): void => {
+    try {
+      this.host.applyFrame(id, rect);
+    } catch (error) {
+      this.reportError('animator-apply', error);
+    }
+  };
+
+  private readonly onAnimatorFrame = (id: number, rect: Rect): void => {
+    try {
+      this.onAnimatedFrame(id, rect);
+    } catch (error) {
+      this.reportError('animator-frame', error);
+    }
+  };
+
+  /**
    * §36: guard a signal/actor callback so a throw is logged, never propagated
    * into the compositor's emission (which would disable adrt or crash the
    * Shell). One closure and one try/catch per event is the whole cost.
@@ -665,20 +697,25 @@ export default class AdrtExtension extends Extension {
    * a deferred restart's obstacle (a drag, a transition) clears. Never restarts
    * inline: the work is scheduled on idle, always outside the emission that
    * caught the error.
+   *
+   * Returns true when a restart is pending, scheduled or deferred; false only
+   * when recovery is impossible (self-disabled, GNOME disable, or the cap
+   * reached) — `enable()` uses that to rethrow so GNOME disables cleanly (1.11).
    */
-  private considerRecovery(context: string): void {
-    if (this.selfDisabled || this.gnomeDisable || this.restarting || this.restartPending) return;
+  private considerRecovery(context: string): boolean {
+    if (this.selfDisabled || this.gnomeDisable) return false;
+    if (this.restarting || this.restartPending) return true;
     const now = Date.now();
     this.restartTimes = this.restartTimes.filter((t) => now - t < RESTART_WINDOW_MS);
     if (this.restartTimes.length >= RESTART_CAP) {
       this.selfDisable(context);
-      return;
+      return false;
     }
     // Never restart mid-gesture or mid-transition; defer until it ends (the
     // drag-end path and the motion tick re-run this check).
     if (this.interactionActive()) {
       this.restartDeferred = true;
-      return;
+      return true;
     }
     this.restartPending = true;
     this.restartTimes.push(now);
@@ -689,6 +726,7 @@ export default class AdrtExtension extends Extension {
       this.restartInPlace(context);
       return GLib.SOURCE_REMOVE;
     });
+    return true;
   }
 
   /**
