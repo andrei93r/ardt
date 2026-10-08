@@ -34,14 +34,18 @@ describe('clipPayload', () => {
       title: 'y'.repeat(10_000_000),
       nested: { deep: { list: ['z'.repeat(1_000_000)] } },
     };
-    const out = clipPayload(payload) as any;
+    const out = clipPayload(payload) as {
+      id: number;
+      title: string;
+      nested: { deep: { list: string[] } };
+    };
     expect(out.id).toBe(7);
     expect(out.title.length).toBeLessThanOrEqual(MAX_LOG_TEXT + 1);
     expect(out.nested.deep.list[0].length).toBeLessThanOrEqual(MAX_LOG_TEXT + 1);
   });
 
   it('leaves numbers and booleans alone', () => {
-    const out = clipPayload({ a: 1, b: true, c: null }) as any;
+    const out = clipPayload({ a: 1, b: true, c: null }) as { a: number; b: boolean; c: null };
     expect(out).toEqual({ a: 1, b: true, c: null });
   });
 });

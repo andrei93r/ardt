@@ -5,21 +5,28 @@
 import { describe, expect, it } from 'vitest';
 
 import { PROFILES } from '../../src/core/profiles.js';
+import type { MetaWindow } from 'gi://Meta';
+import type { GnomeSurface } from '../../src/adapters/gnome/surface.js';
 import { TrackedWindow } from '../../src/adapters/gnome/tracked-window.js';
 
 /** The smallest surface shape `TrackedWindow`'s constructor reads. */
-function surface(appId: string): any {
+function surface(appId: string): GnomeSurface {
   return {
     id: 42,
     appId,
     min: { width: 0, height: 0 },
     max: { width: 0, height: 0 },
-  };
+  } as GnomeSurface;
+}
+
+/** The profile tests never touch the compositor window. */
+function noWin(): MetaWindow {
+  return {} as MetaWindow;
 }
 
 describe('TrackedWindow profile', () => {
   it('starts on the default profile before the app class is known', () => {
-    const tracked = new TrackedWindow({} as any, surface(''));
+    const tracked = new TrackedWindow(noWin(), surface(''));
     expect(tracked.profile).toBe(PROFILES.default);
   });
 
@@ -27,7 +34,7 @@ describe('TrackedWindow profile', () => {
     // A Wayland window registers with an empty app id, so the profile is
     // `default` until the class arrives. It must not stay frozen there: Chrome
     // and VS Code need their family's unmaximize delay and retry ladder.
-    const tracked = new TrackedWindow({} as any, surface(''));
+    const tracked = new TrackedWindow(noWin(), surface(''));
     tracked.surface.appId = 'google-chrome';
     tracked.refreshProfile();
     expect(tracked.profile).toBe(PROFILES['chrome-family']);
@@ -38,7 +45,7 @@ describe('TrackedWindow profile', () => {
   });
 
   it('prefers the resolved identity key over the raw app id', () => {
-    const tracked = new TrackedWindow({} as any, surface(''));
+    const tracked = new TrackedWindow(noWin(), surface(''));
     tracked.identityKey = 'google-chrome';
     tracked.surface.appId = 'some.generic.class';
     tracked.refreshProfile();
