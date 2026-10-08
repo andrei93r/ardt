@@ -28,9 +28,9 @@
 | Phase | Content | State |
 | --- | --- | --- |
 | P0 | Land ready refactor + repair the green gate | **done** (gate fixes on `perf-gnome`; nested smoke pending) |
-| P1 | Correctness sweep | in progress — 1.1–1.5, 1.9, 1.10, 1.12, 1.13 committed; 1.6, 1.8, 1.11, 1.14 in flight; 1.7 next |
-| P2 | Main-loop & allocation diet | in progress — 2.1, 2.2 in flight |
-| P3 | Zero `any` | todo |
+| P1 | Correctness sweep | **done** — 1.1–1.9, 1.11–1.14 committed; 1.10 done for session.ts (injection/parseSpawnEnv leftovers in extension.ts) |
+| P2 | Main-loop & allocation diet | in progress — 2.1, 2.2, 2.4 committed; 2.3, 2.5–2.9 todo |
+| P3 | Zero `any` | in progress — 3.2 (typed events) and 3.3 (compat.ts) in flight |
 | P4 | Decomposition & deletion | todo |
 | P5 | Guardrails (CI/tests/docs) | todo |
 
