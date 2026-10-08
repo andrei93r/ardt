@@ -9,6 +9,7 @@
 
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import type { Variant } from 'gi://Gio';
 import Clutter from 'gi://Clutter';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
@@ -1564,7 +1565,7 @@ export default class AdrtExtension extends Extension {
     const current = manager.get_active_workspace_index();
     const delta = direction === 'left' || direction === 'up' ? -1 : 1;
     const target = clamp(current + delta, 0, manager.get_n_workspaces() - 1);
-    if (target !== current) manager.get_workspace_by_index(target).activate(global.get_current_time());
+    if (target !== current) manager.get_workspace_by_index(target)?.activate(global.get_current_time());
   }
 
   // ------------------------------------------------------------- settings
@@ -1573,7 +1574,7 @@ export default class AdrtExtension extends Extension {
     // Any setting change drops the memoised classifier config: it is read per
     // window per pass, and a stale config would be a correctness bug, not a perf
     // win, so the invalidation is blanket.
-    this.settingWatchers.push(this.settings.onAnyChange(this.guard('setting:any', () => undefined)));
+    this.settingWatchers.push(this.settings.onAnyChange(this.guard('setting:all', () => undefined)));
     const reactive: [string, () => void][] = [
       ['exception-apps', () => this.session.invalidateAll()],
       ['rules-json', () => this.session.invalidateAll()],
@@ -2236,7 +2237,7 @@ export default class AdrtExtension extends Extension {
         const store = new Gio.Settings({ schema_id: schema });
         const type = store.get_default_value(key)?.get_type_string();
         if (type === undefined || type === null) return false;
-        let parsed: unknown;
+        let parsed: Variant;
         try {
           parsed = GLib.Variant.parse(new GLib.VariantType(type), value, null, null);
         } catch {

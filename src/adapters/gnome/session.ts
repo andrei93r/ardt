@@ -1482,7 +1482,7 @@ export class WindowSession {
   private armDrain(lane: 1 | 2 | 3): void {
     if (this.destroyed || this.drainArmed[lane]) return;
     this.drainArmed[lane] = true;
-    const run = (): number => {
+    const run = (): boolean => {
       this.drainArmed[lane] = false;
       // A later registered before `destroy()` can still fire afterwards; the
       // queue is already cleared, and running policy on a torn-down session
