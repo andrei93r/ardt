@@ -33,10 +33,48 @@ declare module 'gi://GLib' {
 declare module 'gi://Gio' {
   const Gio: any;
   export default Gio;
-  /** The `Gio.Settings` surface the adapters read (see `host.ts`). */
+
+  /**
+   * The `Gio.Settings` surface the adapters read and write (see `host.ts`,
+   * `prefs.ts`). The namespace default stays `any`; this is the accurate shape
+   * for the keys actually touched.
+   */
   export interface Settings {
     get_strv(key: string): string[];
     get_boolean(key: string): boolean;
+    get_int(key: string): number;
+    get_string(key: string): string;
+    set_int(key: string, value: number): void;
+    set_string(key: string, value: string): void;
+    set_boolean(key: string, value: boolean): void;
+    set_strv(key: string, value: string[]): void;
+    bind(key: string, target: unknown, property: string, flags: number): void;
+    readonly settings_schema: SettingsSchema;
+  }
+
+  /** A settings schema (`Gio.SettingsSchema`), read for a key's value type. */
+  export interface SettingsSchema {
+    get_key(name: string): SettingsSchemaKey;
+  }
+
+  /** One settings key (`Gio.SettingsSchemaKey`). */
+  export interface SettingsSchemaKey {
+    get_value_type(): VariantType;
+  }
+
+  /** A `GLib.VariantType`, read only for its type string. */
+  export interface VariantType {
+    dup_string?(): string;
+  }
+
+  /** One installed application (`Gio.AppInfo`), as read by the app picker. */
+  export interface AppInfo {
+    should_show?(): boolean;
+    get_id?(): string | null;
+    get_startup_wm_class?(): string | null;
+    get_display_name?(): string | null;
+    get_name?(): string | null;
+    get_icon?(): unknown | null;
   }
 }
 declare module 'gi://GioUnix' {
@@ -157,10 +195,151 @@ declare module 'gi://GDesktopEnums' {
 declare module 'gi://Gtk' {
   const Gtk: any;
   export default Gtk;
+
+  /**
+   * The `Gtk` surface the preferences UI touches (`prefs.ts`). The namespace
+   * default stays `any` so the other adapters keep compiling against the broad
+   * declarations; these named interfaces are the accurate shapes for call sites
+   * that have been typed.
+   */
+
+  /** A widget (`Gtk.Widget`), as far as the preferences UI reads it. */
+  export interface GtkWidget {
+    visible: boolean;
+    add_css_class(name: string): void;
+    connect(signal: string, callback: () => void): number;
+    get_children(): GtkWidget[];
+  }
+
+  /** An image (`Gtk.Image`), used for icons and check marks. */
+  export interface GtkImage extends GtkWidget {}
+
+  /** A button (`Gtk.Button`). */
+  export interface GtkButton extends GtkWidget {}
+
+  /** A label (`Gtk.Label`). */
+  export interface GtkLabel extends GtkWidget {
+    label: string | null;
+    xalign: number;
+  }
+
+  /** A toggle switch (`Gtk.Switch`). */
+  export interface GtkSwitch extends GtkWidget {
+    active: boolean;
+  }
+
+  /** A box container (`Gtk.Box`). */
+  export interface GtkBox extends GtkWidget {
+    append(child: GtkWidget): void;
+  }
+
+  /** A search entry (`Gtk.SearchEntry`). */
+  export interface GtkSearchEntry extends GtkWidget {
+    text: string;
+  }
+
+  /** A scrolled window (`Gtk.ScrolledWindow`). */
+  export interface GtkScrolledWindow extends GtkWidget {
+    set_child(child: GtkWidget): void;
+  }
+
+  /** A popover (`Gtk.Popover`). */
+  export interface GtkPopover extends GtkWidget {
+    set_child(child: GtkWidget): void;
+  }
+
+  /** A menu button (`Gtk.MenuButton`), whose `popover` is assigned directly. */
+  export interface GtkMenuButton extends GtkWidget {
+    popover: GtkPopover;
+  }
+
+  /** One row of a `Gtk.ListBox`. */
+  export interface GtkListBoxRow extends GtkWidget {
+    set_child(child: GtkWidget): void;
+    get_child(): GtkWidget | null;
+  }
+
+  /** A list box (`Gtk.ListBox`), including its two signal shapes. */
+  export interface GtkListBox extends GtkWidget {
+    /** Children may be plain widgets or `Adw` rows. */
+    append(child: unknown): void;
+    remove_all(): void;
+    /** Test hook: `A140` tells the rule editor from a plain row set. */
+    adrtRulesEditor?: boolean;
+    set_filter_func(filter: (row: GtkListBoxRow) => boolean): void;
+    connect(signal: 'row-activated', callback: (list: GtkListBox, row: GtkListBoxRow) => void): number;
+    connect(signal: string, callback: () => void): number;
+  }
 }
 declare module 'gi://Adw' {
   const Adw: any;
   export default Adw;
+
+  /**
+   * The `Adw` surface the preferences UI touches (`prefs.ts`). The namespace
+   * default stays `any`; these named interfaces are the accurate shapes for the
+   * rows and containers the file has been typed against.
+   */
+
+  /** The common row surface (`Adw.PreferencesRow` and subclasses). */
+  export interface AdwPreferencesRow {
+    title: string;
+    subtitle: string;
+    add_prefix(widget: unknown): void;
+    add_suffix(widget: unknown): void;
+    connect(signal: string, callback: () => void): number;
+    /** Test hook: `A140` reads this to prove every user-facing key has a row. */
+    adrtKey?: string;
+  }
+
+  /** An action row (`Adw.ActionRow`). */
+  export interface AdwActionRow extends AdwPreferencesRow {}
+
+  /** A switch row (`Adw.SwitchRow`). */
+  export interface AdwSwitchRow extends AdwPreferencesRow {
+    active: boolean;
+  }
+
+  /** A spin row (`Adw.SpinRow`). */
+  export interface AdwSpinRow extends AdwPreferencesRow {
+    value: number;
+  }
+
+  /** A combo row (`Adw.ComboRow`). */
+  export interface AdwComboRow extends AdwPreferencesRow {
+    selected: number;
+  }
+
+  /** An entry row (`Adw.EntryRow`). */
+  export interface AdwEntryRow extends AdwPreferencesRow {
+    text: string;
+  }
+
+  /** An expander row (`Adw.ExpanderRow`), the app-picker container. */
+  export interface AdwExpanderRow extends AdwPreferencesRow {
+    add_row(row: unknown): void;
+    remove(child: unknown): void;
+    /** Test hook: `A140` asserts a picker is used for the app-list keys. */
+    adrtPicker?: boolean;
+  }
+
+  /** A preferences group (`Adw.PreferencesGroup`). */
+  export interface AdwPreferencesGroup {
+    add(child: unknown): void;
+    remove(child: unknown): void;
+    title: string;
+    description: string;
+  }
+
+  /** A preferences page (`Adw.PreferencesPage`). */
+  export interface AdwPreferencesPage {
+    add(group: AdwPreferencesGroup): void;
+  }
+
+  /** The preferences window (`Adw.PreferencesWindow`). */
+  export interface AdwPreferencesWindow {
+    add(page: AdwPreferencesPage): void;
+  }
 }
 
 // GJS ships a built-in `gettext` module (see gjs.guide). Only the functions
@@ -176,7 +355,15 @@ declare module 'resource:///org/gnome/shell/extensions/extension.js' {
 }
 
 declare module 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js' {
-  export const ExtensionPreferences: any;
+  import type { Settings as GioSettings } from 'gi://Gio';
+
+  /** The `ExtensionPreferences` base the prefs process provides. */
+  export interface ExtensionPreferences {
+    getSettings(): GioSettings;
+    metadata: Record<string, string>;
+  }
+
+  export const ExtensionPreferences: { new (): ExtensionPreferences };
 }
 
 declare module 'resource:///org/gnome/shell/misc/config.js' {

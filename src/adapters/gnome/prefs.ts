@@ -16,6 +16,33 @@
 import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
+import type {
+  AdwActionRow,
+  AdwComboRow,
+  AdwEntryRow,
+  AdwExpanderRow,
+  AdwPreferencesGroup,
+  AdwPreferencesPage,
+  AdwPreferencesRow,
+  AdwPreferencesWindow,
+  AdwSpinRow,
+  AdwSwitchRow,
+} from 'gi://Adw';
+import type { Settings as GioSettings, AppInfo } from 'gi://Gio';
+import type {
+  GtkBox,
+  GtkButton,
+  GtkImage,
+  GtkLabel,
+  GtkListBox,
+  GtkListBoxRow,
+  GtkMenuButton,
+  GtkPopover,
+  GtkScrolledWindow,
+  GtkSearchEntry,
+  GtkSwitch,
+  GtkWidget,
+} from 'gi://Gtk';
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import { _, loadTranslations } from './i18n.js';
@@ -77,7 +104,8 @@ function appChoices(): AppChoice[] {
   const out: AppChoice[] = [];
   const seen = new Set<string>();
   try {
-    for (const info of Gio.AppInfo.get_all()) {
+    const infos: AppInfo[] = Gio.AppInfo.get_all();
+    for (const info of infos) {
       if (typeof info.should_show === 'function' && !info.should_show()) continue;
       const desktopId: string = info.get_id?.() ?? '';
       let wmClass = '';
@@ -374,10 +402,10 @@ function ruleErrors(raw: unknown, index: number): string[] {
 }
 
 export default class AdrtPreferences extends ExtensionPreferences {
-  fillPreferencesWindow(window: any): void {
+  fillPreferencesWindow(window: AdwPreferencesWindow): void {
     loadTranslations();
-    const settings = this.getSettings();
-    const pages = new Map<string, any>();
+    const settings: GioSettings = this.getSettings();
+    const pages = new Map<string, AdwPreferencesPage>();
     for (const spec of PREFERENCES_LAYOUT) {
       const page = this.buildPage(settings, spec);
       pages.set(spec.title, page);
@@ -390,10 +418,10 @@ export default class AdrtPreferences extends ExtensionPreferences {
   }
 
   /** Build one page, its groups and its rows from the declarative layout. */
-  private buildPage(settings: any, spec: PageSpec): any {
-    const page = new Adw.PreferencesPage({ title: spec.title, icon_name: spec.icon });
+  private buildPage(settings: GioSettings, spec: PageSpec): AdwPreferencesPage {
+    const page: AdwPreferencesPage = new Adw.PreferencesPage({ title: spec.title, icon_name: spec.icon });
     for (const groupSpec of spec.groups) {
-      const group = new Adw.PreferencesGroup({ title: groupSpec.title });
+      const group: AdwPreferencesGroup = new Adw.PreferencesGroup({ title: groupSpec.title });
       if (groupSpec.description) group.description = groupSpec.description;
       for (const rowSpec of groupSpec.rows) group.add(this.buildRow(settings, rowSpec));
       page.add(group);
@@ -402,14 +430,14 @@ export default class AdrtPreferences extends ExtensionPreferences {
   }
 
   /** Build a single row, tagged with its settings key for introspection. */
-  private buildRow(settings: any, spec: RowSpec): any {
+  private buildRow(settings: GioSettings, spec: RowSpec): AdwPreferencesRow {
     const row = this.rowFor(settings, spec);
     // Test hook: A140 reads this to prove every user-facing key has one row.
     row.adrtKey = spec.key;
     return row;
   }
 
-  private rowFor(settings: any, spec: RowSpec): any {
+  private rowFor(settings: GioSettings, spec: RowSpec): AdwPreferencesRow {
     switch (spec.kind) {
       case 'switch':
         return this.switchRow(settings, spec);
@@ -431,15 +459,15 @@ export default class AdrtPreferences extends ExtensionPreferences {
    * searchable list instead of typing ids. The value is stored in the settings
    * key's existing format (the app id the tiler matches).
    */
-  private appPickerRow(spec: RowSpec, getSelected: () => string[], setSelected: (ids: string[]) => void): any {
-    const row = new Adw.ExpanderRow({ title: spec.title });
+  private appPickerRow(spec: RowSpec, getSelected: () => string[], setSelected: (ids: string[]) => void): AdwExpanderRow {
+    const row: AdwExpanderRow = new Adw.ExpanderRow({ title: spec.title });
     if (spec.subtitle) row.subtitle = spec.subtitle;
     // Test hook: A140 asserts a picker is used for the app-list keys.
     row.adrtPicker = true;
     const choices = appChoices();
     const byId = new Map(choices.map((choice) => [choice.id, choice]));
-    const selectionRows: any[] = [];
-    let addRow: any = null;
+    const selectionRows: AdwActionRow[] = [];
+    let addRow: AdwActionRow | null = null;
 
     const rebuild = (): void => {
       const selected = getSelected();
@@ -448,9 +476,9 @@ export default class AdrtPreferences extends ExtensionPreferences {
       if (addRow !== null) row.remove(addRow);
       for (const id of selected) {
         const choice = byId.get(id);
-        const child = new Adw.ActionRow({ title: choice?.name ?? id, subtitle: id });
+        const child: AdwActionRow = new Adw.ActionRow({ title: choice?.name ?? id, subtitle: id });
         if (choice?.icon) child.add_prefix(new Gtk.Image({ gicon: choice.icon, pixel_size: 16 }));
-        const remove = new Gtk.Button({ icon_name: 'list-remove-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Remove') });
+        const remove: GtkButton = new Gtk.Button({ icon_name: 'list-remove-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Remove') });
         remove.add_css_class('flat');
         remove.connect('clicked', () => {
           setSelected(getSelected().filter((value) => value !== id));
@@ -460,16 +488,17 @@ export default class AdrtPreferences extends ExtensionPreferences {
         row.add_row(child);
         selectionRows.push(child);
       }
-      addRow = new Adw.ActionRow({ title: _('Add application…') });
-      const menu = new Gtk.MenuButton({ icon_name: 'list-add-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Add application') });
+      const addApplicationRow: AdwActionRow = new Adw.ActionRow({ title: _('Add application…') });
+      addRow = addApplicationRow;
+      const menu: GtkMenuButton = new Gtk.MenuButton({ icon_name: 'list-add-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Add application') });
       menu.add_css_class('flat');
       menu.popover = this.buildAppPopover(byId, getSelected, (id) => {
         const selected = getSelected();
         setSelected(selected.includes(id) ? selected.filter((value) => value !== id) : [...selected, id]);
         rebuild();
       });
-      addRow.add_suffix(menu);
-      row.add_row(addRow);
+      addApplicationRow.add_suffix(menu);
+      row.add_row(addApplicationRow);
     };
 
     rebuild();
@@ -477,27 +506,27 @@ export default class AdrtPreferences extends ExtensionPreferences {
   }
 
   /** A searchable popover listing installed applications. */
-  private buildAppPopover(byId: Map<string, AppChoice>, getSelected: () => string[], onToggle: (id: string) => void): any {
-    const popover = new Gtk.Popover();
-    const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6, margin_top: 6, margin_bottom: 6, margin_start: 6, margin_end: 6 });
-    const search = new Gtk.SearchEntry({ placeholder_text: _('Search applications') });
-    const list = new Gtk.ListBox({ selection_mode: Gtk.SelectionMode.NONE });
+  private buildAppPopover(byId: Map<string, AppChoice>, getSelected: () => string[], onToggle: (id: string) => void): GtkPopover {
+    const popover: GtkPopover = new Gtk.Popover();
+    const box: GtkBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6, margin_top: 6, margin_bottom: 6, margin_start: 6, margin_end: 6 });
+    const search: GtkSearchEntry = new Gtk.SearchEntry({ placeholder_text: _('Search applications') });
+    const list: GtkListBox = new Gtk.ListBox({ selection_mode: Gtk.SelectionMode.NONE });
     list.add_css_class('boxed-list');
-    const checks = new Map<string, any>();
-    const byRow = new Map<any, string>();
+    const checks = new Map<string, GtkImage>();
+    const byRow = new Map<GtkListBoxRow, string>();
     for (const choice of byId.values()) {
-      const item = new Gtk.ListBoxRow();
-      const line = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8 });
+      const item: GtkListBoxRow = new Gtk.ListBoxRow();
+      const line: GtkBox = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8 });
       if (choice.icon) line.append(new Gtk.Image({ gicon: choice.icon, pixel_size: 16 }));
       line.append(new Gtk.Label({ label: choice.name, xalign: 0, hexpand: true }));
-      const check = new Gtk.Image({ icon_name: 'object-select-symbolic' });
+      const check: GtkImage = new Gtk.Image({ icon_name: 'object-select-symbolic' });
       line.append(check);
       item.set_child(line);
       byRow.set(item, choice.id);
       checks.set(choice.id, check);
       list.append(item);
     }
-    list.connect('row-activated', (_list: any, item: any) => {
+    list.connect('row-activated', (_list: GtkListBox, item: GtkListBoxRow) => {
       const id = byRow.get(item);
       if (id !== undefined) onToggle(id);
     });
@@ -507,17 +536,17 @@ export default class AdrtPreferences extends ExtensionPreferences {
     };
     search.connect('search-changed', () => {
       const query = search.text.trim().toLowerCase();
-      list.set_filter_func((item: any) => {
+      list.set_filter_func((item: GtkListBoxRow) => {
         if (query.length === 0) return true;
         const child = item.get_child();
-        const labels = child ? child.get_children().filter((c: any) => c instanceof Gtk.Label) : [];
-        const text: string = labels.map((c: any) => c.label ?? '').join(' ').toLowerCase();
+        const labels = child ? child.get_children().filter((c: GtkWidget): c is GtkLabel => c instanceof Gtk.Label) : [];
+        const text: string = labels.map((c) => c.label ?? '').join(' ').toLowerCase();
         return text.includes(query);
       });
     });
     popover.connect('show', syncChecks);
     syncChecks();
-    const scroller = new Gtk.ScrolledWindow({ min_content_height: 260, min_content_width: 320, hscrollbar_policy: Gtk.PolicyType.NEVER });
+    const scroller: GtkScrolledWindow = new Gtk.ScrolledWindow({ min_content_height: 260, min_content_width: 320, hscrollbar_policy: Gtk.PolicyType.NEVER });
     scroller.set_child(list);
     box.append(search);
     box.append(scroller);
@@ -525,15 +554,15 @@ export default class AdrtPreferences extends ExtensionPreferences {
     return popover;
   }
 
-  private switchRow(settings: any, spec: RowSpec): any {
-    const row = new Adw.SwitchRow({ title: spec.title });
+  private switchRow(settings: GioSettings, spec: RowSpec): AdwSwitchRow {
+    const row: AdwSwitchRow = new Adw.SwitchRow({ title: spec.title });
     if (spec.subtitle) row.subtitle = spec.subtitle;
     settings.bind(spec.key, row, 'active', Gio.SettingsBindFlags.DEFAULT);
     return row;
   }
 
-  private spinRow(settings: any, spec: RowSpec): any {
-    const row = new Adw.SpinRow({
+  private spinRow(settings: GioSettings, spec: RowSpec): AdwSpinRow {
+    const row: AdwSpinRow = new Adw.SpinRow({
       title: spec.title,
       adjustment: new Gtk.Adjustment({ lower: spec.lower ?? 0, upper: spec.upper ?? 100, step_increment: 1 }),
     });
@@ -551,12 +580,12 @@ export default class AdrtPreferences extends ExtensionPreferences {
     return row;
   }
 
-  private comboRow(settings: any, spec: RowSpec): any {
+  private comboRow(settings: GioSettings, spec: RowSpec): AdwComboRow {
     const choices = spec.choices ?? [];
     const current = settings.get_string(spec.key);
     // Always keep the stored value selectable, even if it is off the list.
     const values = choices.includes(current) ? choices : [current, ...choices];
-    const row = new Adw.ComboRow({ title: spec.title, model: Gtk.StringList.new(values) });
+    const row: AdwComboRow = new Adw.ComboRow({ title: spec.title, model: Gtk.StringList.new(values) });
     const index = values.indexOf(current);
     row.selected = index < 0 ? 0 : index;
     row.connect('notify::selected', () => {
@@ -565,8 +594,8 @@ export default class AdrtPreferences extends ExtensionPreferences {
     return row;
   }
 
-  private acceleratorRow(settings: any, spec: RowSpec): any {
-    const row = new Adw.EntryRow({ title: spec.title });
+  private acceleratorRow(settings: GioSettings, spec: RowSpec): AdwEntryRow {
+    const row: AdwEntryRow = new Adw.EntryRow({ title: spec.title });
     row.text = (settings.get_strv(spec.key) ?? [])[0] ?? '';
     row.connect('changed', () => {
       const text = row.text.trim();
@@ -575,8 +604,8 @@ export default class AdrtPreferences extends ExtensionPreferences {
     return row;
   }
 
-  private entryRow(settings: any, spec: RowSpec): any {
-    const row = new Adw.EntryRow({ title: spec.title });
+  private entryRow(settings: GioSettings, spec: RowSpec): AdwEntryRow {
+    const row: AdwEntryRow = new Adw.EntryRow({ title: spec.title });
     // Keys come in two shapes: string arrays (`as`, comma separated) and plain
     // strings (`s`, e.g. indicator-color). Calling get_strv on a string key
     // returns null and took the whole preferences window down with it.
@@ -599,7 +628,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
   }
 
   /** Whether a GSettings key's type is an array of strings (`as`). */
-  private keyIsStringArray(settings: any, key: string): boolean {
+  private keyIsStringArray(settings: GioSettings, key: string): boolean {
     try {
       const schema = settings.settings_schema;
       const valueType = schema.get_key(key).get_value_type();
@@ -616,14 +645,14 @@ export default class AdrtPreferences extends ExtensionPreferences {
    * per-rule enable switch, reorder and remove, and inline validation. There is
    * no JSON textarea and no global switch.
    */
-  private rulesEditorGroup(settings: RuleSettings): any {
-    const group = new Adw.PreferencesGroup({
+  private rulesEditorGroup(settings: RuleSettings): AdwPreferencesGroup {
+    const group: AdwPreferencesGroup = new Adw.PreferencesGroup({
       title: _('Placement rules'),
       description: _(
         'Force a placement when a window matches. The first enabled rule wins. To keep an app floating, use "Never tile these apps" on the Windows page.',
       ),
     });
-    const list = new Gtk.ListBox({ selection_mode: Gtk.SelectionMode.NONE });
+    const list: GtkListBox = new Gtk.ListBox({ selection_mode: Gtk.SelectionMode.NONE });
     list.add_css_class('boxed-list');
     // Test hook: A140 reads this to tell the rule editor from a plain row set.
     list.adrtRulesEditor = true;
@@ -680,14 +709,14 @@ export default class AdrtPreferences extends ExtensionPreferences {
       write();
       rebuild();
     };
-    const refresh = (index: number, row: any): void => {
+    const refresh = (index: number, row: AdwExpanderRow): void => {
       row.title = ruleTitle(rawAt(index));
       const errors = ruleErrors(rawAt(index), index);
       row.subtitle = errors.length > 0 ? errors.join('; ') : ruleSummary(rawAt(index));
     };
 
-    const appPickerRow = (index: number, row: any): any => {
-      const add = new Adw.ActionRow({ title: _('Application') });
+    const appPickerRow = (index: number, row: AdwExpanderRow): AdwActionRow => {
+      const add: AdwActionRow = new Adw.ActionRow({ title: _('Application') });
       const choices = appChoices();
       const byId = new Map(choices.map((choice) => [choice.id, choice]));
       const update = (): void => {
@@ -695,7 +724,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
         const choice = byId.get(id);
         add.subtitle = id.length === 0 || id === '*' ? _('Any application') : choice ? `${choice.name} (${id})` : id;
       };
-      const menu = new Gtk.MenuButton({ icon_name: 'view-list-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Choose an application') });
+      const menu: GtkMenuButton = new Gtk.MenuButton({ icon_name: 'view-list-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Choose an application') });
       menu.add_css_class('flat');
       menu.popover = this.buildAppPopover(
         byId,
@@ -714,12 +743,12 @@ export default class AdrtPreferences extends ExtensionPreferences {
       return add;
     };
 
-    const buildRuleRow = (index: number): any => {
+    const buildRuleRow = (index: number): AdwExpanderRow => {
       const raw = rawAt(index);
-      const row = new Adw.ExpanderRow({ title: ruleTitle(raw), subtitle: ruleSummary(raw) });
+      const row: AdwExpanderRow = new Adw.ExpanderRow({ title: ruleTitle(raw), subtitle: ruleSummary(raw) });
       if (ruleErrors(raw, index).length > 0) row.add_prefix(new Gtk.Image({ icon_name: 'dialog-warning-symbolic' }));
 
-      const enable = new Gtk.Switch({ active: !(isRuleRecord(raw) && raw.enabled === false), valign: Gtk.Align.CENTER, tooltip_text: _('Enable this rule') });
+      const enable: GtkSwitch = new Gtk.Switch({ active: !(isRuleRecord(raw) && raw.enabled === false), valign: Gtk.Align.CENTER, tooltip_text: _('Enable this rule') });
       enable.connect('notify::active', () => {
         setEnabled(index, enable.active);
         refresh(index, row);
@@ -730,20 +759,20 @@ export default class AdrtPreferences extends ExtensionPreferences {
         ['go-up-symbolic', -1],
         ['go-down-symbolic', 1],
       ] as const) {
-        const button = new Gtk.Button({ icon_name: icon, valign: Gtk.Align.CENTER, tooltip_text: delta < 0 ? _('Move up') : _('Move down') });
+        const button: GtkButton = new Gtk.Button({ icon_name: icon, valign: Gtk.Align.CENTER, tooltip_text: delta < 0 ? _('Move up') : _('Move down') });
         button.add_css_class('flat');
         button.connect('clicked', () => move(index, index + delta));
         row.add_suffix(button);
       }
 
-      const removeButton = new Gtk.Button({ icon_name: 'list-remove-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Remove') });
+      const removeButton: GtkButton = new Gtk.Button({ icon_name: 'list-remove-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Remove') });
       removeButton.add_css_class('flat');
       removeButton.connect('clicked', () => remove(index));
       row.add_suffix(removeButton);
 
       if (isRuleRecord(raw)) {
         row.add_row(appPickerRow(index, row));
-        const titleRow = new Adw.EntryRow({ title: _('Title glob') });
+        const titleRow: AdwEntryRow = new Adw.EntryRow({ title: _('Title glob') });
         titleRow.text = isRuleRecord(raw.match) ? ruleString(raw.match.title) : '';
         titleRow.connect('changed', () => {
           setMatchString(index, 'title', titleRow.text.trim());
@@ -752,7 +781,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
         row.add_row(titleRow);
 
         const modes = [...TILE_MODES];
-        const combo = new Adw.ComboRow({ title: _('Action'), model: Gtk.StringList.new([_('Full'), _('Left half'), _('Right half')]) });
+        const combo: AdwComboRow = new Adw.ComboRow({ title: _('Action'), model: Gtk.StringList.new([_('Full'), _('Left half'), _('Right half')]) });
         const current = modes.indexOf(ruleString(raw.tile) as TileMode);
         combo.selected = current < 0 ? 0 : current;
         combo.connect('notify::selected', () => {
@@ -767,9 +796,9 @@ export default class AdrtPreferences extends ExtensionPreferences {
       return row;
     };
 
-    const addRow = (): any => {
-      const row = new Adw.ActionRow({ title: _('Add rule') });
-      const button = new Gtk.Button({ icon_name: 'list-add-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Add rule') });
+    const addRow = (): AdwActionRow => {
+      const row: AdwActionRow = new Adw.ActionRow({ title: _('Add rule') });
+      const button: GtkButton = new Gtk.Button({ icon_name: 'list-add-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Add rule') });
       button.add_css_class('flat');
       button.connect('clicked', () => {
         entries.push({ match: { appId: '*' }, tile: 'full' });
@@ -783,8 +812,8 @@ export default class AdrtPreferences extends ExtensionPreferences {
     const rebuild = (): void => {
       list.remove_all();
       if (parseError !== null) {
-        const warn = new Adw.ActionRow({ title: _('The stored rules are not valid JSON'), subtitle: parseError });
-        const discard = new Gtk.Button({ label: _('Start over'), valign: Gtk.Align.CENTER });
+        const warn: AdwActionRow = new Adw.ActionRow({ title: _('The stored rules are not valid JSON'), subtitle: parseError });
+        const discard: GtkButton = new Gtk.Button({ label: _('Start over'), valign: Gtk.Align.CENTER });
         discard.connect('clicked', () => {
           entries = [];
           parseError = null;
@@ -811,9 +840,9 @@ export default class AdrtPreferences extends ExtensionPreferences {
    * row per app adrt has seen, a durable `neverTile` switch, and a forget
    * button that drops the entry (and returns live windows to the tiling).
    */
-  private appsPage(): any {
-    const page = new Adw.PreferencesPage({ title: _('Apps'), icon_name: 'view-app-grid-symbolic' });
-    const group = new Adw.PreferencesGroup({
+  private appsPage(): AdwPreferencesPage {
+    const page: AdwPreferencesPage = new Adw.PreferencesPage({ title: _('Apps'), icon_name: 'view-app-grid-symbolic' });
+    const group: AdwPreferencesGroup = new Adw.PreferencesGroup({
       title: _('App registry'),
       description: _('Every app adrt has seen. Turn on "Never tile" to keep an app floating.'),
     });
@@ -826,14 +855,14 @@ export default class AdrtPreferences extends ExtensionPreferences {
     const known = new Map(appChoices().map((choice) => [choice.id, choice]));
     for (const entry of entries) {
       const choice = known.get(entry.appId);
-      const row = new Adw.SwitchRow({ title: choice?.name ?? entry.appId, subtitle: choice ? `${entry.appId} — ${entry.windowsSeen} window(s) seen` : `${entry.windowsSeen} window(s) seen` });
+      const row: AdwSwitchRow = new Adw.SwitchRow({ title: choice?.name ?? entry.appId, subtitle: choice ? `${entry.appId} — ${entry.windowsSeen} window(s) seen` : `${entry.windowsSeen} window(s) seen` });
       if (choice?.icon) row.add_prefix(new Gtk.Image({ gicon: choice.icon, pixel_size: 16 }));
       row.active = entry.neverTile;
       row.connect('notify::active', () => {
         store.setNeverTile(entry.appId, row.active);
         store.flush();
       });
-      const button = new Gtk.Button({ icon_name: 'user-trash-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Forget this app') });
+      const button: GtkButton = new Gtk.Button({ icon_name: 'user-trash-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Forget this app') });
       button.connect('clicked', () => {
         store.forget(entry.appId);
         store.flush();
@@ -846,16 +875,16 @@ export default class AdrtPreferences extends ExtensionPreferences {
     return page;
   }
 
-  private aboutPage(settings: any): any {
-    const page = new Adw.PreferencesPage({ title: _('About'), icon_name: 'help-about-symbolic' });
-    const group = new Adw.PreferencesGroup({ title: _('Adrt') });
+  private aboutPage(settings: GioSettings): AdwPreferencesPage {
+    const page: AdwPreferencesPage = new Adw.PreferencesPage({ title: _('About'), icon_name: 'help-about-symbolic' });
+    const group: AdwPreferencesGroup = new Adw.PreferencesGroup({ title: _('Adrt') });
     group.add(new Adw.ActionRow({ title: _('Version'), subtitle: this.metadata['version-name'] ?? '0.2.0' }));
     group.add(new Adw.ActionRow({ title: _('GNOME UUID'), subtitle: 'adrt@adrt.dev' }));
-    const reset = new Adw.ActionRow({
+    const reset: AdwActionRow = new Adw.ActionRow({
       title: _('Show the first-run notification again'),
       subtitle: _('Displayed the first time adrt starts.'),
     });
-    const button = new Gtk.Button({ label: _('Show'), valign: Gtk.Align.CENTER });
+    const button: GtkButton = new Gtk.Button({ label: _('Show'), valign: Gtk.Align.CENTER });
     button.connect('clicked', () => settings.set_boolean('first-run-complete', false));
     reset.add_suffix(button);
     group.add(reset);
