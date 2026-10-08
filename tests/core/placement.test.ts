@@ -243,7 +243,7 @@ describe('dropPlacement (the user drop ladder, §6)', () => {
   });
 
   it('maximises on the empty trailing workspace', () => {
-    const s = state([ws(0, [win(1)]), ws(1)]);
+    const s = state([ws(0, [win(1), null]), ws(1)]);
     expect(dropPlacement(s, env, 2, 1, null, null)).toEqual({ kind: 'maximize', workspace: 1 });
   });
 

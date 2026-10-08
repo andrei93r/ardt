@@ -51,7 +51,7 @@ describe('reapPlan (§5)', () => {
     expect(plan.relocate).toEqual([{ id: 2, to: 1 }]);
   });
   it('leaves the last workspace as it is when no neighbour holds windows', () => {
-    const plan = reapPlan(state([ws(0, [null, null], [win(2)])]), 0);
+    const plan = reapPlan(state([ws(0, [null, null], [win(2)])]));
     expect(plan.relocate).toEqual([]);
     expect(plan.reap).toEqual([]);
   });

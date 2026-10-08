@@ -1378,9 +1378,10 @@ would implement live in `src/platform/`.
 
 ```bash
 npm run lint            # eslint src tests
+npm run check:types     # tsc --noEmit over src and tests
 npm run test:core       # core unit tests
 npm run test:agent      # the scenario suite in a nested GNOME Shell
-npm run test:all        # lint + build + core + agent
+npm run test:all        # lint + types + build + core + agent
 ```
 
 The agent harness (`scripts/agent-test.sh`) starts headless nested GNOME

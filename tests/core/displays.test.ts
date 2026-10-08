@@ -169,7 +169,7 @@ describe('disconnect: rescue to the primary (§9)', () => {
     const second = screen({ index: 2, connector: 'HDMI-1', isPrimary: false, geometry: rect(3840, 0, 1920, 1080) });
     const prev = state(
       [primary, right, second],
-      [ws(10, 0, [win(1), null]), ws(20, 1, [win(2)]), ws(30, 2, [win(3)])],
+      [ws(10, 0, [win(1), null]), ws(20, 1, [win(2), null]), ws(30, 2, [win(3), null])],
       10,
     );
     const next = state([primary], [ws(10, 0, [win(1), null]), ws(11, 0)], 10);

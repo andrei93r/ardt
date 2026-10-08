@@ -58,8 +58,8 @@ jobs:
         run: npm ci
       - name: Lint
         run: npm run lint
-      - name: Type-check
-        run: npx tsc --noEmit
+      - name: Type-check (src + tests)
+        run: npm run check:types
       - name: Build
         run: npm run build
       - name: Core unit tests
