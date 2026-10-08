@@ -44,12 +44,18 @@ import {
   stateRecord,
 } from '../../core/recording.js';
 import type { StopReason } from '../../core/recording.js';
+import { encodeText, jsonLine } from '../../core/jsonl.js';
 import { dataDir, readText, writeAtomic } from './adapt.js';
 
 /** A journal entry, as much of it as the sink needs to identify and timestamp. */
 interface JournalLike {
   at?: unknown;
   [field: string]: unknown;
+}
+
+/** The one field of a `Gio.FileInfo` the recording enumeration reads. */
+interface FileInfoLike {
+  get_name(): string;
 }
 
 export interface RecorderDeps {
@@ -88,13 +94,6 @@ export interface RecordingStatus {
   promptOpen: boolean;
   /** The note recorded so far (empty until a submit). */
   note: string;
-}
-
-/** UTF-8 encode one line; `TextEncoder` is present in the GJS GNOME ships. */
-function encodeText(text: string): Uint8Array {
-  const Encoder = (globalThis as { TextEncoder?: new () => { encode(input: string): Uint8Array } }).TextEncoder;
-  if (typeof Encoder !== 'function') throw new Error('TextEncoder unavailable');
-  return new Encoder().encode(text);
 }
 
 function recordingDir(): string {
@@ -347,7 +346,7 @@ export class Recorder {
         null,
       );
       const names: string[] = [];
-      let info: any;
+      let info: FileInfoLike | null;
       while ((info = enumerator.next_file(null)) !== null) {
         const name: string = info.get_name();
         if (/^rec-\d{8}-\d{6}(-\d+)?\.jsonl$/.test(name)) names.push(name);
@@ -367,7 +366,7 @@ export class Recorder {
   /** Append one JSON line and account its size. */
   private writeLine(record: Record<string, unknown>): void {
     if (this.path === null) return;
-    const line = `${JSON.stringify(record)}\n`;
+    const line = jsonLine(record);
     let size = 0;
     try {
       size = encodeText(line).length;

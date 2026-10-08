@@ -10,6 +10,7 @@
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 
+import { JsonlBuffer, dayString, encodeText, jsonLine } from '../../core/jsonl.js';
 import { clipPayload } from '../../core/text.js';
 import { partPath, partsToPrune, shouldRotate } from '../../core/rotation.js';
 import { dataDir, readText, writeAtomic } from './adapt.js';
@@ -28,21 +29,15 @@ export interface HistoryEvent {
   [field: string]: unknown;
 }
 
-function dayString(date: Date): string {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
-  return `${year}-${month}-${day}`;
+/** The one field of a `Gio.FileInfo` the day enumeration reads. */
+interface FileInfoLike {
+  get_name(): string;
 }
 
-/**
- * UTF-8 encode one log line for a Gio stream. `TextEncoder` is present in the
- * GJS that GNOME 45+ ships; if it ever is not, the caller falls back.
- */
-function encodeText(text: string): Uint8Array {
-  const Encoder = (globalThis as { TextEncoder?: new () => { encode(input: string): Uint8Array } }).TextEncoder;
-  if (typeof Encoder !== 'function') throw new Error('TextEncoder unavailable');
-  return new Encoder().encode(text);
+/** The `Gio.FileMonitor` surface the tail uses. */
+interface FileMonitorLike {
+  connect(signal: string, callback: () => void): number;
+  cancel(): void;
 }
 
 function historyDir(): string {
@@ -56,7 +51,7 @@ export class History {
   private enabled: boolean;
   private retentionDays: number;
   private dailyFolders: boolean;
-  private tailMonitor: any = null;
+  private tailMonitor: FileMonitorLike | null = null;
 
   /** Size at which the live part rotates (bytes). */
   private maxBytes = DEFAULT_MAX_BYTES;
@@ -65,8 +60,7 @@ export class History {
   /** Optional sink for the event journal: every logged decision (§22). */
   private sink: ((event: HistoryEvent) => void) | null = null;
   /** Serialized lines awaiting one buffered flush to disk. */
-  private pending: string[] = [];
-  private pendingDay = '';
+  private readonly buffer = new JsonlBuffer();
   private flushSource: number | null = null;
 
   get logEvents(): number {
@@ -116,7 +110,7 @@ export class History {
     const directory = Gio.File.new_for_path(historyDir());
     const enumerator = directory.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
     const days: string[] = [];
-    let info: any;
+    let info: FileInfoLike | null;
     while ((info = enumerator.next_file(null)) !== null) {
       const name: string = info.get_name();
       if (name.endsWith('.jsonl')) days.push(name.slice(0, -'.jsonl'.length));
@@ -149,8 +143,9 @@ export class History {
   tail(cb: (event: HistoryEvent) => void): () => void {
     const file = Gio.File.new_for_path(this.pathFor(dayString(new Date())));
     if (!file.query_exists(null)) file.create(Gio.FileCreateFlags.NONE, null);
-    this.tailMonitor = file.monitor_file(Gio.FileMonitorFlags.NONE, null);
-    this.tailMonitor.connect('changed', () => {
+    const monitor: FileMonitorLike = file.monitor_file(Gio.FileMonitorFlags.NONE, null);
+    this.tailMonitor = monitor;
+    monitor.connect('changed', () => {
       // Rotation keeps a part bounded, so reading it whole is safe here.
       const text = readText(file.get_path());
       if (text === null) return;
@@ -224,9 +219,8 @@ export class History {
    */
   private append(event: HistoryEvent): void {
     const day = dayString(new Date());
-    if (this.pendingDay !== day && this.pending.length > 0) this.flush();
-    this.pendingDay = day;
-    this.pending.push(`${JSON.stringify(event)}\n`);
+    if (this.buffer.rollsOver(day)) this.flush();
+    this.buffer.push(day, jsonLine(event));
     this.scheduleFlush();
   }
 
@@ -236,25 +230,22 @@ export class History {
       GLib.source_remove(this.flushSource);
       this.flushSource = null;
     }
-    if (this.pending.length === 0) return;
-    const day = this.pendingDay.length > 0 ? this.pendingDay : dayString(new Date());
-    const text = this.pending.join('');
-    this.pending = [];
-    this.pendingDay = '';
-    const base = this.pathFor(day);
+    const batch = this.buffer.drain();
+    if (batch === null) return;
+    const base = this.pathFor(batch.day);
     let path = base;
     // One rotation check for the whole batch: account for the bytes about to be
     // appended so a single flush cannot blow past the cap.
-    if (shouldRotate(this.sizeOf(base) + text.length, this.maxBytes)) path = this.rotate(base);
+    if (shouldRotate(this.sizeOf(base) + batch.text.length, this.maxBytes)) path = this.rotate(base);
     try {
       const stream = Gio.File.new_for_path(path).append_to(Gio.FileCreateFlags.NONE, null);
-      stream.write_all(encodeText(text), null);
+      stream.write_all(encodeText(batch.text), null);
       stream.close(null);
     } catch {
       // Last resort (unusual filesystem or no TextEncoder): the part is bounded
       // by rotation, so a read-modify-write here is acceptable.
       try {
-        writeAtomic(path, `${readText(path) ?? ''}${text}`);
+        writeAtomic(path, `${readText(path) ?? ''}${batch.text}`);
       } catch {
         /* never let logging break the shell */
       }

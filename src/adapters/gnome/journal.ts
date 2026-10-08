@@ -20,6 +20,7 @@ import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 
 import { RingBuffer } from '../../core/ringbuffer.js';
+import { JsonlBuffer, dayString, encodeText, jsonLine } from '../../core/jsonl.js';
 import { partPath, partsToPrune, shouldRotate } from '../../core/rotation.js';
 import { clipPayload } from '../../core/text.js';
 import { dataDir, readText, writeAtomic } from './adapt.js';
@@ -42,17 +43,9 @@ export interface JournalEntry {
   [field: string]: unknown;
 }
 
-function dayString(date: Date): string {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function encodeText(text: string): Uint8Array {
-  const Encoder = (globalThis as { TextEncoder?: new () => { encode(input: string): Uint8Array } }).TextEncoder;
-  if (typeof Encoder !== 'function') throw new Error('TextEncoder unavailable');
-  return new Encoder().encode(text);
+/** The one field of a `Gio.FileInfo` the day enumeration reads. */
+interface FileInfoLike {
+  get_name(): string;
 }
 
 function journalDir(): string {
@@ -79,8 +72,7 @@ export class EventJournal {
    */
   private noisyWrites = false;
   /** Serialized lines awaiting one buffered flush to disk. */
-  private pending: string[] = [];
-  private pendingDay = '';
+  private readonly buffer = new JsonlBuffer();
   private flushSource: number | null = null;
 
   constructor(
@@ -175,7 +167,7 @@ export class EventJournal {
       const dir = Gio.File.new_for_path(journalDir());
       const enumerator = dir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
       const days: string[] = [];
-      let info: any;
+      let info: FileInfoLike | null;
       while ((info = enumerator.next_file(null)) !== null) {
         const name: string = info.get_name();
         if (name.endsWith('.jsonl') && /^\d{4}-\d{2}-\d{2}/.test(name)) days.push(name.slice(0, 10));
@@ -219,9 +211,8 @@ export class EventJournal {
     }
     if (entry.event === 'surface-frame-changed' && !this.noisyWrites && this.sink === null) return;
     const day = dayString(new Date());
-    if (this.pendingDay !== day && this.pending.length > 0) this.flush();
-    this.pendingDay = day;
-    this.pending.push(`${JSON.stringify(entry)}\n`);
+    if (this.buffer.rollsOver(day)) this.flush();
+    this.buffer.push(day, jsonLine(entry));
     this.scheduleFlush();
   }
 
@@ -231,27 +222,23 @@ export class EventJournal {
       GLib.source_remove(this.flushSource);
       this.flushSource = null;
     }
-    if (this.pending.length === 0) return;
-    const day = this.pendingDay.length > 0 ? this.pendingDay : dayString(new Date());
-    const text = this.pending.join('');
-    const count = this.pending.length;
-    this.pending = [];
-    this.pendingDay = '';
-    const base = `${journalDir()}/${day}.jsonl`;
+    const batch = this.buffer.drain();
+    if (batch === null) return;
+    const base = `${journalDir()}/${batch.day}.jsonl`;
     let path = base;
     // One rotation check for the whole batch: account for the bytes about to be
     // appended so a single flush cannot blow past the cap.
-    if (shouldRotate(this.sizeOf(base) + text.length, this.maxBytes)) path = this.rotate(base);
+    if (shouldRotate(this.sizeOf(base) + batch.text.length, this.maxBytes)) path = this.rotate(base);
     try {
       const stream = Gio.File.new_for_path(path).append_to(Gio.FileCreateFlags.NONE, null);
-      stream.write_all(encodeText(text), null);
+      stream.write_all(encodeText(batch.text), null);
       stream.close(null);
-      this.written += count;
+      this.written += batch.count;
     } catch {
       // Bounded by rotation, so a read-modify-write fallback is acceptable.
       try {
-        writeAtomic(path, `${readText(path) ?? ''}${text}`);
-        this.written += count;
+        writeAtomic(path, `${readText(path) ?? ''}${batch.text}`);
+        this.written += batch.count;
       } catch {
         /* never let logging break the shell */
       }
