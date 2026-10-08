@@ -305,7 +305,7 @@ export class GnomeHost implements PlatformHost {
     return this.windowById(id);
   }
 
-  screens(): Screen[] {
+  screens(): readonly Screen[] {
     return this.screensCache;
   }
 
@@ -328,7 +328,16 @@ export class GnomeHost implements PlatformHost {
    * adrt still never sets the real primary.
    */
   setSimulatedScreens(screens: Screen[] | null): void {
-    this.simulatedScreens = screens;
+    // Copy the fixture so a caller that keeps (and later mutates) its array
+    // cannot change the screen list the extension reads. Cold, test-only path.
+    this.simulatedScreens =
+      screens === null
+        ? null
+        : screens.map((screen) => ({
+            ...screen,
+            geometry: { ...screen.geometry },
+            workArea: screen.workArea === undefined ? undefined : { ...screen.workArea },
+          }));
     this.refreshScreens();
     this.emit({ type: 'screens-changed' });
   }
@@ -365,7 +374,7 @@ export class GnomeHost implements PlatformHost {
     win.move_resize_frame(true, Math.round(rect.x), Math.round(rect.y), Math.round(rect.width), Math.round(rect.height));
   }
 
-  applyLayer(id: number, layer: Layer, _order: number): void {
+  applyLayer(id: number, layer: Layer): void {
     const win = this.windowById(id);
     if (win === null) return;
     switch (layer) {

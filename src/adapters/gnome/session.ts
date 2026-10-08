@@ -138,6 +138,12 @@ const PRUNE_SECOND_MS = 900;
 const MISMATCH_SUPPRESSION_MS = 4000;
 /** Backoff before re-trying a lone-window maximize the same window refused. */
 const COHERENCE_RETRY_MS = 3000;
+/**
+ * The heuristic modal check is the only reader of the classification context,
+ * so a miss with the heuristic disabled skips building the title list and
+ * shares this empty one (read-only; `classify` never mutates it).
+ */
+const EMPTY_HEURISTIC_CONTEXT: HeuristicContext = { liveTitles: [] };
 export class WindowSession {
   readonly windows = new Map<number, TrackedWindow>();
   private readonly signals = new Map<number, WindowSignal[]>();
@@ -155,7 +161,7 @@ export class WindowSession {
   private windowSeq = 0;
   /** §9: display memory keyed by connector, plus the previous screen list. */
   private displayMemory: MemoryEntry[] = [];
-  private lastScreens: Screen[] | null = null;
+  private lastScreens: readonly Screen[] | null = null;
   /** Re-queued layout passes waiting for an animation to finish. */
   private drainDeferrals = 0;
   /** §19: set while the drain finishes the backlog a pause caught. */
@@ -601,7 +607,7 @@ export class WindowSession {
     if (this.deps.registry.isNeverTile(appId)) {
       tracked.autoFloated = false;
       tracked.surface.setFloating(true);
-      this.deps.host.applyLayer(tracked.id, Layer.FLOATING, 0);
+      this.deps.host.applyLayer(tracked.id, Layer.FLOATING);
       tracked.invalidateClassification();
       this.deps.registry.place(appId, tracked.instanceId, this.placementInput(tracked));
       return;
@@ -1098,7 +1104,8 @@ export class WindowSession {
     this.displayMemory = Array.isArray(memory) ? memory : [];
   }
 
-  getDisplayMemory(): MemoryEntry[] {
+  /** Read-only: the caller must copy to modify, never mutate session state. */
+  getDisplayMemory(): readonly MemoryEntry[] {
     return this.displayMemory;
   }
 
@@ -1292,7 +1299,7 @@ export class WindowSession {
   }
 
   /** A snapshot of the display arrangement for the pure plan (§9). */
-  private buildDisplayState(screens: Screen[]): DisplayState {
+  private buildDisplayState(screens: readonly Screen[]): DisplayState {
     const manager = global.workspace_manager;
     const entries = new Map<string, DisplayWorkspace>();
     const ensure = (screen: number, workspace: number): DisplayWorkspace => {
@@ -1342,7 +1349,9 @@ export class WindowSession {
         (workspace.floats ??= []).push(win);
       }
     }
-    return { screens, workspaces: [...entries.values()], viewed: manager.get_active_workspace_index() };
+    // `DisplayState.screens` is a mutable `Screen[]` in core; copy the readonly
+    // cache once per display pass (rare) rather than handing core our own array.
+    return { screens: [...screens], workspaces: [...entries.values()], viewed: manager.get_active_workspace_index() };
   }
 
   /** §9: create a rescued workspace on the physical side the screen was on. */
@@ -1923,7 +1932,7 @@ export class WindowSession {
     tracked.invalidateClassification();
     this.recordPlacement(tracked);
     this.deps.tiling.noteSelfApply();
-    this.deps.host.applyLayer(tracked.id, Layer.FLOATING, 0);
+    this.deps.host.applyLayer(tracked.id, Layer.FLOATING);
     // Never touch a minimized window's geometry: Mutter un-minimizes it as a
     // side effect, so a window the user minimized would pop back on screen.
     // It gets the float rect when it is restored instead (see onMinimized).
@@ -2108,7 +2117,7 @@ export class WindowSession {
     this.capturePlane([tracked.surface.workspaceId], tracked.surface.screenId);
     tracked.autoFloated = false;
     tracked.surface.setFloating(floating);
-    this.deps.host.applyLayer(id, floating ? Layer.FLOATING : Layer.TILED, 0);
+    this.deps.host.applyLayer(id, floating ? Layer.FLOATING : Layer.TILED);
     // §12: the float key floats this window for the session. The durable
     // per-app decision is `neverTile`, set through the registry (prefs, the
     // `SetNeverTile` trigger) or, when the user opts in, by this toggle.
@@ -2134,7 +2143,7 @@ export class WindowSession {
         tracked.autoFloated = false;
         tracked.surface.setFloating(false);
         this.deps.tiling.noteSelfApply();
-        this.deps.host.applyLayer(tracked.id, Layer.TILED, 0);
+        this.deps.host.applyLayer(tracked.id, Layer.TILED);
         tracked.invalidateClassification();
       }
     }
@@ -2151,7 +2160,7 @@ export class WindowSession {
       if (tracked.surface.flags.floating && !tracked.autoFloated) {
         tracked.surface.setFloating(false);
         this.deps.tiling.noteSelfApply();
-        this.deps.host.applyLayer(tracked.id, Layer.TILED, 0);
+        this.deps.host.applyLayer(tracked.id, Layer.TILED);
         tracked.invalidateClassification();
       }
     }
@@ -2202,7 +2211,7 @@ export class WindowSession {
         tracked.autoFloated = false;
         tracked.surface.setFloating(instance.floating);
         this.deps.tiling.noteSelfApply();
-        this.deps.host.applyLayer(tracked.id, instance.floating ? Layer.FLOATING : Layer.TILED, 0);
+        this.deps.host.applyLayer(tracked.id, instance.floating ? Layer.FLOATING : Layer.TILED);
         tracked.invalidateClassification();
       }
       // Maximized (§4).
@@ -2510,8 +2519,19 @@ export class WindowSession {
 
   classify(tracked: TrackedWindow): ReturnType<TrackedWindow['classify']> {
     this.classifyCalls += 1;
-    if (!tracked.hasClassification) this.classifyMisses += 1;
-    return tracked.classify(this.deps.settings.classifierConfig(), this.heuristicContext(tracked.id));
+    // §24 item 1 / Phase 2: a hit is the common case — `tileables`,
+    // `buildPlacementState`, `cycleEntries` and `refreshOcclusion` classify per
+    // window — so return the cached answer before building either input. The
+    // live-title context is O(n) strings and must not be allocated on a hit.
+    const cached = tracked.peekClassification();
+    if (cached !== null) return cached;
+    this.classifyMisses += 1;
+    const config = this.deps.settings.classifierConfig();
+    // The context is read only by the heuristic modal check, so build the title
+    // list only when the heuristic is enabled; otherwise an empty context yields
+    // the identical result without the per-window title walk.
+    const context = config.heuristicModalDetect ? this.heuristicContext(tracked.id) : EMPTY_HEURISTIC_CONTEXT;
+    return tracked.classify(config, context);
   }
 
   private heuristicContext(excludeId: number): HeuristicContext {

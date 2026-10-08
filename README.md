@@ -250,11 +250,11 @@ export interface Surface {
 export interface PlatformHost {
   readonly platform: "gnome"; // 'kwin' will be added later
   surfaces(): Surface[];
-  screens(): Screen[];
+  screens(): readonly Screen[];
   activeWorkspaceId(): number;
 
   applyFrame(id: number, rect: Rect): void;
-  applyLayer(id: number, layer: Layer, order: number): void;
+  applyLayer(id: number, layer: Layer): void;
   applyWorkspace(id: number, workspaceId: number): void;
   unmaximize(id: number): void;
   maximize(id: number): void;

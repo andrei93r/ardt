@@ -138,12 +138,13 @@ export class TrackedWindow {
   }
 
   /**
-   * Whether a classification is already cached. Diagnostics only: it lets the
-   * session report how often `classify()` actually had to run (a cache miss)
-   * instead of quietly rebuilding the config for a cached answer.
+   * The cached classification, or null when none is cached (§24 item 1). The
+   * session returns a hit directly, so a cached answer never pays for building
+   * the classifier config or the O(n) live-title heuristic context, and counts
+   * the call as a hit rather than a miss.
    */
-  get hasClassification(): boolean {
-    return this.cached !== null;
+  peekClassification(): Classification | null {
+    return this.cached;
   }
 
   /**
