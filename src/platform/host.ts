@@ -3,7 +3,7 @@
 // and can maintain this code.
 
 import type { Layer, Rect, Screen, Surface } from '../core/types.js';
-import type { PlatformEvent } from './events.js';
+import type { PlatformEventPayload, PlatformEventType } from './events.js';
 
 export type { Layer, Rect, Screen, Size, Surface, SurfaceFlags, SurfaceKind } from '../core/types.js';
 
@@ -36,7 +36,9 @@ export interface PlatformHost {
 
   /**
    * Subscribe to an event type. Returns an unsubscribe function. The event
-   * union itself carries `type`, so the key is `PlatformEvent['type']`.
+   * union itself carries `type`, so the key is a `PlatformEventType` and the
+   * callback receives exactly that kind's payload (the full event object, so
+   * the handler can still read `payload.type` if it needs to).
    */
-  on(type: PlatformEvent['type'], cb: (payload: unknown) => void): () => void;
+  on<K extends PlatformEventType>(type: K, cb: (payload: PlatformEventPayload<K>) => void): () => void;
 }

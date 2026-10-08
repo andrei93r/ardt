@@ -938,17 +938,16 @@ export default class AdrtExtension extends Extension {
     // Every platform event goes into the journal, whatever consumes it (§22).
     for (const type of PLATFORM_EVENT_TYPES) {
       this.hostUnsubscribers.push(this.host.on(type, (payload) => this.guard(`host:${type}`, () => {
-        this.journal.record('host', type, (payload ?? {}) as Record<string, unknown>);
+        this.journal.record('host', type, payload);
       })()));
     }
     this.hostUnsubscribers.push(
       this.host.on('surface-created', (payload) => this.guard('host:surface-created', () => {
-        const surfaceId = (payload as { surface: { id: number } }).surface.id;
-        const win = this.host.windowFor(surfaceId);
+        const win = this.host.windowFor(payload.surface.id);
         if (win !== null) this.session.register(win);
       })()),
-      this.host.on('focus-changed', (payload) => this.guard('host:focus-changed', () => this.onFocusChanged((payload as { id: number | null }).id))()),
-      this.host.on('workspace-switched', (payload) => this.guard('host:workspace-switched', () => this.onWorkspaceSwitched(payload as { from: number; to: number }))()),
+      this.host.on('focus-changed', (payload) => this.guard('host:focus-changed', () => this.onFocusChanged(payload.id))()),
+      this.host.on('workspace-switched', (payload) => this.guard('host:workspace-switched', () => this.onWorkspaceSwitched(payload))()),
       this.host.on('screens-changed', () => this.guard('host:screens-changed', () => {
         // §10: re-read every surface (monitor, frame, monitor-implied sticky,
         // size hints) and drop classification before the deferred replan.

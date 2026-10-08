@@ -21,6 +21,9 @@ export type PlatformEvent =
 
 export type PlatformEventType = PlatformEvent['type'];
 
+/** The payload shape for one event kind, selected from the discriminated union. */
+export type PlatformEventPayload<K extends PlatformEventType> = Extract<PlatformEvent, { type: K }>;
+
 /** Every kind, in one place, so the journal can subscribe to all of them. */
 export const PLATFORM_EVENT_TYPES: PlatformEventType[] = [
   'surface-created',

@@ -14,7 +14,7 @@ import Gio from 'gi://Gio';
 
 import { Layer } from '../../core/types.js';
 import type { Rect, Screen, Size, Surface } from '../../core/types.js';
-import type { PlatformEvent } from '../../platform/events.js';
+import type { PlatformEvent, PlatformEventPayload, PlatformEventType } from '../../platform/events.js';
 import type { PlatformHost } from '../../platform/host.js';
 import * as compat from './compat.js';
 import { SignalRegistry, TimeoutRegistry } from './lifecycle.js';
@@ -225,15 +225,19 @@ export class GnomeHost implements PlatformHost {
     return typeof compat.button1Pressed === 'function';
   }
 
-  on(type: PlatformEvent['type'], cb: Listener): () => void {
+  on<K extends PlatformEventType>(type: K, cb: (payload: PlatformEventPayload<K>) => void): () => void {
     let set = this.listeners.get(type);
     if (set === undefined) {
       set = new Set();
       this.listeners.set(type, set);
     }
-    set.add(cb);
+    // `emit` only ever hands a listener the event whose `type` it subscribed
+    // with, so narrowing the per-kind callback to the erased `Listener` here
+    // (the one boundary cast) is sound. The map stays string-keyed.
+    const listener = cb as Listener;
+    set.add(listener);
     return () => {
-      set?.delete(cb);
+      set?.delete(listener);
     };
   }
 
