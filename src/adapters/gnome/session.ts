@@ -15,30 +15,21 @@ import type { MetaDisplay, MetaWindow } from 'gi://Meta';
 import { wm } from 'resource:///org/gnome/shell/ui/main.js';
 
 import type { HeuristicContext } from '../../core/classify.js';
-import { classifyAdjust } from '../../core/adjust.js';
-import type { AdjustMode } from '../../core/adjust.js';
 import { centreInWorkArea } from '../../core/cursor.js';
-import type { DisplayMove, DisplayState, DisplayWorkspace, MemoryEntry, NewWorkspace } from '../../core/displays.js';
-import { displayPlan } from '../../core/displays.js';
+import type { MemoryEntry } from '../../core/displays.js';
 import { normalizePlan } from '../../core/normalize.js';
 import type { NormalizeWindow } from '../../core/normalize.js';
-import {
-  dropPlacement, escapeSize, impossibleSplit, maximizeWindow, refusalLadder, routeNewWindow,
-  swappedSides, unmaximizeWindow,
-} from '../../core/placement.js';
-import type { Axis, Env, Placement, ScreenClass, State, Win, Ws } from '../../core/placement.js';
-import { dragOutcome } from '../../core/drag.js';
+import { swappedSides } from '../../core/placement.js';
+import type { Axis, ScreenClass } from '../../core/placement.js';
 import type { DragOutcome } from '../../core/drag.js';
-import { dragIsWindowMove } from '../../core/windowmove.js';
 import type { ChangeLog } from '../../core/undo.js';
 
-import { checkPlan } from '../../core/invariants.js';
-import { SignatureCache, planSignature, shouldApplyPlan } from '../../core/scheduler.js';
-import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
-import { computePlans, ratioKey, resolveGaps, screenArea } from '../../core/tiler.js';
-import { Layer, rectEquals } from '../../core/types.js';
-import type { Rect, Screen, Size, TilePlan } from '../../core/types.js';
+import { SignatureCache } from '../../core/scheduler.js';
+import type { TilerConfig } from '../../core/tiler.js';
+import { Layer } from '../../core/types.js';
+import type { Rect, Screen } from '../../core/types.js';
 import * as compat from './compat.js';
+import { DisplayController } from './display.js';
 import { DrainScheduler } from './drain.js';
 import { FocusController } from './focus.js';
 import type { GnomeHost } from './host.js';
@@ -47,6 +38,8 @@ import { SessionDiagnostics } from './diagnostics.js';
 import type { SessionCounters, SessionPerf } from './diagnostics.js';
 import { instanceIdFor, resolveWindowIdentity } from './appidentity.js';
 import type { RegistryStore } from './registry.js';
+import { Retiler } from './retiler.js';
+import { DragController } from './drag.js';
 import { SelfHeal } from './selfheal.js';
 import type { GnomeSettings } from './settings.js';
 import type { GnomeTiming } from './timing.js';
@@ -115,9 +108,6 @@ interface SwitchAnimationController {
   cancelSwitchAnimation?(): void;
 }
 
-/** Quiet period after the last user frame change before a drop is interpreted
- * (internal signal-latency guard, not a frame cadence). */
-const ADJUST_SETTLE_MS = 150;
 /**
  * A maximize/unmaximize/workspace signal that arrives within this window of a
  * state change we made is our own, not the user's: Mutter emits the signal
@@ -125,13 +115,6 @@ const ADJUST_SETTLE_MS = 150;
  * rather than a boolean flag that would already be cleared by then.
  */
 const SELF_APPLY_MS = 200;
-/**
- * A drag whose release never arrived must not disable tiling forever: every
- * path (reconcile, sweep, periodic retile) skips while `dragging` is set. A
- * lost `grab-op-end` — an overview drag, a Shell restart, a grab taken over by
- * another actor — would otherwise freeze the layout until the next real drag.
- */
-const DRAG_STALE_MS = 2500;
 /** Delay before a maintenance sweep, so a burst of signals coalesces. */
 const SWEEP_DELAY_MS = 150;
 /** How long the switch-animation patch stays installed, then it is restored. */
@@ -157,9 +140,6 @@ export class WindowSession {
   private readonly drain: DrainScheduler;
   /** §12: monotonic sequence for provisional `window:<seq>` identity keys. */
   private windowSeq = 0;
-  /** §9: display memory keyed by connector, plus the previous screen list. */
-  private displayMemory: MemoryEntry[] = [];
-  private lastScreens: readonly Screen[] | null = null;
   /** §21/§36: counters and latency samples, owned by the diagnostics module. */
   private readonly diagnostics = new SessionDiagnostics();
   private readonly timeoutSources = new Set<number>();
@@ -168,37 +148,6 @@ export class WindowSession {
   private managerSignals: number[] = [];
   private grabBeginSignal = 0;
   private grabEndSignal = 0;
-  private dragging = false;
-  /**
-   * §6: true while an application drag-and-drop holds the pointer button with
-   * no compositor window grab. The client (Chrome tearing a tab off, VS Code
-   * dragging a tab or panel, a GTK DnD) is placing its own window; adrt freezes
-   * reflow so it neither fights the client nor interprets the gesture as a
-   * window move, and routes/reflows once when the interaction ends. This is
-   * deliberately **not** the window-move drag state: no `dragId`, no preview,
-   * no drop interpretation.
-   */
-  private clientInteracting = false;
-  /**
-   * §6/§11: the in-flight grab began on a window adrt had not placed yet (a
-   * Chrome tab tear-off creating its own window). Such a gesture is not a window
-   * move: `endDrag` interprets no drop and only routes the newcomer once.
-   */
-  private dragTearOff = false;
-  private dragStartRect: Rect | null = null;
-  /** The window being dragged, so the preview overlay can follow it (§6/§11). */
-  private dragId: number | null = null;
-  /** The plane the drag started on, so the drop can tell a same-plane return
-   * from an arrival from another workspace or screen (§6). */
-  private dragStartWorkspace = 0;
-  private dragStartScreen = 0;
-  /** A cross-screen move reported by a directional key; the drain arrives it. */
-  private crossScreenFrom: 'left' | 'right' | 'above' | 'below' | null = null;
-  private crossScreenId: number | null = null;
-  /** The screen the move is heading to; the arrival waits until it lands there. */
-  private crossScreenTarget: number | null = null;
-  /** When the dragged window last changed geometry (stale-drag watchdog). */
-  private dragLastActivityMs = 0;
   /** True while a compositor state makes tiling pointless (the overview). */
   private suspended = false;
   /** `org.gnome.mutter`, the authority on the screen classes (§1). */
@@ -207,15 +156,6 @@ export class WindowSession {
   private screenClassErrorLogged = false;
   /** The static workspace count (`org.gnome.desktop.wm.preferences`). */
   private wmPreferencesSettings: GioSettings | null = null;
-  private adjustId: number | null = null;
-  private adjustSource: number | null = null;
-  /**
-   * A released drag whose gesture the drain still has to interpret (§6/§11).
-   * The rect the gesture started from travels with the intent: `endDrag` clears
-   * the shared `dragStartRect` before the deferred drain runs, and an inner-edge
-   * resize needs it to tell which edge moved and to derive the new ratio (§10).
-   */
-  private readonly dropPending = new Map<number, { mode: AdjustMode; start: Rect | null }>();
   /** While set, plan-mismatch re-applies are suppressed (e.g. right after Undo). */
   private ignoreMismatchUntilMs = 0;
   /** §6/§17: the focus cycle and directional focus, owned by the focus module. */
@@ -224,6 +164,12 @@ export class WindowSession {
   private readonly undoCoordinator: UndoCoordinator;
   /** §5/§7/§16: workspace create/reap/reorder/move, owned by its module. */
   private readonly workspaces: WorkspaceController;
+  /** §3/§4/§6/§10/§16: the tiling pass and placement ladder, owned by its module. */
+  private readonly retiler: Retiler;
+  /** §6/§10/§11/§12/§17: drag/adjust and cross-screen state, owned by its module. */
+  private readonly drag: DragController;
+  /** §9: display memory and the display plan, owned by its module. */
+  private readonly display: DisplayController;
   /** §24/§35: the adaptive scan tick, clamp and coherence sweep. */
   private readonly selfHeal: SelfHeal;
 
@@ -278,7 +224,7 @@ export class WindowSession {
       allWindows: () => this.windows.values(),
       window: (id) => this.windows.get(id),
       hasWindow: (id) => this.windows.has(id),
-      placementState: () => this.buildPlacementState(),
+      placementState: () => this.retiler.buildPlacementState(),
       noteSelfEcho: (id, expected) => this.noteSelfEcho(id, expected),
       noteSelfApply: () => this.deps.tiling.noteSelfApply(),
       cancelApply: (id) => this.deps.tiling.cancel(id),
@@ -293,6 +239,87 @@ export class WindowSession {
       isPaused: () => this.deps.isPaused(),
       isSuspended: () => this.suspended,
       reorderLoggingEnabled: () => this.deps.settings.boolean('log-workspace-reorder', false),
+    });
+    this.retiler = new Retiler({
+      tiling: deps.tiling,
+      host: deps.host,
+      settings: deps.settings,
+      history: deps.history,
+      diagnostics: this.diagnostics,
+      workspaces: this.workspaces,
+      signatures: this.signatures,
+      windows: this.windows,
+      onModelEvent: deps.onModelEvent,
+      axisFor: (screenId) => this.axisFor(screenId),
+      tilerConfig: () => this.tilerConfig(),
+      screenFor: (index) => this.screenFor(index),
+      screenClass: (screenId) => this.screenClass(screenId),
+      tileables: (workspaceId) => this.tileables(workspaceId),
+      classify: (tracked) => this.classify(tracked),
+      capturePlane: (workspaceIds, screenId) => this.capturePlane(workspaceIds, screenId),
+      withSelfUnmaximize: (tracked, fn) => this.withSelfUnmaximize(tracked, fn),
+      recordPlacement: (tracked, connectorOverride, slotOverride) =>
+        this.recordPlacement(tracked, connectorOverride, slotOverride),
+      scheduleReconcile: (reason) => this.scheduleReconcile(reason),
+      scheduleRetile: (workspaceId, reason) => this.scheduleRetile(workspaceId, reason),
+      instantSwitch: (fn) => this.instantSwitch(fn),
+      activateWorkspace: (index) => this.activateWorkspace(index),
+      onStateChanged: () => this.deps.onStateChanged(),
+      isPaused: () => this.deps.isPaused(),
+      isSuspended: () => this.suspended,
+      isDragging: () => this.drag.windowDragActive(),
+      ignoreMismatchUntilMs: () => this.ignoreMismatchUntilMs,
+    });
+    this.drag = new DragController({
+      tiling: deps.tiling,
+      host: deps.host,
+      settings: deps.settings,
+      history: deps.history,
+      workspaces: this.workspaces,
+      signatures: this.signatures,
+      retiler: this.retiler,
+      windows: this.windows,
+      onDragChanged: (dragging) => this.deps.onDragChanged(dragging),
+      classify: (tracked) => this.classify(tracked),
+      screenFor: (index) => this.screenFor(index),
+      tileables: (workspaceId) => this.tileables(workspaceId),
+      tileablesOnScreen: (workspaceId, screen, excludeId) =>
+        this.tileablesOnScreen(workspaceId, screen, excludeId),
+      slotFor: (tracked) => this.slotFor(tracked),
+      pairSibling: (tracked) => this.pairSibling(tracked),
+      swapPairSides: (a, b) => this.swapPairSides(a, b),
+      tilerConfig: () => this.tilerConfig(),
+      captureChange: (ids, workspaceOverride) => this.captureChange(ids, workspaceOverride),
+      withSelfUnmaximize: (tracked, fn) => this.withSelfUnmaximize(tracked, fn),
+      scheduleReconcile: (reason) => this.scheduleReconcile(reason),
+      scheduleRetile: (workspaceId, reason) => this.scheduleRetile(workspaceId, reason),
+      reconcileAll: (reason, rememberUndo) => this.reconcileAll(reason, rememberUndo),
+      runGuarded: (cb) => this.guard('adjust-end', cb)(),
+      onStateChanged: () => this.deps.onStateChanged(),
+      isPaused: () => this.deps.isPaused(),
+      isSuspended: () => this.suspended,
+    });
+    this.display = new DisplayController({
+      host: deps.host,
+      history: deps.history,
+      settings: deps.settings,
+      tiling: deps.tiling,
+      workspaces: this.workspaces,
+      windowIds: () => [...this.windows.keys()],
+      allWindows: () => this.windows.values(),
+      window: (id) => this.windows.get(id),
+      screenClass: (screenId) => this.screenClass(screenId),
+      classify: (tracked) => this.classify(tracked),
+      slotFor: (tracked) => this.slotFor(tracked),
+      floatWindow: (tracked, rect) => this.retiler.floatWindow(tracked, rect),
+      recordPlacement: (tracked, connectorOverride, slotOverride) =>
+        this.recordPlacement(tracked, connectorOverride, slotOverride),
+      pinSlots: (workspaceId, tracked, slot) => this.retiler.pinSlots(workspaceId, tracked, slot),
+      unmaximizeOccupants: (workspaceId, exceptId) => this.retiler.unmaximizeOccupants(workspaceId, exceptId),
+      clearSignatures: () => this.signatures.clearAll(),
+      scheduleReconcile: (reason) => this.scheduleReconcile(reason),
+      onDisplayMemoryChanged: () => this.deps.onDisplayMemoryChanged?.(),
+      errorText: (error) => this.errorText(error),
     });
     this.selfHeal = new SelfHeal({
       tiling: this.deps.tiling,
@@ -309,16 +336,10 @@ export class WindowSession {
       retileAll: (reason) => this.retileAll(reason),
       isPaused: () => this.deps.isPaused(),
       isSuspended: () => this.suspended,
-      gestureActive: () => this.dragging || this.adjustId !== null,
-      recoverStaleDrag: () => {
-        if (!this.dragIsStale()) return false;
-        this.abandonDrag('stale');
-        return true;
-      },
-      clientInteractionActive: () => this.clientInteracting,
-      endClientInteraction: () => {
-        this.clientInteracting = false;
-      },
+      gestureActive: () => this.drag.gestureActive(),
+      recoverStaleDrag: () => this.drag.recoverStaleDrag(),
+      clientInteractionActive: () => this.drag.clientInteractionActive(),
+      endClientInteraction: () => this.drag.endClientInteraction(),
       scheduleReconcile: (reason) => this.scheduleReconcile(reason),
       runGuarded: (cb) => this.guard('scan-tick', cb)(),
       debugEnabled: () => this.deps.settings.boolean('debug-enabled', false),
@@ -326,7 +347,7 @@ export class WindowSession {
       clampEnabled: () => this.deps.settings.boolean('clamp-windows-to-screen', true),
       screenFor: (index) => this.screenFor(index),
       tileables: (workspaceId) => this.tileables(workspaceId),
-      toTilerWindow: (tracked) => this.toTilerWindow(tracked),
+      toTilerWindow: (tracked) => this.retiler.toTilerWindow(tracked),
       tilerConfig: () => this.tilerConfig(),
       clearSignatures: () => this.signatures.clearAll(),
       resetIgnoreMismatch: () => {
@@ -343,10 +364,10 @@ export class WindowSession {
     this.reorderSignal = global.workspace_manager.connect('workspaces-reordered', this.guard('workspaces-reordered', () => this.workspaces.onReordered()));
     // §11.3 / §23.1: never retile or show the border while the user is dragging.
     this.grabBeginSignal = global.display.connect('grab-op-begin', this.guard('grab-op-begin', (_display: MetaDisplay, win: MetaWindow, op: number) =>
-      this.onGrabBegin(win, op),
+      this.drag.onGrabBegin(win, op),
     ));
     this.grabEndSignal = global.display.connect('grab-op-end', this.guard('grab-op-end', (_display: MetaDisplay, win: MetaWindow, op: number) =>
-      this.onGrabEnd(win, op),
+      this.drag.onGrabEnd(win, op),
     ));
     // Anything that can move, restack or re-parent a window triggers a
     // debounced global reconcile pass. `window-entered-monitor` is also what
@@ -390,12 +411,12 @@ export class WindowSession {
   }
 
   get isDragging(): boolean {
-    return this.dragging || this.adjustId !== null;
+    return this.drag.isDragging();
   }
 
   /** §6: an application DnD is in progress (button held, no window grab). */
   get clientInteractionActive(): boolean {
-    return this.clientInteracting;
+    return this.drag.clientInteractionActive();
   }
 
   /** Drag/reflow state for `DumpState` (§22) — observation only. */
@@ -408,15 +429,22 @@ export class WindowSession {
     button: boolean;
     displayGrab: boolean | null;
   } {
-    return {
-      active: this.isDragging,
-      windowDrag: this.dragging || this.adjustId !== null,
-      clientInteraction: this.clientInteracting,
-      dragId: this.dragId,
-      adjustId: this.adjustId,
-      button: compat.button1Pressed(),
-      displayGrab: compat.displayGrabActive(),
-    };
+    return this.drag.dragState();
+  }
+
+  /** §11.3: observe one window grab (`grab-op-begin`). */
+  beginDrag(id: number): boolean {
+    return this.drag.beginDrag(id);
+  }
+
+  /** §11: observe one window grab release; the drain interprets the drop. */
+  endDrag(id: number): boolean {
+    return this.drag.endDrag(id);
+  }
+
+  /** §6/§11: the live drop target for the preview overlay. */
+  previewTarget(): DragOutcome | null {
+    return this.drag.previewTarget();
   }
 
   /** Suspend tiling (e.g. the overview is open); one pass runs on resume. */
@@ -426,117 +454,9 @@ export class WindowSession {
     if (!suspended) this.scheduleReconcile('resume');
   }
 
-  private onGrabBegin(win: MetaWindow, _op: number): void {
-    if (win === null) return;
-    this.beginDrag(win.get_id());
-  }
-
-  private onGrabEnd(win: MetaWindow, _op: number): void {
-    if (win === null) return;
-    this.endDrag(win.get_id());
-  }
-
-  /** §11.3: while a drag is in flight, freeze reflow and hide the border. */
-  beginDrag(id: number): boolean {
-    const tracked = this.windows.get(id);
-    if (tracked === undefined) return false;
-    if (this.dragging) return true;
-    // §6/§11: a grab on a window adrt has not placed yet is a tab tear-off, not
-    // a window move. The app created the window during the gesture (Chrome,
-    // VS Code) and is moving it itself; it has no slot to swap out of, so its
-    // drop must not be interpreted. Freeze reflow while the gesture owns the
-    // geometry and route the newcomer once at the end.
-    if (!dragIsWindowMove({ ready: tracked.ready, routePending: tracked.routePending })) {
-      this.dragTearOff = true;
-      this.clientInteracting = true;
-      this.deps.onDragChanged(true);
-      return true;
-    }
-    this.dragTearOff = false;
-    // A real Meta grab supersedes a client-interaction freeze: the move is now
-    // adrt's to follow and its drop to interpret.
-    this.clientInteracting = false;
-    this.dragging = true;
-    this.dragId = id;
-    this.dragLastActivityMs = Date.now();
-    this.dragStartRect = { ...tracked.surface.frame };
-    this.dragStartWorkspace = tracked.surface.workspaceId;
-    this.dragStartScreen = tracked.surface.screenId;
-    this.deps.onDragChanged(true);
-    return true;
-  }
-
-  /**
-   * A drag that never reported its release (a lost `grab-op-end`) disables every
-   * tiling path, so it is abandoned once it has been quiet for a while and no
-   * mouse button is held — the same test `isUserChange` uses to tell a user move
-   * from one of our own applies. The drop is deliberately not interpreted: a
-   * gesture we never saw the end of must not swap or resize anything.
-   */
-  private dragIsStale(): boolean {
-    if (!this.dragging) return false;
-    if (Date.now() - this.dragLastActivityMs < DRAG_STALE_MS) return false;
-    return compat.button1Pressed() === false;
-  }
-
-  private abandonDrag(reason: string): void {
-    this.dragging = false;
-    this.dragTearOff = false;
-    this.dragId = null;
-    this.dragLastActivityMs = 0;
-    this.dragStartRect = null;
-    this.deps.onDragChanged(false);
-    this.deps.history.log('drag_abandoned', { reason });
-    this.signatures.clearAll();
-    this.reconcileAll('drag-abandoned', false);
-  }
-
-  /**
-   * Drag released. §11: the signal handler only records the intent; the drain
-   * interprets the gesture. - §12 inner-edge resize of a pair saves the new
-   * split ratio; - §6 dragging one window past another swaps, takes a free
-   * slot, or floats; - otherwise the workspace simply reflows.
-   */
-  endDrag(id: number): boolean {
-    const tracked = this.windows.get(id);
-    if (tracked === undefined) return false;
-    const wasDragging = this.dragging;
-    const wasTearOff = this.dragTearOff;
-    this.dragging = false;
-    this.dragTearOff = false;
-    this.clientInteracting = false;
-    this.dragId = null;
-    this.dragLastActivityMs = 0;
-    this.deps.onDragChanged(false);
-    if (!wasDragging) {
-      // §6/§11: a tab tear-off interprets no drop. The freeze lifts and the
-      // next drain routes the newcomer exactly once.
-      if (wasTearOff) {
-        this.signatures.clearAll();
-        this.scheduleReconcile('tear-off');
-      }
-      return true;
-    }
-
-    tracked.refreshFrame();
-    this.dropPending.set(id, { mode: this.adjustMode(tracked), start: this.dragStartRect });
-    this.dragStartRect = null;
-    this.signatures.clearAll();
-    this.scheduleReconcile('drag-end');
-    return true;
-  }
-
   private pairSibling(tracked: TrackedWindow): TrackedWindow | null {
     const peers = this.tileablesOnScreen(tracked.surface.workspaceId, tracked.surface.screenId, tracked.id);
     return peers.length === 1 ? peers[0] : null;
-  }
-
-  /** §6/§13: the window was dropped onto its sibling, so the pair trades sides. */
-  private applySwapIntent(tracked: TrackedWindow, sibling: TrackedWindow): void {
-    this.captureChange([tracked.id, sibling.id]);
-    this.deps.tiling.toggleSwap(tracked.id, sibling.id);
-    this.swapPairSides(tracked, sibling);
-    this.deps.history.log('swap', { a: tracked.id, b: sibling.id, reason: 'drag' });
   }
 
   /**
@@ -565,48 +485,6 @@ export class WindowSession {
     this.deps.history.log('swap', { a, b });
     this.retile(ta.surface.workspaceId, 'swap');
     return true;
-  }
-
-  /** §12: a shared inner edge moved; save the resulting ratio. */
-  private applyResizeIntent(tracked: TrackedWindow, sibling: TrackedWindow, screen: Screen): void {
-    const start = this.dragStartRect;
-    if (start === null) return;
-    const horizontal = screenArea(screen).width >= screenArea(screen).height;
-    const rect = tracked.surface.frame;
-    const other = sibling.surface.frame;
-
-    const leftIsTracked = horizontal ? rect.x <= other.x : rect.y <= other.y;
-    const movedStart = horizontal ? start.x : start.y;
-    const movedEnd = horizontal ? start.x + start.width : start.y + start.height;
-    const nowStart = horizontal ? rect.x : rect.y;
-    const nowEnd = horizontal ? rect.x + rect.width : rect.y + rect.height;
-    const startMoved = Math.abs(nowStart - movedStart) > Math.abs(nowEnd - movedEnd);
-    // Inner edge = the edge shared with the sibling.
-    const isInner = leftIsTracked ? !startMoved : startMoved;
-    if (!isInner) return;
-
-    const near = horizontal ? Math.min(rect.x, other.x) : Math.min(rect.y, other.y);
-    const far = horizontal
-      ? Math.max(rect.x + rect.width, other.x + other.width)
-      : Math.max(rect.y + rect.height, other.y + other.height);
-    const span = far - near;
-    if (span <= 0) return;
-    const leftExtent = leftIsTracked
-      ? horizontal
-        ? rect.width
-        : rect.height
-      : horizontal
-        ? other.width
-        : other.height;
-    const ratioLeft = leftExtent / span;
-    const leftAppId = leftIsTracked ? tracked.surface.appId : sibling.surface.appId;
-    const rightAppId = leftIsTracked ? sibling.surface.appId : tracked.surface.appId;
-    const sortedFirstIsLeft = leftAppId <= rightAppId;
-    const axis = horizontal ? 'horizontal' : 'vertical';
-    const key = ratioKey(screen.connector, tracked.surface.workspaceId, axis);
-    this.captureChange([tracked.id, sibling.id]);
-    this.deps.tiling.setRatio(key, sortedFirstIsLeft ? ratioLeft : 1 - ratioLeft);
-    this.deps.history.log('split_resize', { pair: key, ratio: ratioLeft, reason: 'drag' });
   }
 
   /** §18 invariant: paused means no retiles, no scan tick.**/
@@ -820,210 +698,10 @@ export class WindowSession {
     return 'dynamic';
   }
 
-  private placementEnv(screenId: number): Env {
-    return { screen: this.screenClass(screenId), axis: this.axisFor(screenId) };
-  }
-
-  /**
-   * §3: per workspace, the two visible slot occupants plus hidden windows.
-   *
-   * `screenId` limits the view to the windows on one screen: the tiler tiles
-   * per screen, so a window on another screen must not occupy a slot that
-   * belongs to this screen's pair. Reaping still asks for the global view (no
-   * `screenId`), because a workspace is empty only when no screen holds a
-   * window in it.
-   */
-  private buildPlacementState(excludeId: number | null = null, screenId: number | null = null): State {
-    const manager = global.workspace_manager;
-    const count = manager.get_n_workspaces();
-    const workspaces: Ws[] = [];
-    for (let index = 0; index < count; index++) workspaces.push({ id: index, slots: [null, null], minimized: [], floats: [] });
-    for (const tracked of [...this.windows.values()].sort((a, b) => a.id - b.id)) {
-      if (tracked.id === excludeId) continue;
-      if (screenId !== null && tracked.surface.screenId !== screenId) continue;
-      // A newcomer whose placement is still pending holds no slot yet: its
-      // routing is derived from live state in the drain (§3/§11).
-      if (tracked.routePending) continue;
-      const ws = workspaces[tracked.surface.workspaceId];
-      if (ws === undefined) continue;
-      const rec: Win = {
-        id: tracked.id,
-        minimized: tracked.surface.flags.minimized,
-        floating: tracked.surface.flags.floating || !this.classify(tracked).tileable,
-        maximized: tracked.surface.flags.maximized,
-        fullscreen: tracked.surface.flags.fullscreen,
-      };
-      if (rec.minimized === true) { ws.minimized.push(rec); continue; }
-      if (rec.floating === true) { ws.floats ??= []; ws.floats.push(rec); continue; }
-      if (ws.slots[0] === null) ws.slots[0] = rec;
-      else if (ws.slots[1] === null) ws.slots[1] = rec;
-      else { ws.floats ??= []; ws.floats.push(rec); }
-    }
-    return { workspaces, viewed: manager.get_active_workspace_index() };
-  }
-
-  /** §16: a managed window that obviously cannot fit its share. */
-  private doesNotFit(tracked: TrackedWindow, env: Env): boolean {
-    // When the user has asked us to ignore minimum sizes, nothing is too big to
-    // share; the escape is only for a client that insists on its size.
-    if (this.deps.settings.string('min-size-policy', 'respect') !== 'respect') return false;
-    const screen = this.screenFor(tracked.surface.screenId);
-    if (screen === null) return false;
-    // Size hints can arrive after the first frame; re-read them while they are
-    // still unknown so a client that insists on a large minimum is recognised.
-    if (tracked.minSize.width === 0 || tracked.minSize.height === 0) tracked.refreshSizeHints();
-    const tilerWindow = this.toTilerWindow(tracked);
-    const min = tilerWindow.min;
-    const max = tilerWindow.max;
-    if (min.width > 0 && min.height > 0 && max.width > 0 && max.height > 0 &&
-        min.width >= max.width - 1 && min.height >= max.height - 1) {
-      return true; // fixed size: min == max
-    }
-    const area = screenArea(screen);
-    const half = (env.axis === 'vertical' ? area.height : area.width) / 2;
-    const span = env.axis === 'vertical' ? min.height : min.width;
-    return half > 0 && span > half;
-  }
-
-  /** §3: route a newly opened window through the pure model, then apply it. */
-  private routeWindow(tracked: TrackedWindow): void {
-    const own = tracked.surface.workspaceId;
-    // Trace (§22): the arrival is the replayable event; the placement decision
-    // is derived from the model, never recorded here.
-    this.deps.onModelEvent?.('window-opened', {
-      id: tracked.id,
-      appId: tracked.surface.appId,
-      screenId: tracked.surface.screenId,
-      workspace: own,
-      rect: tracked.surface.frame,
-      min: tracked.minSize,
-      max: tracked.maxSize,
-    });
-    const env = this.placementEnv(tracked.surface.screenId);
-    const state = this.buildPlacementState(tracked.id, tracked.surface.screenId);
-    if (this.doesNotFit(tracked, env)) {
-      // §16: the escape rule — its own workspace, sized to itself.
-      this.escapeTracked(tracked);
-      return;
-    }
-    const rec: Win = {
-      id: tracked.id,
-      minimized: false,
-      floating: false,
-      maximized: tracked.surface.flags.maximized,
-      fullscreen: tracked.surface.flags.fullscreen,
-    };
-    const placement = routeNewWindow(state, env, rec, null, own, false);
-    this.applyPlacement(tracked, placement, own === state.viewed, 'route');
-  }
-
-  /**
-   * Apply a placement decision to Mutter. The view follows only the app the
-   * action is about, and only when the caller says so (§3).
-   */
-  private applyPlacement(tracked: TrackedWindow, placement: Placement, follow: boolean, reason: string): void {
-    const id = tracked.id;
-    let workspaceId = placement.workspace;
-    if (placement.createRight === true) {
-      const created = this.workspaces.createRight(placement.workspace);
-      if (created !== null) workspaceId = created;
-    }
-    const previous = tracked.surface.workspaceId;
-    if (workspaceId !== previous) {
-      this.workspaces.moveWindow(tracked, workspaceId);
-      this.deps.history.log('ws_switch_empty', { id, from: previous, to: workspaceId, reason });
-    }
-    if (placement.float === true) {
-      this.floatWindow(tracked);
-      if (follow && workspaceId !== previous) this.instantSwitch(() => this.activateWorkspace(workspaceId));
-      return;
-    }
-    if (placement.minimize !== undefined) {
-      for (const mid of placement.minimize) {
-        this.deps.tiling.noteSelfApply();
-        this.deps.host.minimize(mid);
-      }
-    }
-    if (placement.maximize === true) {
-      if (placement.inPlace === true) {
-        this.maximizeInPlace(tracked);
-      } else {
-        this.deps.tiling.noteSelfApply();
-        this.deps.host.maximize(id);
-      }
-    } else if (placement.slot !== undefined) {
-      // A pair is forming: the slot the change chose is honoured (§3/§4), and a
-      // maximized occupant must unmaximize to share.
-      this.pinSlots(workspaceId, tracked, placement.slot);
-      this.unmaximizeOccupants(workspaceId, id);
-    }
-    if (follow && workspaceId !== previous) {
-      this.instantSwitch(() => this.activateWorkspace(workspaceId));
-    }
-    this.signatures.clearAll();
-    this.scheduleReconcile(`${reason}-settle`);
-    // §12: keep the app's placement current for display memory and restarts.
-    this.recordPlacement(tracked);
-  }
-
-  /** §4: maximize in place, minimizing the other managed windows on this monitor. */
-  private maximizeInPlace(tracked: TrackedWindow): void {
-    this.deps.tiling.noteSelfApply();
-    // Clear the others first, so nothing is left on top of the trigger.
-    for (const other of this.tileables(tracked.surface.workspaceId)) {
-      if (other.id === tracked.id) continue;
-      if (other.surface.screenId !== tracked.surface.screenId) continue;
-      this.deps.host.minimize(other.id);
-    }
-    this.deps.host.maximize(tracked.id);
-  }
-
-  /**
-   * §3/§4: pin the pair's slots so the tiler honours the side the change chose
-   * (a routed arrival's slot, an unmaximize joining slot 1). The other visible
-   * window takes the opposite side; stale pins on the workspace are cleared.
-   */
-  private pinSlots(workspaceId: number, tracked: TrackedWindow, slot: 0 | 1): void {
-    for (const other of this.windows.values()) {
-      if (other.surface.workspaceId !== workspaceId) continue;
-      if (other.surface.screenId !== tracked.surface.screenId) continue;
-      other.pendingSlot = null;
-    }
-    tracked.pendingSlot = slot;
-    const partner = this.tileables(workspaceId).find(
-      (t) => t.id !== tracked.id && t.surface.screenId === tracked.surface.screenId,
-    );
-    if (partner !== undefined) partner.pendingSlot = slot === 1 ? 0 : 1;
-  }
-
-  /** §3/§5: unmaximize a maximized window that must share its workspace. */
-  private unmaximizeOccupants(workspaceId: number, exceptId: number): void {
-    for (const other of this.tileables(workspaceId)) {
-      if (other.id === exceptId) continue;
-      if (!compat.isMaximized(other.win)) continue;
-      this.deps.tiling.noteSelfApply();
-      // This is our own unmaximize to let the pair form: the echo keeps the
-      // resulting signal from running the user unmaximize ladder (A45).
-      this.withSelfUnmaximize(other, () => this.deps.host.unmaximize(other.id));
-    }
-  }
-
-  /** §4: minimize or close the maximizer brings the others back. */
-  private restoreMinimizedOn(workspaceId: number, screenId: number): void {
-    for (const tracked of this.windows.values()) {
-      if (tracked.surface.workspaceId !== workspaceId) continue;
-      if (tracked.surface.screenId !== screenId) continue;
-      if (!tracked.surface.flags.minimized) continue;
-      if (!this.classify(tracked).tileable) continue;
-      this.deps.tiling.noteSelfApply();
-      this.deps.host.unminimize(tracked.id);
-    }
-  }
-
   unregister(id: number): void {
     const tracked = this.windows.get(id);
     if (tracked === undefined) return;
-    if (this.crossScreenId === id) this.clearCrossScreenMove();
+    this.drag.forgetWindow(id);
     const workspaceId = tracked.surface.workspaceId;
     const closedRect: Rect = { ...tracked.surface.frame };
     // Only windows we actually tiled get a close ghost; popups, menus,
@@ -1044,7 +722,7 @@ export class WindowSession {
     this.deps.onStateChanged();
 
     this.workspaces.switchAwayIfEmpty(workspaceId);
-    this.evaluateLoneMaximize(workspaceId);
+    this.retiler.evaluateLoneMaximize(workspaceId);
     this.scheduleRetile(workspaceId, 'close');
     // A close can leave a window we had floated over a pair with nowhere to
     // float: run the sweep so it comes back into the tiling and its "above"
@@ -1162,21 +840,21 @@ export class WindowSession {
       if (other.id === tracked.id) continue;
       other.surface.captureZ();
       if (other.surface.zPosition <= z) continue;
-      area -= this.overlapArea(rect, other.surface.frame);
+      area -= this.drag.overlapArea(rect, other.surface.frame);
       if (area <= 0) return 0;
     }
     return Math.max(0, area);
   }
 
   // ---------------------------------------------------------- §9 displays
-  /** §9: persisted display memory (keyed by connector). */
+  /** §9: persisted display memory (keyed by connector), owned by its module. */
   setDisplayMemory(memory: MemoryEntry[]): void {
-    this.displayMemory = Array.isArray(memory) ? memory : [];
+    this.display.setDisplayMemory(memory);
   }
 
   /** Read-only: the caller must copy to modify, never mutate session state. */
   getDisplayMemory(): readonly MemoryEntry[] {
-    return this.displayMemory;
+    return this.display.getDisplayMemory();
   }
 
   /** §9: a screen/work-area change is planned in the layout drain, never in
@@ -1185,254 +863,9 @@ export class WindowSession {
     if (this.drain.enqueue(2, 'displays', 'displays', { reason })) this.drain.arm(2);
   }
 
-  /** §9 display plan: rescue, replay and primary-change handling. */
+  /** §9 display plan: rescue, replay and primary-change handling (delegated). */
   private applyDisplayChange(): void {
-    const screens = this.deps.host.screens();
-    // `prev` is the arrangement that was on screen *before* this change,
-    // rebuilt from the live windows against the previous screen list. Storing a
-    // full arrangement snapshot would miss windows that opened since.
-    const next = this.buildDisplayState(screens);
-    const prev = this.buildDisplayState(this.lastScreens ?? screens);
-    const ttlMs = Math.max(1, this.deps.settings.int('display-memory-minutes', 30)) * 60 * 1000;
-    const classes: Record<string, ScreenClass> = {};
-    for (const screen of screens) classes[screen.connector] = this.screenClass(screen.index);
-    let plan;
-    try {
-      plan = displayPlan(prev, next, this.displayMemory, { now: Date.now(), ttlMs, classes, alive: [...this.windows.keys()] });
-    } catch (e) {
-      this.deps.history.log('error', { reason: 'display-plan', error: (e as Error).message });
-      return;
-    }
-    if (plan.moves.length > 0 || plan.remember.length > 0 || plan.forget.length > 0) {
-      this.deps.history.log('screens_changed', {
-        moves: plan.moves.length,
-        remember: plan.remember.map((entry) => entry.connector),
-        forget: plan.forget,
-      });
-    }
-    // §9: a float's stacking is restored exactly. `floatWindow` raises on apply,
-    // so applying the remembered floats bottom-to-top (ascending z) reproduces
-    // their relative order; a float with no remembered z keeps its plan order.
-    const floats = plan.moves
-      .filter((move) => move.float === true && move.z !== undefined)
-      .sort((a, b) => (a.z ?? 0) - (b.z ?? 0));
-    const restored = new Set(floats);
-    // Every move that shares a `create.key` must land on the SAME created
-    // workspace: the group is the pair (or single) the source workspace held, and
-    // creating one per move split the pair across two workspaces (A110).
-    const createdByKey = new Map<number, number>();
-    for (const move of plan.moves) if (!restored.has(move)) this.applyDisplayMove(move, createdByKey);
-    for (const move of floats) this.applyDisplayMove(move, createdByKey);
-    for (const entry of plan.remember) {
-      const at = this.displayMemory.findIndex((candidate) => candidate.connector === entry.connector);
-      if (at >= 0) this.displayMemory[at] = entry;
-      else this.displayMemory.push(entry);
-    }
-    if (plan.forget.length > 0) {
-      this.displayMemory = this.displayMemory.filter((entry) => !plan.forget.includes(entry.connector));
-    }
-    this.lastScreens = screens;
-    this.deps.onDisplayMemoryChanged?.();
-    if (plan.moves.length > 0) {
-      this.signatures.clearAll();
-      this.scheduleReconcile('display-plan');
-    }
-  }
-
-  private applyDisplayMove(
-    move: DisplayMove,
-    createdByKey: Map<number, number>,
-  ): void {
-    const tracked = this.windows.get(move.id);
-    if (tracked === undefined) return;
-    // §Shell stability: re-read the window's *live* monitor at use, never trust
-    // the cached screenId. While Mutter is still migrating a window off a
-    // removed monitor, `get_monitor()` reports the stale index, and any Mutter
-    // window call here (change_workspace, maximize, move_to_monitor) makes the
-    // compositor re-derive the work area for a monitor that no longer exists —
-    // which asserts in C, outside anything JS can catch. Skip the whole move:
-    // Mutter migrates the window itself and the next screens-changed pass
-    // re-plans it.
-    if (!this.deps.host.isLiveMonitorIndex(this.liveMonitorOf(tracked.win))) return;
-    let workspaceIndex = move.workspace ?? tracked.surface.workspaceId;
-    let targetConnector: string | undefined;
-    if (move.create !== undefined) {
-      // One workspace per key: every window of a rescued pair or single shares it.
-      let created = createdByKey.get(move.create.key);
-      if (created === undefined) {
-        const workspace = this.createWorkspaceForDisplay(move.create);
-        if (workspace === null) return;
-        created = workspace;
-        createdByKey.set(move.create.key, created);
-      }
-      workspaceIndex = created;
-    }
-    // Move the workspace first, then route the screen. With
-    // `workspaces-only-on-primary`, a workspace change can drag a window back to
-    // the primary; doing it before the monitor move lets the monitor move win
-    // (a replay to the reconnected connector must end there, not on the primary).
-    if (workspaceIndex !== tracked.surface.workspaceId) this.workspaces.moveWindow(tracked, workspaceIndex);
-    // §9: a routed window lands on the screen the plan names — the primary on a
-    // rescue, the reconnected connector on a replay. Without this a replay only
-    // reassigned the workspace and the pair never left the primary.
-    const targetScreen = move.create?.screen ?? move.screen;
-    if (targetScreen !== undefined) {
-      const target = this.deps.host.screenByIndex(targetScreen);
-      if (target !== null) {
-        targetConnector = target.connector;
-        tracked.surface.screenId = target.index;
-        this.deps.tiling.noteSelfApply();
-        // §Shell stability: the plan's screen comes from the (possibly raced)
-        // screen list; never pass an out-of-range index to Mutter. A window on
-        // a removed monitor stays on its compositor monitor until Mutter
-        // migrates it — the policy move above still stands either way.
-        if (this.deps.host.isLiveMonitorIndex(target.index)) {
-          try {
-            tracked.win.move_to_monitor?.(target.index);
-          } catch (error) {
-            // The policy move still stands (a simulated screen has no Mutter
-            // monitor to move to); report the failed compositor call.
-            this.deps.history.log('error', {
-              reason: 'move-to-monitor',
-              id: tracked.id,
-              monitor: target.index,
-              error: this.errorText(error),
-            });
-          }
-        }
-      }
-    }
-    this.deps.history.log('display_move', {
-      id: move.id,
-      workspace: workspaceIndex,
-      create: move.create?.key ?? null,
-      screen: targetScreen ?? null,
-      float: move.float === true,
-      minimize: move.minimize === true,
-      maximize: move.maximize === true,
-      slot: move.slot ?? null,
-    });
-    if (move.float === true) {
-      this.floatWindow(tracked, move.rect);
-      this.recordPlacement(tracked, targetConnector, move.slot);
-      return;
-    }
-    if (move.minimize === true) {
-      this.deps.tiling.noteSelfApply();
-      this.deps.host.minimize(tracked.id);
-      this.recordPlacement(tracked, targetConnector, move.slot);
-      return;
-    }
-    if (move.maximize === true) {
-      this.deps.tiling.noteSelfApply();
-      this.deps.host.maximize(tracked.id);
-    } else if (move.slot !== undefined) {
-      tracked.pendingSlot = move.slot;
-      this.pinSlots(workspaceIndex, tracked, move.slot);
-      this.unmaximizeOccupants(workspaceIndex, tracked.id);
-    }
-    if (move.fullscreen === true) tracked.fullscreenApplied = true;
-    // §12: the routed placement is what display memory and a restart replay.
-    this.recordPlacement(tracked, targetConnector, move.slot);
-  }
-
-  /**
-   * §Shell stability: the window's monitor index read from the compositor at
-   * this very moment, or -1 when the window is gone. Never the cached
-   * `surface.screenId`, which can name a monitor that was just removed.
-   */
-  private liveMonitorOf(win: MetaWindow): number {
-    try {
-      const index: unknown = win.get_monitor?.();
-      return typeof index === 'number' ? index : -1;
-    } catch (error) {
-      // The window is gone: -1 still lets the caller skip the move, but the
-      // failed compositor read is worth a diagnostic.
-      this.deps.history.log('error', { reason: 'live-monitor', error: this.errorText(error) });
-      return -1;
-    }
-  }
-
-  /**
-   * §9: the workspaces a screen displays (the primary shows them all).
-   */
-  private workspacesForScreen(screen: Screen): number[] {
-    const manager = global.workspace_manager;
-    const count = manager.get_n_workspaces();
-    if (screen.isPrimary) {
-      const all: number[] = [];
-      for (let index = 0; index < count; index++) all.push(index);
-      return all;
-    }
-    return [manager.get_active_workspace_index()];
-  }
-
-  /** A snapshot of the display arrangement for the pure plan (§9). */
-  private buildDisplayState(screens: readonly Screen[]): DisplayState {
-    const manager = global.workspace_manager;
-    const entries = new Map<string, DisplayWorkspace>();
-    const ensure = (screen: number, workspace: number): DisplayWorkspace => {
-      const key = `${screen}:${workspace}`;
-      let entry = entries.get(key);
-      if (entry === undefined) {
-        entry = { id: workspace, screen, slots: [null, null], minimized: [], floats: [] };
-        entries.set(key, entry);
-      }
-      return entry;
-    };
-    for (const screen of screens) {
-      for (const workspace of this.workspacesForScreen(screen)) ensure(screen.index, workspace);
-    }
-    const known = new Set(screens.map((screen) => screen.index));
-    for (const tracked of [...this.windows.values()].sort((a, b) => a.id - b.id)) {
-      if (!tracked.ready) continue;
-      // A window on a screen that is no longer present is exactly the one a
-      // disconnect plan must route; it is not part of the new arrangement.
-      if (!known.has(tracked.surface.screenId)) continue;
-      const managed = this.classify(tracked).tileable;
-      const floating = tracked.surface.flags.floating || tracked.autoFloated || tracked.escaped;
-      if (!managed && !floating) continue;
-      const workspace = ensure(tracked.surface.screenId, tracked.surface.workspaceId);
-      const win = {
-        id: tracked.id,
-        maximized: tracked.surface.flags.maximized || compat.isMaximized(tracked.win),
-        fullscreen: tracked.surface.flags.fullscreen,
-        rect: { ...tracked.surface.frame },
-      };
-      if (tracked.surface.flags.minimized) {
-        workspace.minimized.push(win);
-        continue;
-      }
-      if (floating) {
-        // §9: a float's stacking is restored exactly, so capture it with the rect.
-        tracked.surface.captureZ();
-        (workspace.floats ??= []).push({ ...win, z: tracked.surface.zPosition });
-        continue;
-      }
-      const slot = this.slotFor(tracked);
-      if (slot !== null && workspace.slots[slot] === null) {
-        workspace.slots[slot] = win;
-      } else if (workspace.slots[0] === null) {
-        workspace.slots[0] = win;
-      } else {
-        (workspace.floats ??= []).push(win);
-      }
-    }
-    // `DisplayState.screens` is a mutable `Screen[]` in core; copy the readonly
-    // cache once per display pass (rare) rather than handing core our own array.
-    return { screens: [...screens], workspaces: [...entries.values()], viewed: manager.get_active_workspace_index() };
-  }
-
-  /** §9: create a rescued workspace on the physical side the screen was on. */
-  private createWorkspaceForDisplay(create: NewWorkspace): number | null {
-    const manager = global.workspace_manager;
-    if (create.side === 'right') return this.workspaces.createRight(create.anchor);
-    const target = create.leftmost === true ? 0 : Math.max(0, create.anchor - 1);
-    const appended = manager.get_n_workspaces();
-    manager.append_new_workspace(false, global.get_current_time());
-    const created = manager.get_workspace_by_index(appended);
-    if (created !== null && target < appended) manager.reorder_workspace(created, target);
-    return Math.min(target, manager.get_n_workspaces() - 1);
+    this.display.applyDisplayChange();
   }
 
   /**
@@ -1461,7 +894,7 @@ export class WindowSession {
 
   scheduleReconcile(reason: string): void {
     if (this.deps.isPaused() || this.suspended) return;
-    if (this.dragging || this.adjustId !== null || this.clientInteracting) return;
+    if (this.drag.flowBlocked()) return;
     // Only a genuine user adjust is undoable; a signal-driven reconcile is a
     // safety net and must not push an entry that masks the user's own action.
     const rememberUndo = reason === 'user-adjust';
@@ -1579,23 +1012,12 @@ export class WindowSession {
    * Full reconciles are safety nets: by default they do not record undo
    * entries, so they can never mask the entry a user action pushed. */
   reconcileAll(reason: string, rememberUndo = false): void {
-    if (this.deps.isPaused() || this.suspended || this.dragging || this.adjustId !== null || this.clientInteracting) return;
+    if (this.deps.isPaused() || this.suspended || this.drag.flowBlocked()) return;
     // §20: the first layout drain waits for the shell's startup to complete;
     // the host nudges us again when it does.
     if (!this.deps.host.isStartupComplete()) return;
     // §6/§11: a released drag is interpreted here, not inside the grab signal.
-    for (const [id, pending] of [...this.dropPending]) {
-      this.dropPending.delete(id);
-      const tracked = this.windows.get(id);
-      if (tracked === undefined) continue;
-      // §10/§12: restore the gesture's start rect for the interpretation — it
-      // was captured by `endDrag` and must survive until the drain runs, or an
-      // inner-edge resize cannot derive the new split ratio and reflows to the
-      // old one (the snap-back).
-      this.dragStartRect = pending.start;
-      this.interpretDrop(tracked, pending.mode);
-      this.dragStartRect = null;
-    }
+    this.drag.flushPendingDrops();
     // §7.6/§8: after a user reorder every index moved; re-derive them here,
     // never in the signal handler.
     this.workspaces.flushPendingReorder();
@@ -1606,21 +1028,7 @@ export class WindowSession {
     // monitor` (wired in `startScan`) pushes another lane-2 pass when the move
     // lands, so a pass that still sees the source screen simply leaves the move
     // pending — no retry counter, no private timer.
-    if (this.crossScreenId !== null) {
-      const id = this.crossScreenId;
-      const tracked = this.windows.get(id);
-      if (tracked === undefined) {
-        this.clearCrossScreenMove();
-      } else {
-        tracked.refreshFrame();
-        const target = this.crossScreenTarget;
-        if (target === null || tracked.surface.screenId === target) {
-          const from = this.crossScreenFrom ?? 'left';
-          this.clearCrossScreenMove();
-          this.arriveCrossScreen(tracked, from);
-        }
-      }
-    }
+    this.drag.flushCrossScreen();
     // §24/P2.5: one snapshot of the window map for the whole pass. Both loops
     // below read live fields off each `TrackedWindow`, and no branch reachable
     // from them adds or removes a window (routing, floating and escaping only
@@ -1633,18 +1041,18 @@ export class WindowSession {
     for (const tracked of snapshot) {
       if (!tracked.routePending) continue;
       tracked.routePending = false;
-      if (this.windows.has(tracked.id)) this.routeWindow(tracked);
+      if (this.windows.has(tracked.id)) this.retiler.routeWindow(tracked);
     }
     // §4/§16: fullscreen and user-unmaximize transitions are re-derived here,
     // never acted on inside the Mutter signal handler that reported them.
     for (const tracked of snapshot) {
       if (tracked.surface.flags.fullscreen !== tracked.fullscreenApplied) {
         tracked.fullscreenApplied = tracked.surface.flags.fullscreen;
-        this.fullscreenTracked(tracked, tracked.fullscreenApplied);
+        this.retiler.fullscreenTracked(tracked, tracked.fullscreenApplied);
       }
       if (tracked.unmaximizeRequested) {
         tracked.unmaximizeRequested = false;
-        this.unmaximizeTracked(tracked);
+        this.retiler.unmaximizeTracked(tracked);
       }
       if (tracked.userMovedTo !== null) {
         const to = tracked.userMovedTo;
@@ -1652,7 +1060,7 @@ export class WindowSession {
         const others = this.tileablesOnScreen(to, tracked.surface.screenId, tracked.id);
         // §6/§34: a user move onto a full workspace floats the window there;
         // the destination keeps its pair and nobody is evicted.
-        if (others.length >= 2) this.floatWindow(tracked);
+        if (others.length >= 2) this.retiler.floatWindow(tracked);
       }
     }
     const count = global.workspace_manager.get_n_workspaces();
@@ -1679,183 +1087,7 @@ export class WindowSession {
 
   /** Compute and apply the plan for every monitor of one workspace (§6). */
   retile(workspaceId: number, reason: string, animate = true, rememberUndo = true): void {
-    if (this.deps.isPaused() || this.suspended) return;
-    // §11.3: no reflow while the user is dragging.
-    if (this.dragging) return;
-    // Every policy below is per monitor, matching the tiler (§9: a pair shares
-    // a monitor). Counting a workspace's windows across screens would make a
-    // pair on one monitor an "extra" — or a lone window — on another.
-    // One config per pass, not per screen: the settings half is memoised and the
-    // live ratios/swap-pair set are identical for every screen, so the `new Set`
-    // and the assembly were rebuilt per screen for no reason
-    // (PERFORMANCE_PLAN stage 1.3 — "once per pass").
-    const config = this.tilerConfig();
-    // §24/P2.5: one filter+classify+sort for the workspace, reused for every
-    // screen instead of rebuilt per screen. It is re-derived when a branch
-    // below changes the model (an escape or a maximize can move a window to its
-    // own workspace); every other branch only reads. The tiled view and the
-    // non-transient view the lone law needs derive from the same list and cannot
-    // drift between their two uses: the only field written before them is
-    // `maximizeRequested`, which no filter reads.
-    let workspaceTiles: TrackedWindow[] | null = null;
-    for (const screen of this.deps.host.screens()) {
-      const onScreen = (t: TrackedWindow): boolean => t.surface.screenId === screen.index;
-      workspaceTiles ??= this.tileables(workspaceId);
-      const onScreenTiles = workspaceTiles.filter(onScreen);
-      const tileables = onScreenTiles.filter((t) => !t.surface.flags.fullscreen);
-      if (tileables.length === 0) continue;
-      // §4 maximize, as a property: a window the user maximized that still
-      // shares its workspace is given its own workspace to the right, and the
-      // view follows. Re-asserting it here means a signal that was missed or
-      // raced can not leave the window sharing the pair.
-      if (tileables.length > 1) {
-        const requested = tileables.find((t) => t.maximizeRequested && compat.isMaximized(t.win));
-        if (requested !== undefined) {
-          this.maximizeTracked(requested);
-          // It may have moved to its own workspace: drop the cached list.
-          workspaceTiles = null;
-          continue;
-        }
-      } else if (tileables[0].maximizeRequested) {
-        // Settled: a lone window on its own workspace is maximized; the
-        // maximize property no longer needs to be enforced for it.
-        tileables[0].maximizeRequested = false;
-      }
-      // §10 steps 2-3: a client that insists on a minimum wider than its share
-      // is refused a split. The sibling adapts first (the tiler's ratio is
-      // clamped to its own minimum); only when the sibling cannot adapt either
-      // does the pair cease to exist — the trigger keeps the screen and the
-      // reactor gives way (own workspace, or minimized on a single screen).
-      if (tileables.length > 1) {
-        const refusing = tileables.find((t) => this.doesNotFit(t, this.placementEnv(t.surface.screenId)));
-        if (refusing !== undefined) {
-          const sibling = tileables.find((t) => t.id !== refusing.id);
-          const screen = this.screenFor(refusing.surface.screenId);
-          if (
-            sibling !== undefined &&
-            screen !== null &&
-            this.refusalEscapes(refusing, sibling, screen, this.placementEnv(refusing.surface.screenId), config)
-          ) {
-            this.escapeRefusal(refusing, sibling);
-            // The refusal moved/minimized a window on this workspace.
-            workspaceTiles = null;
-            this.scheduleRetile(workspaceId, 'escape-refusal');
-            continue;
-          }
-          // Step 2: the sibling adapts, so the pair stays. The tiler's clamp
-          // below gives the refusing window its minimum and the sibling the
-          // remainder; nothing is created, floated or minimized.
-        }
-      }
-      // §4: a lone visible managed window is always maximized.
-      if (this.shouldLoneMaximize(tileables, onScreenTiles.filter((t) => !t.surface.flags.transient))) {
-        const only = tileables[0];
-        if (!compat.isMaximized(only.win)) {
-          this.deps.tiling.noteSelfApply();
-          this.deps.host.maximize(only.id);
-        }
-        continue;
-      }
-      // §5: two visible managed windows are a pair, so a maximized window that
-      // still shares its workspace (a user maximize the property branch above
-      // did not move, or two windows that raced into being) must unmaximize.
-      const maximized = tileables.filter((t) => compat.isMaximized(t.win));
-      if (maximized.length > 0) {
-        for (const stale of maximized) {
-          this.deps.tiling.noteSelfApply();
-          this.withSelfUnmaximize(stale, () => this.deps.host.unmaximize(stale.id));
-        }
-        this.scheduleRetile(workspaceId, 'unmaximize-stale');
-        continue;
-      }
-      const startedUs = GLib.get_monotonic_time();
-      this.diagnostics.notePlanComputed();
-      const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, config);
-      // §36: pass the per-window minimum so the below-min invariant actually
-      // runs in production, not just in the tests; a violation is still logged,
-      // never enforced.
-      const mins = new Map<number, Size>(tileables.map((t) => [t.id, t.minSize]));
-      const violations = checkPlan(plan, screen.workArea ?? screen.geometry, mins);
-      if (violations.length > 0) {
-        // §5: the packing invariant is asserted, not enforced — a violation is
-        // logged with its identifier and the state so the long mixed run can
-        // assert that the journal never carries one.
-        this.deps.history.log('invariant_violated', { reason, workspaceId, violations });
-      }
-      if (Date.now() < this.ignoreMismatchUntilMs) continue;
-    const key = `ws:${workspaceId}:${screen.index}`;
-      // A signal (a title or frame change, most often) can clear the plan
-      // cache mid-transition. Re-applying the identical plan then restarts the
-      // frame animation from wherever Mutter's own maximise/unmaximise
-      // transition happens to have the window, which reads as an overshoot
-      // followed by a correction. See `shouldApplyPlan`.
-      const mismatch = this.planMismatch(plan);
-      const changed = this.signatures.changed(key, planSignature(plan.placements));
-      if (!shouldApplyPlan({ mismatch, changed, alreadyTargeted: this.planIsCurrentTarget(plan) })) continue;
-      this.deps.history.log('tile', {
-        reason,
-        workspaceId,
-        screen: screen.index,
-        tileables: tileables.length,
-        placements: plan.placements.length,
-      });
-      this.deps.tiling.applyPlan(plan, screen, reason, animate, rememberUndo);
-      // §36.14: one retile must complete well under 10ms.
-      const applyMs = (GLib.get_monotonic_time() - startedUs) / 1000;
-      this.diagnostics.noteApply(applyMs);
-      if (applyMs > 5 && this.deps.settings.boolean('debug-enabled', false)) {
-        this.deps.history.log('perf', { workspaceId, screen: screen.index, apply_ms: applyMs });
-      }
-    }
-    this.deps.onStateChanged();
-  }
-
-  /**
-   * The plan is stale when a window no longer sits where the plan puts it,
-   * even if the plan's signature is unchanged. Without this, a window moved by
-   * the user (or anything outside our drag handling) is never put back.
-   */
-  private planMismatch(plan: TilePlan): boolean {
-    // An explicit Undo restores rects that deliberately are not the plan.
-    if (Date.now() < this.ignoreMismatchUntilMs) return false;
-    // Our own applies are still landing: give them a moment.
-    if (this.deps.tiling.activeAnimations > 0) return false;
-    if (Date.now() - this.deps.tiling.lastApplyAtMs < 500) return false;
-    for (const placement of plan.placements) {
-      const tracked = this.windows.get(placement.surfaceId);
-      if (tracked === undefined) return true;
-      // A window that demonstrably refuses geometry is not "stale".
-      if (tracked.stubborn) continue;
-      tracked.refreshFrame();
-      const rect = tracked.surface.frame;
-      if (
-        Math.abs(rect.x - placement.rect.x) > 2 ||
-        Math.abs(rect.y - placement.rect.y) > 2 ||
-        Math.abs(rect.width - placement.rect.width) > 2 ||
-        Math.abs(rect.height - placement.rect.height) > 2
-      ) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * True when every placement in `plan` is already the aim of its window
-   * (`tracked.lastTarget`). Used with `planMismatch` to tell a genuine drift
-   * (re-apply) from a plan cache cleared mid-transition by an unrelated signal
-   * (do not re-apply: a second animation would restart from Mutter's
-   * in-flight transition and read as a correction).
-   */
-  private planIsCurrentTarget(plan: TilePlan): boolean {
-    if (plan.placements.length === 0) return false;
-    for (const placement of plan.placements) {
-      const tracked = this.windows.get(placement.surfaceId);
-      const target = tracked?.lastTarget;
-      if (target === null || target === undefined) return false;
-      if (!rectEquals(target, placement.rect)) return false;
-    }
-    return true;
+    this.retiler.retile(workspaceId, reason, animate, rememberUndo);
   }
 
   tileables(workspaceId: number): TrackedWindow[] {
@@ -1887,62 +1119,8 @@ export class WindowSession {
     return this.tileables(workspaceId).filter((t) => t.id !== excludeId && t.surface.screenId === screen);
   }
 
-  /**
-   * §6: float a window adrt places itself — the explicit no-room cases and the
-   * escape's single-workspace fallback. The placement is offset and kept inside
-   * the work area so it is never exactly on top of what is beneath it. A display
-   * rescue/replay passes the remembered `rect`, which is restored verbatim: a
-   * float's frame is the user's, never re-centred by a screen change (§9).
-   */
-  private floatWindow(tracked: TrackedWindow, rect?: Rect): void {
-    tracked.autoFloated = true;
-    tracked.pendingSlot = null;
-    tracked.surface.setFloating(true);
-    // The cached classification still says tileable; drop it so the next pass
-    // treats the window as the float it now is.
-    tracked.invalidateClassification();
-    this.recordPlacement(tracked);
-    this.deps.tiling.noteSelfApply();
-    this.deps.host.applyLayer(tracked.id, Layer.FLOATING);
-    // Never touch a minimized window's geometry: Mutter un-minimizes it as a
-    // side effect, so a window the user minimized would pop back on screen.
-    // It gets the float rect when it is restored instead (see onMinimized).
-    if (tracked.surface.flags.minimized) return;
-    // Keep it on top but do not hide the pair behind it: centre it with a
-    // margin so the tiled windows stay visible.
-    const screen = this.screenFor(tracked.surface.screenId);
-    if (screen === null) return;
-    if (rect !== undefined) {
-      // A restored float keeps the exact frame it was left at; it stays on top
-      // (the layer above the pair) and is never re-centred or re-sized to fit.
-      this.deps.tiling.applyFrame(tracked, rect, screen, false, 'float-restore', 0);
-      return;
-    }
-    const area = screenArea(screen);
-    const margin = Math.max(24, Math.round(Math.min(area.width, area.height) * 0.12));
-    const width = Math.max(1, area.width - 2 * margin);
-    const height = Math.max(1, area.height - 2 * margin);
-    this.deps.tiling.applyFrame(
-      tracked,
-      { x: area.x + Math.round((area.width - width) / 2), y: area.y + Math.round((area.height - height) / 2), width, height },
-      screen,
-      false,
-      'float-over-pair',
-      0,
-    );
-  }
-
   nonTransient(workspaceId: number): TrackedWindow[] {
     return this.tileables(workspaceId).filter((t) => !t.surface.flags.transient);
-  }
-
-  private shouldLoneMaximize(tileables: readonly TrackedWindow[], nonTransient: readonly TrackedWindow[]): boolean {
-    if (tileables.length !== 1) return false;
-    // §4: a lone *visible managed* window is maximized. Floats (an always-on-top
-    // window, a dialog) do not count, or the window left behind when one floats
-    // would stay at half size (A61).
-    const managed = nonTransient.filter((t) => this.classify(t).tileable && !t.surface.flags.minimized);
-    return managed.length === 1;
   }
 
   focus(id: number | null): void {
@@ -1990,7 +1168,7 @@ export class WindowSession {
         return;
       }
     }
-    this.moveToAdjacentMonitor(current, direction);
+    this.drag.moveToAdjacentMonitor(current, direction);
   }
 
   toggleFloat(id: number): boolean {
@@ -2029,7 +1207,7 @@ export class WindowSession {
     for (const tracked of [...this.windows.values()]) {
       if (tracked.appKey !== appId) continue;
       if (value && !tracked.surface.flags.floating) {
-        this.floatWindow(tracked);
+        this.retiler.floatWindow(tracked);
       } else if (!value && (tracked.surface.flags.floating || tracked.autoFloated)) {
         tracked.autoFloated = false;
         tracked.surface.setFloating(false);
@@ -2236,8 +1414,8 @@ export class WindowSession {
     current.pendingSlot = null;
     this.deps.history.log('ws_switch_empty', { id: current.id, from, to: index, byUser: true });
     const others = this.tileablesOnScreen(index, current.surface.screenId, current.id);
-    if (others.length >= 2) this.floatWindow(current);
-    else if (others.length === 1) this.pinSlots(index, current, index > from ? 0 : 1);
+    if (others.length >= 2) this.retiler.floatWindow(current);
+    else if (others.length === 1) this.retiler.pinSlots(index, current, index > from ? 0 : 1);
     if (this.deps.settings.boolean('follow-moved-window', true)) {
       this.instantSwitch(() => this.activateWorkspace(index));
     }
@@ -2289,10 +1467,7 @@ export class WindowSession {
     for (const id of this.timeoutSources) GLib.source_remove(id);
     this.timeoutSources.clear();
     this.selfEcho.clear();
-    if (this.adjustSource !== null) {
-      GLib.source_remove(this.adjustSource);
-      this.adjustSource = null;
-    }
+    this.drag.destroy();
     this.windows.clear();
   }
 
@@ -2343,24 +1518,6 @@ export class WindowSession {
     return rows === -1 ? { ...config, workspaceAxis: 'vertical' } : config;
   }
 
-  private toTilerWindow(tracked: TrackedWindow): TilerWindow {
-    const surface = tracked.surface;
-    // §12: `adapt` is timing-only. No learned minimum ever reaches the tiler;
-    // the window's own size hints are the only minimum.
-    return {
-      id: tracked.id,
-      appId: surface.appId,
-      title: surface.title,
-      kind: surface.kind,
-      rect: surface.frame,
-      min: tracked.minSize,
-      max: tracked.maxSize,
-      screenId: surface.screenId,
-      workspaceId: surface.workspaceId,
-      slot: tracked.pendingSlot ?? undefined,
-    };
-  }
-
   /**
    * §9/P2.6: resolve a screen by index through the host's maintained index
    * (built once per screen change) instead of scanning the screen list on
@@ -2370,176 +1527,6 @@ export class WindowSession {
   private screenFor(index: number): Screen | null {
     return this.deps.host.screenByIndex(index);
   }
-
-  /** §7.2 lone-maximize policy, per monitor (a pair on one monitor must not
-   * turn a lone window on another into a "non-lone"). */
-  private evaluateLoneMaximize(workspaceId: number): void {
-    for (const screen of this.deps.host.screens()) {
-      const onScreen = (t: TrackedWindow): boolean => t.surface.screenId === screen.index;
-      // §24/P2.5: one filter+classify+sort per screen; `nonTransient` is the
-      // same list minus the transient windows. The two were derived separately.
-      const tileables = this.tileables(workspaceId).filter(onScreen);
-      const nonTransient = tileables.filter((t) => !t.surface.flags.transient);
-      if (nonTransient.length === 1 && tileables.length === 1) {
-        const only = tileables[0];
-        if (!compat.isMaximized(only.win)) {
-          this.deps.tiling.noteSelfApply();
-          this.deps.host.maximize(only.id);
-          this.deps.history.log('tile', { id: only.id, reason: 'lone-maximize' });
-        }
-        continue;
-      }
-      if (nonTransient.length > 1 && tileables.length === 1 && compat.isMaximized(tileables[0].win)) {
-        this.deps.tiling.noteSelfApply();
-        this.deps.host.unmaximize(tileables[0].id);
-        this.scheduleRetile(workspaceId, 'lone-unmaximize');
-      }
-    }
-  }
-
-  /** §4: maximize — its own workspace to the right, or in place on `single`. */
-  private maximizeTracked(tracked: TrackedWindow): void {
-    tracked.maximizeRequested = true;
-    // §16: a window that does not fit its slot gets its own workspace instead.
-    if (this.doesNotFit(tracked, this.placementEnv(tracked.surface.screenId))) {
-      this.escapeTracked(tracked);
-      return;
-    }
-    // §13: the pair it leaves behind reacts (the survivor maximizes); capture
-    // the whole plane so undo restores both windows.
-    this.capturePlane([tracked.surface.workspaceId], tracked.surface.screenId);
-    const own = tracked.surface.workspaceId;
-    const env = this.placementEnv(tracked.surface.screenId);
-    const state = this.buildPlacementState(null, tracked.surface.screenId);
-    this.applyPlacement(tracked, maximizeWindow(state, env, own), own === state.viewed, 'maximize');
-    this.deps.onModelEvent?.('window-maximized', { id: tracked.id, workspace: own });
-  }
-
-  /** §4: the unmaximize ladder, from the pure model (no origin memory). */
-  private unmaximizeTracked(tracked: TrackedWindow): void {
-    tracked.maximizeRequested = false;
-    const own = tracked.surface.workspaceId;
-    this.capturePlane([own - 1, own, own + 1], tracked.surface.screenId);
-    const env = this.placementEnv(tracked.surface.screenId);
-    const state = this.buildPlacementState(null, tracked.surface.screenId);
-    const placement = unmaximizeWindow(state, env, own, tracked.id);
-    // §4: there is no un-maximized lone window. When the ladder leaves the
-    // window where it is (no neighbour holds windows), it is alone and the lone
-    // law re-maximizes it rather than parking it minimized.
-    if (placement.workspace === own && placement.minimize?.includes(tracked.id) === true) {
-      this.deps.tiling.noteSelfApply();
-      this.deps.host.maximize(tracked.id);
-      this.scheduleReconcile('unmaximize-lone');
-      return;
-    }
-    const follow = own === state.viewed || placement.workspace !== own;
-    this.applyPlacement(tracked, placement, follow, 'unmaximize');
-    this.deps.onModelEvent?.('window-unmaximized', { id: tracked.id, workspace: placement.workspace });
-    if (env.screen === 'single') this.restoreMinimizedOn(placement.workspace, tracked.surface.screenId);
-    this.workspaces.schedulePrune();
-  }
-
-  /** §4/§16: fullscreen behaves as maximize; leaving it as unmaximize. */
-  private fullscreenTracked(tracked: TrackedWindow, fullscreen: boolean): void {
-    if (fullscreen) {
-      const own = tracked.surface.workspaceId;
-      const env = this.placementEnv(tracked.surface.screenId);
-      const state = this.buildPlacementState(null, tracked.surface.screenId);
-      this.applyPlacement(tracked, maximizeWindow(state, env, own), own === state.viewed, 'fullscreen');
-      return;
-    }
-    this.unmaximizeTracked(tracked);
-  }
-
-  /**
-   * §16/§10 step 3: the escape. A managed window that cannot fit its share is
-   * given its own workspace to the right, sized to itself and clamped to
-   * [1/6, full screen]; the window it was paired with keeps the screen.
-   */
-  private escapeTracked(tracked: TrackedWindow): void {
-    const env = this.placementEnv(tracked.surface.screenId);
-    const screen = this.screenFor(tracked.surface.screenId);
-    if (screen === null) return;
-    // §13: the escape moves the window to a new workspace; it is undoable.
-    this.capturePlane([tracked.surface.workspaceId], tracked.surface.screenId);
-    const area = screenArea(screen);
-    const size = escapeSize(
-      env.axis === 'vertical' ? area.height : area.width,
-      env.axis === 'vertical' ? tracked.surface.frame.height : tracked.surface.frame.width,
-    );
-    const rect: Rect = env.axis === 'vertical'
-      ? { x: area.x, y: area.y, width: area.width, height: size }
-      : { x: area.x, y: area.y, width: size, height: area.height };
-
-    if (env.screen === 'single') {
-      // §10 step 4: no workspace to give. The trigger keeps the screen,
-      // maximized, and the other managed windows on the monitor minimize.
-      this.maximizeInPlace(tracked);
-      return;
-    }
-    if (env.screen === 'fixed') {
-      // §7: no new workspace; keep the clamped size where it is.
-      this.deps.tiling.applyFrame(tracked, rect, screen, false, 'escape-clamped', 0);
-      return;
-    }
-    const own = tracked.surface.workspaceId;
-    const state = this.buildPlacementState(null, tracked.surface.screenId);
-    const created = this.workspaces.createRight(own);
-    if (created === null) {
-      this.deps.tiling.applyFrame(tracked, rect, screen, false, 'escape-clamped', 0);
-      return;
-    }
-    this.workspaces.moveWindow(tracked, created);
-    // A float is not our escape: a managed window that does not fit keeps its
-    // clamped size, flush at slot 0 and full work-area height (§16).
-    tracked.autoFloated = false;
-    tracked.escaped = true;
-    this.deps.tiling.applyFrame(tracked, rect, screen, false, 'escape', 0);
-    if (own === state.viewed) this.instantSwitch(() => this.activateWorkspace(created));
-    this.deps.history.log('spawn_ws', { id: tracked.id, workspaceId: created, reason: 'escape' });
-    this.signatures.clearAll();
-    this.scheduleReconcile('escape');
-  }
-
-  /**
-   * §10 step 2: whether the refusing window's sibling can adapt to the
-   * remainder. `escaped` false means the pair still exists, so the tiler's
-   * ratio clamp is left to give the refusing window its minimum and the
-   * sibling the rest; true means the pair cannot exist and step 3 applies.
-   */
-  private refusalEscapes(refusing: TrackedWindow, sibling: TrackedWindow, screen: Screen, env: Env, config: TilerConfig): boolean {
-    const area = screenArea(screen);
-    // §10: the split extent uses the between-window gap, not the base, so an
-    // explicit `gaps-between` is honoured by the refusal ladder.
-    const gap = resolveGaps(config, screen).between;
-    const extent = env.axis === 'vertical' ? area.height : area.width;
-    const split = Math.max(0, extent - gap);
-    const axis: 'width' | 'height' = env.axis === 'vertical' ? 'height' : 'width';
-    const keep = this.toTilerWindow(refusing).min[axis];
-    const siblingMinimum = this.toTilerWindow(sibling).min[axis];
-    return refusalLadder(keep, siblingMinimum, split).escaped;
-  }
-
-  /**
-   * §10 steps 3-4: the pair cannot exist, so the trigger keeps the screen and
-   * the reactor gives way. The refusing window is the one whose own demand
-   * broke the split: on a workspace-capable screen it is the one that escapes
-   * to its own workspace; on a single-workspace screen it keeps the screen
-   * maximized and the sibling is minimized.
-   */
-  private escapeRefusal(refusing: TrackedWindow, sibling: TrackedWindow): void {
-    const env = this.placementEnv(refusing.surface.screenId);
-    const single = env.screen === 'single';
-    const trigger = single ? refusing : sibling;
-    const reactor = single ? sibling : refusing;
-    const outcome = impossibleSplit(env, { id: trigger.id }, { id: reactor.id });
-    if (outcome.giveWayTo === 'minimized') {
-      this.maximizeInPlace(this.windows.get(outcome.keep) ?? trigger);
-      return;
-    }
-    this.escapeTracked(this.windows.get(outcome.giveWay) ?? reactor);
-  }
-
 
   /**
    * §4/§5: minimize releases the slot; the pure reaper relocates a workspace
@@ -2552,7 +1539,7 @@ export class WindowSession {
       // A window adrt floated itself gets its float rect back; it is not a tile.
       if (tracked.autoFloated) {
         tracked.surface.refresh();
-        this.floatWindow(tracked);
+        this.retiler.floatWindow(tracked);
         this.deps.onStateChanged();
         return;
       }
@@ -2560,14 +1547,14 @@ export class WindowSession {
       // §10 step 4: restoring makes this window the trigger. If a peer refuses
       // to share (it does not fit its half), the trigger keeps the screen
       // maximized and the peer gives way, and the two trade on each restore.
-      const refuses = others.some((o) => this.doesNotFit(o, this.placementEnv(o.surface.screenId)));
+      const refuses = others.some((o) => this.retiler.doesNotFit(o, this.retiler.placementEnv(o.surface.screenId)));
       if (refuses) {
-        this.maximizeInPlace(tracked);
+        this.retiler.maximizeInPlace(tracked);
         return;
       }
       // §6: restoring onto a workspace whose two slots are taken floats.
       if (others.length >= 2) {
-        this.floatWindow(tracked);
+        this.retiler.floatWindow(tracked);
         return;
       }
       this.scheduleRetile(tracked.surface.workspaceId, 'unminimize');
@@ -2618,98 +1605,6 @@ export class WindowSession {
         controller.animateSwitch = original;
       });
     }
-  }
-
-  /**
-   * §6/§14: move to the adjacent screen in `direction`, chosen by geometry; the
-   * target screen's own drop ladder (free slot on the side it came from, a
-   * crossing swap, else a float) is applied from the drain.
-   */
-  private moveToAdjacentMonitor(tracked: TrackedWindow, direction: string): void {
-    const target = this.adjacentScreen(tracked, direction);
-    if (target === null) return;
-    // §Shell stability: the screen was chosen from the cached list; only make
-    // the Mutter call while its index still exists in the live monitor list.
-    // An index that vanished mid-transition asserts inside the compositor.
-    if (!this.deps.host.isLiveMonitorIndex(target.index)) return;
-    this.captureChange([tracked.id]);
-    tracked.win.move_to_monitor(target.index);
-    tracked.userMovedAtMs = Date.now();
-    this.crossScreenId = tracked.id;
-    this.crossScreenFrom = direction === 'right' ? 'left' : direction === 'left' ? 'right' : direction === 'down' ? 'above' : 'below';
-    // `move_to_monitor` is asynchronous: the arrival ladder must not run while
-    // the window is still on the source screen, or its float rect (computed from
-    // the source work area) drags it straight back (A106). `window-entered-
-    // monitor` re-queues the drain when it lands; until then the move stays
-    // pending.
-    this.crossScreenTarget = target.index;
-    this.signatures.clearAll();
-    this.scheduleReconcile('move-monitor');
-  }
-
-  private clearCrossScreenMove(): void {
-    this.crossScreenId = null;
-    this.crossScreenFrom = null;
-    this.crossScreenTarget = null;
-  }
-
-  /**
-   * The screen next to this one in `direction`, chosen purely by geometry —
-   * never by index. A candidate must lie on the requested side (its centre
-   * past ours on that axis); a screen whose perpendicular extent overlaps ours
-   * wins over one that does not, and among those the nearest edge wins. This
-   * keeps the choice honest in a mixed landscape/portrait layout, where array
-   * order and physical adjacency need not agree.
-   */
-  private adjacentScreen(tracked: TrackedWindow, direction: string): Screen | null {
-    const screens = this.deps.host.screens();
-    const from = this.screenFor(tracked.surface.screenId);
-    if (from === null) return null;
-    const horizontal = direction === 'left' || direction === 'right';
-    const negated = direction === 'left' || direction === 'up';
-    const f = from.geometry;
-    let best: Screen | null = null;
-    let bestScore = Number.POSITIVE_INFINITY;
-    for (const screen of screens) {
-      if (screen.index === from.index) continue;
-      const g = screen.geometry;
-      const centre = horizontal
-        ? g.x + g.width / 2 - (f.x + f.width / 2)
-        : g.y + g.height / 2 - (f.y + f.height / 2);
-      if (negated ? centre >= 0 : centre <= 0) continue;
-      const gap = horizontal
-        ? negated
-          ? f.x - (g.x + g.width)
-          : g.x - (f.x + f.width)
-        : negated
-          ? f.y - (g.y + g.height)
-          : g.y - (f.y + f.height);
-      const overlap = horizontal
-        ? Math.min(f.y + f.height, g.y + g.height) - Math.max(f.y, g.y)
-        : Math.min(f.x + f.width, g.x + g.width) - Math.max(f.x, g.x);
-      // A screen with no perpendicular overlap is a fallback only.
-      const score = (overlap > 0 ? 0 : 100000) + Math.max(0, gap);
-      if (score < bestScore) {
-        bestScore = score;
-        best = screen;
-      }
-    }
-    return best;
-  }
-
-  /** §6: arrive on another screen (a drag or a directional move). */
-  private arriveCrossScreen(tracked: TrackedWindow, from: 'left' | 'right' | 'above' | 'below'): void {
-    tracked.refreshFrame();
-    // A maximized window dragged across screens is un-maximized at the drop.
-    if (compat.isMaximized(tracked.win)) {
-      this.withSelfUnmaximize(tracked, () => this.deps.host.unmaximize(tracked.id));
-      tracked.refreshFrame();
-    }
-    const crossed = this.crossedWindow(tracked);
-    const env = this.placementEnv(tracked.surface.screenId);
-    const state = this.buildPlacementState(tracked.id, tracked.surface.screenId);
-    const result = dropPlacement(state, env, tracked.id, tracked.surface.workspaceId, from, crossed);
-    this.applyDropResult(tracked, result);
   }
 
   private recenterModal(tracked: TrackedWindow): void {
@@ -2769,8 +1664,8 @@ export class WindowSession {
     on('notify::mapped', () => this.onFlagSignal(tracked, true));
     on('notify::maximized-vertically', () => this.onMaximizeSignal(tracked));
     on('notify::maximized-horizontally', () => this.onMaximizeSignal(tracked));
-    on('position-changed', () => this.onFrameSignal(tracked));
-    on('size-changed', () => this.onFrameSignal(tracked));
+    on('position-changed', () => this.drag.onFrameSignal(tracked));
+    on('size-changed', () => this.drag.onFrameSignal(tracked));
     on('workspace-changed', () => this.onWorkspaceSignal(tracked));
     on('unmanaged', () => this.unregister(tracked.id));
     this.signals.set(tracked.id, handlers);
@@ -2791,399 +1686,6 @@ export class WindowSession {
     if (classification) tracked.invalidateClassification();
     this.signatures.clear(`ws:${tracked.surface.workspaceId}`);
     this.scheduleRetile(tracked.surface.workspaceId, 'flags');
-  }
-
-  private onFrameSignal(tracked: TrackedWindow): void {
-    tracked.refreshFrame();
-
-    // A server-side grab is in flight (Super+drag): follow, do not reflow.
-    if (this.dragging) {
-      this.dragLastActivityMs = Date.now();
-      this.deps.onStateChanged();
-      return;
-    }
-    // A change we caused ourselves while following the user's resize.
-    if (this.adjustId !== null && this.adjustId !== tracked.id) {
-      this.deps.onStateChanged();
-      return;
-    }
-    // The user is adjusting this window. Client-side/CSD resizes never emit a
-    // grab op, so this is the only signal we get.
-    if (this.adjustId === tracked.id) {
-      if (this.adjustMode(tracked) === 'resize') this.followSibling(tracked);
-      this.armAdjustEnd(tracked);
-      this.deps.onStateChanged();
-      return;
-    }
-
-    // Size hints usually arrive just after the first frame. Until they do, the
-    // window reports max 0 and a plan built against it will be refused. This is
-    // the only path that re-queries Mutter for hints (§24 item 2).
-    if (!tracked.sizeHintsKnown) {
-      if (tracked.refreshSizeHints()) {
-        tracked.invalidateClassification();
-        this.signatures.clear(`ws:${tracked.surface.workspaceId}`);
-        this.scheduleRetile(tracked.surface.workspaceId, 'size-hints');
-      }
-    }
-
-    // §6: an application drag-and-drop (a Chrome tab tear-off, a VS Code
-    // editor-tab or panel drag, a GTK DnD) holds the pointer button but starts
-    // no compositor window grab. It is not a window move: freeze reflow so the
-    // client places its own window, interpret no drop and show no preview, then
-    // route/reflow once the interaction ends.
-    if (this.trackClientInteraction()) {
-      this.deps.onStateChanged();
-      return;
-    }
-
-    if (this.isUserChange(tracked)) {
-      this.beginUserAdjust(tracked);
-      if (this.adjustMode(tracked) === 'resize') this.followSibling(tracked);
-      this.armAdjustEnd(tracked);
-      this.deps.onStateChanged();
-      return;
-    }
-
-    this.deps.onStateChanged();
-    this.scheduleRetile(tracked.surface.workspaceId, 'frame');
-  }
-
-  /**
-   * §6: keep adrt out of an application drag-and-drop's way. While the pointer
-   * button is held with **no** compositor window grab, the geometry changes are
-   * the client's own (a tab tear-off creating and moving a window, a GTK DnD),
-   * not a window move adrt may interpret — so the freeze is set and reflow is
-   * deferred. The next pass that sees the button released clears it and reflows
-   * exactly once, routing any newcomer that appeared mid-gesture.
-   *
-   * `displayGrabActive()` is `null` on a Shell with no grab reading; the old
-   * button-only heuristic is kept then, so an unknown platform is no worse than
-   * before.
-   */
-  private trackClientInteraction(): boolean {
-    if (!compat.button1Pressed()) {
-      if (this.clientInteracting) {
-        this.clientInteracting = false;
-        // The freeze is lifted: one deferred pass routes the newcomer and
-        // settles the layout, even if no further frame signal arrives.
-        this.scheduleReconcile('client-interaction-end');
-      }
-      return false;
-    }
-    if (compat.displayGrabActive() === false) {
-      this.clientInteracting = true;
-      return true;
-    }
-    return false;
-  }
-
-  /** A geometry change that did not come from us is the user moving a window. */
-  private isUserChange(tracked: TrackedWindow): boolean {
-    const target = tracked.lastTarget;
-    if (target === null) return false;
-    // State changes (maximize, fullscreen, minimize) move the frame away from
-    // the tile plan but are not the user dragging; they have their own signals.
-    if (compat.isMaximized(tracked.win)) return false;
-    if (tracked.surface.flags.fullscreen || tracked.surface.flags.minimized) return false;
-    // A user move/resize holds the button; our own applies do not.
-    if (!compat.button1Pressed()) return false;
-    // §6: the compositor must actually hold a window move/resize grab. An
-    // application DnD (Chrome tab tear-off, VS Code tab/panel drag, GTK DnD)
-    // holds the button but starts no grab, so a client-driven frame change must
-    // not be read as a user move — that is what swapped the pair under the
-    // gesture and churned `beginUserAdjust`/`endUserAdjust` on every frame.
-    if (compat.displayGrabActive() === false) return false;
-    // Our own applies set `lastTarget`, so a frame that differs from it and is
-    // not an animation or a stubborn refusal is the user moving the window.
-    if (this.deps.tiling.activeAnimations > 0) return false;
-    if (Date.now() - this.deps.tiling.lastApplyAtMs < 200) return false;
-    const frame = tracked.surface.frame;
-    return (
-      Math.abs(frame.x - target.x) > 3 ||
-      Math.abs(frame.y - target.y) > 3 ||
-      Math.abs(frame.width - target.width) > 3 ||
-      Math.abs(frame.height - target.height) > 3
-    );
-  }
-
-  private beginUserAdjust(tracked: TrackedWindow): void {
-    this.adjustId = tracked.id;
-    this.dragId = tracked.id;
-    // Anchor to the last geometry we planned: `surface.frame` is already the
-    // user's new rect by the time this signal arrives.
-    this.dragStartRect = { ...(tracked.lastTarget ?? tracked.surface.frame) };
-    this.dragStartWorkspace = tracked.surface.workspaceId;
-    this.dragStartScreen = tracked.surface.screenId;
-    this.deps.onDragChanged(true);
-  }
-
-  private armAdjustEnd(tracked: TrackedWindow): void {
-    if (this.adjustSource !== null) {
-      GLib.source_remove(this.adjustSource);
-      this.adjustSource = null;
-    }
-    this.adjustSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ADJUST_SETTLE_MS, () => {
-      this.adjustSource = null;
-      // §Self-heal containment: never escape the source dispatch uncaught.
-      this.guard('adjust-end', () => this.endUserAdjust(tracked))();
-      return GLib.SOURCE_REMOVE;
-    });
-  }
-
-  private endUserAdjust(tracked: TrackedWindow): void {
-    if (this.adjustId !== tracked.id) return;
-    const mode = this.adjustMode(tracked);
-    this.adjustId = null;
-    this.dragId = null;
-    this.deps.onDragChanged(false);
-    this.interpretDrop(tracked, mode);
-    this.dragStartRect = null;
-    this.signatures.clearAll();
-    this.scheduleRetile(tracked.surface.workspaceId, 'user-adjust');
-  }
-
-  private adjustMode(tracked: TrackedWindow): AdjustMode {
-    const start = this.dragStartRect;
-    if (start === null) return 'move';
-    // Geometry-only, and deliberately strict: a size change on both axes is a
-    // move (an overview drop scales the window to its target), never an
-    // inner-edge resize — reading it as one would save a bogus split ratio that
-    // then persists for that pair of apps.
-    return classifyAdjust(start, tracked.surface.frame);
-  }
-
-  /** Keep the sibling in step with the user's live resize. */
-  private followSibling(tracked: TrackedWindow): void {
-    const sibling = this.pairSibling(tracked);
-    const screen = this.screenFor(tracked.surface.screenId);
-    if (sibling === null || screen === null) return;
-    const area = screenArea(screen);
-    const horizontal = area.width >= area.height;
-    const gap = this.effectiveGap(area);
-    // Stay inside the tiled (inset) area so gaps are preserved.
-    const inset: Rect = {
-      x: area.x + gap,
-      y: area.y + gap,
-      width: Math.max(0, area.width - 2 * gap),
-      height: Math.max(0, area.height - 2 * gap),
-    };
-    const a = tracked.surface.frame;
-    const b = sibling.surface.frame;
-    let rect: Rect;
-    if (horizontal) {
-      if (a.x <= b.x) {
-        const x = a.x + a.width + gap;
-        rect = { x, y: inset.y, width: Math.max(0, inset.x + inset.width - x), height: inset.height };
-      } else {
-        rect = { x: inset.x, y: inset.y, width: Math.max(0, a.x - gap - inset.x), height: inset.height };
-      }
-    } else if (a.y <= b.y) {
-      const y = a.y + a.height + gap;
-      rect = { x: inset.x, y, width: inset.width, height: Math.max(0, inset.y + inset.height - y) };
-    } else {
-      rect = { x: inset.x, y: inset.y, width: inset.width, height: Math.max(0, a.y - gap - inset.y) };
-    }
-    if (rect.width <= 0 || rect.height <= 0) return;
-    // Skip redundant applies when the sibling is already where it should be.
-    sibling.refreshFrame();
-    const current = sibling.surface.frame;
-    if (
-      Math.abs(current.x - rect.x) <= 2 &&
-      Math.abs(current.y - rect.y) <= 2 &&
-      Math.abs(current.width - rect.width) <= 2 &&
-      Math.abs(current.height - rect.height) <= 2
-    ) {
-      return;
-    }
-    this.deps.tiling.applyFrame(sibling, rect, screen, false, 'follow', 0);
-  }
-
-  private effectiveGap(area: Rect): number {
-    const base = this.deps.settings.int('gaps-base', 8);
-    const override = area.height > area.width
-      ? this.deps.settings.int('gaps-portrait', -1)
-      : this.deps.settings.int('gaps-landscape', -1);
-    return override >= 0 ? override : base;
-  }
-
-  private interpretDrop(tracked: TrackedWindow, mode: AdjustMode): void {
-    const screen = this.screenFor(tracked.surface.screenId);
-    if (screen === null) return;
-    const sibling = this.pairSibling(tracked);
-    const samePlane = tracked.surface.workspaceId === this.dragStartWorkspace && tracked.surface.screenId === this.dragStartScreen;
-
-    // §10: the inner edge of a pair changes the ratio. Landing on the sibling is
-    // a crossing, never a resize — a client can clamp a dragged window, changing
-    // its size, which used to read as an inner-edge resize (§6/A77).
-    if (
-      sibling !== null &&
-      samePlane &&
-      mode === 'resize' &&
-      !this.overlaps(tracked.surface.frame, sibling.surface.frame)
-    ) {
-      this.applyResizeIntent(tracked, sibling, screen);
-      return;
-    }
-
-    // §6/§11: the same decision the preview overlay shows, now applied.
-    const target = this.dragOutcomeFor(tracked, mode);
-    if (target === null || target.kind === 'none') return;
-    this.applyDropResult(tracked, target);
-  }
-
-  /**
-   * §6/§11: the live drop target for the preview overlay. The policy is pure
-   * (`core/drag`); this only gathers the model state it needs. `null` when the
-   * gesture is an inner-edge resize, which has no landing rect.
-   */
-  previewTarget(): DragOutcome | null {
-    const id = this.dragId ?? this.adjustId;
-    if (id === null) return null;
-    const tracked = this.windows.get(id);
-    if (tracked === undefined) return null;
-    tracked.refreshFrame();
-    return this.dragOutcomeFor(tracked, this.adjustMode(tracked));
-  }
-
-  /**
-   * §6/§11: the one drag decision, shared by the preview and the drop. A
-   * same-plane crossing swaps; a cross-plane drop follows §6's ladder; both
-   * return the exact landing rect so the two can never disagree.
-   */
-  private dragOutcomeFor(tracked: TrackedWindow, mode: AdjustMode): DragOutcome | null {
-    const screen = this.screenFor(tracked.surface.screenId);
-    if (screen === null) return null;
-    const sibling = this.pairSibling(tracked);
-    const samePlane =
-      tracked.surface.workspaceId === this.dragStartWorkspace && tracked.surface.screenId === this.dragStartScreen;
-    if (sibling !== null && samePlane && mode === 'resize' && !this.overlaps(tracked.surface.frame, sibling.surface.frame)) {
-      return null;
-    }
-    const crossed = samePlane ? this.crossedWindow(tracked) : null;
-    return dragOutcome({
-      state: this.buildPlacementState(tracked.id, tracked.surface.screenId),
-      env: this.placementEnv(tracked.surface.screenId),
-      id: tracked.id,
-      workspace: tracked.surface.workspaceId,
-      from: this.dropFrom(tracked),
-      crossed,
-      // §6: only a managed (tileable) window has a landing decision. A dragged
-      // dialog, popup, skip-taskbar utility, always-on-top widget, fixed-size
-      // client or never-tiled app gets no drop-assist highlight and no
-      // swap/slot/maximize — the drag is a plain move. This is the one place the
-      // preview and the drop both read, so they can never disagree.
-      managed: this.classify(tracked).tileable,
-      samePlane,
-      screen,
-      config: this.tilerConfig(),
-      dragged: this.dragTilerWindow(tracked),
-      othersByWorkspace: this.previewOthers(tracked),
-      dropped: { ...tracked.surface.frame },
-    });
-  }
-
-  /** A window's tiler description with the side it currently occupies (§13). */
-  private dragTilerWindow(tracked: TrackedWindow): TilerWindow {
-    return { ...this.toTilerWindow(tracked), slot: this.slotFor(tracked) ?? undefined };
-  }
-
-  /** Every other tileable window on the dragged screen, grouped by workspace. */
-  private previewOthers(tracked: TrackedWindow): Map<number, TilerWindow[]> {
-    const map = new Map<number, TilerWindow[]>();
-    const count = global.workspace_manager.get_n_workspaces();
-    for (let workspace = 0; workspace < count; workspace++) {
-      const list: TilerWindow[] = [];
-      for (const other of this.tileables(workspace)) {
-        if (other.id === tracked.id) continue;
-        if (other.surface.screenId !== tracked.surface.screenId) continue;
-        list.push(this.dragTilerWindow(other));
-      }
-      map.set(workspace, list);
-    }
-    return map;
-  }
-
-  /** The direction a drop arrived from, from the plane it started on (§3/§6). */
-  private dropFrom(tracked: TrackedWindow): 'left' | 'right' | 'above' | 'below' | null {
-    if (tracked.surface.screenId !== this.dragStartScreen) {
-      const from = this.screenFor(this.dragStartScreen);
-      const to = this.screenFor(tracked.surface.screenId);
-      if (from !== null && to !== null) {
-        if (to.geometry.x > from.geometry.x) return 'left';
-        if (to.geometry.x < from.geometry.x) return 'right';
-        if (to.geometry.y > from.geometry.y) return 'above';
-        if (to.geometry.y < from.geometry.y) return 'below';
-      }
-    }
-    if (tracked.surface.workspaceId !== this.dragStartWorkspace) {
-      return tracked.surface.workspaceId > this.dragStartWorkspace ? 'left' : 'right';
-    }
-    return null;
-  }
-
-  /** A visible managed window on the drop's plane whose rect the drop crosses. */
-  private crossedWindow(tracked: TrackedWindow): number | null {
-    const rect = tracked.surface.frame;
-    let best: number | null = null;
-    let bestOverlap = 0;
-    for (const other of this.windows.values()) {
-      if (other.id === tracked.id) continue;
-      if (other.surface.workspaceId !== tracked.surface.workspaceId) continue;
-      if (other.surface.screenId !== tracked.surface.screenId) continue;
-      if (other.surface.flags.minimized) continue;
-      if (!this.classify(other).tileable) continue;
-      const overlap = this.overlapArea(rect, other.surface.frame);
-      if (overlap > bestOverlap) {
-        bestOverlap = overlap;
-        best = other.id;
-      }
-    }
-    return best;
-  }
-
-  /** Any genuine overlap of two rects, with a couple of pixels of slack. */
-  private overlaps(a: Rect, b: Rect): boolean {
-    return this.overlapArea(a, b) > 4;
-  }
-
-  private overlapArea(a: Rect, b: Rect): number {
-    const x = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x) - 2);
-    const y = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y) - 2);
-    return x * y;
-  }
-
-  /** Apply the pure drop decision through Mutter. */
-  private applyDropResult(
-    tracked: TrackedWindow,
-    result: ReturnType<typeof dropPlacement>,
-  ): void {
-    const workspaceChanged = result.workspace !== tracked.surface.workspaceId;
-    // §13: a drop is a user move, so it is undoable; capture the origin first.
-    this.captureChange([tracked.id]);
-    if (workspaceChanged) this.workspaces.moveWindow(tracked, result.workspace);
-    switch (result.kind) {
-      case 'slot':
-        this.pinSlots(result.workspace, tracked, result.slot);
-        this.unmaximizeOccupants(result.workspace, tracked.id);
-        break;
-      case 'maximize':
-        this.deps.tiling.noteSelfApply();
-        this.deps.host.maximize(tracked.id);
-        break;
-      case 'swap': {
-        const withWin = this.windows.get(result.with);
-        if (withWin !== undefined) this.applySwapIntent(tracked, withWin);
-        break;
-      }
-      case 'float':
-        this.floatWindow(tracked);
-        break;
-      default:
-        break;
-    }
-    this.signatures.clearAll();
-    this.scheduleReconcile('drop');
   }
 
   /**
