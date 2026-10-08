@@ -97,6 +97,43 @@ describe('EventQueue', () => {
     expect(q.has('aims')).toBe(false);
   });
 
+  it('forgets a key after a drain', () => {
+    const q = new EventQueue();
+    q.push(2, 'a', 'x');
+    expect(q.has('a')).toBe(true);
+    q.drain();
+    expect(q.has('a')).toBe(false);
+  });
+
+  it('forgets a key after a clear', () => {
+    const q = new EventQueue();
+    q.push(2, 'a', 'x');
+    q.clear();
+    expect(q.has('a')).toBe(false);
+  });
+
+  it('keeps a key present while the same key sits in two lanes', () => {
+    const q = new EventQueue();
+    q.push(1, 'same', 'feedback');
+    q.push(2, 'same', 'layout');
+    expect(q.has('same')).toBe(true);
+    q.drain();
+    expect(q.has('same')).toBe(false);
+  });
+
+  it('reuses one drain buffer, so a later drain invalidates the earlier result', () => {
+    // The documented ownership contract: the array is valid until the next
+    // drain. `session.runDrain` iterates it synchronously and drops it.
+    const q = new EventQueue();
+    q.push(2, 'a', 'x');
+    const first = q.drain();
+    expect(first.map((e) => e.key)).toEqual(['a']);
+    q.push(2, 'b', 'y');
+    const second = q.drain();
+    expect(second).toBe(first);
+    expect(second.map((e) => e.key)).toEqual(['b']);
+  });
+
   it('stamps each event from the injected clock', () => {
     let now = 1000;
     const q = new EventQueue(() => now);

@@ -60,6 +60,15 @@ describe('pickDirectional', () => {
   it('ignores candidates behind the current window', () => {
     expect(pickDirectional(right, [ids.left], 'right')).toBeNull();
   });
+
+  it('breaks an equal-distance tie by candidate order', () => {
+    const current = rect(0, 0, 100, 100);
+    const first = { id: 21, rect: rect(150, 0, 100, 100) };
+    const second = { id: 22, rect: rect(150, 0, 100, 100) };
+    // Same distance and both overlap: the first one encountered wins.
+    expect(pickDirectional(current, [first, second], 'right')).toBe(21);
+    expect(pickDirectional(current, [second, first], 'right')).toBe(22);
+  });
 });
 
 describe('cycleOrder — the focus cycle (§6/§17)', () => {
@@ -137,5 +146,17 @@ describe('cycleOrder — the focus cycle (§6/§17)', () => {
 
   it('starts at the first entry when the current window is not in the cycle', () => {
     expect(cycleOrder(99, [managed(1, 0), managed(2, 1)])).toBe(1);
+  });
+
+  it('treats a position difference within 1px as a tie, then uses the id', () => {
+    // x differs by 0.5px, so position does not decide; the stable id does.
+    const entries = [float(2, 0.5, 0, 0), float(1, 0, 0, 0)];
+    expect(cycleSequence(entries)).toEqual([1, 2]);
+  });
+
+  it('orders floats by position once the gap exceeds the 1px tolerance', () => {
+    // 5px apart: position decides before the stacking order that favours 1.
+    const entries = [float(1, 5, 0, 0), float(2, 0, 0, 9)];
+    expect(cycleSequence(entries)).toEqual([2, 1]);
   });
 });

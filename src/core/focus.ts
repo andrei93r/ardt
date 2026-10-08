@@ -43,6 +43,12 @@ export interface CycleEntry {
   minimized?: boolean;
 }
 
+/**
+ * The rect a float without one compares as. Shared so the sort comparator does
+ * not allocate a fresh literal on every call for every rect-less entry.
+ */
+const ORIGIN_RECT: Rect = { x: 0, y: 0, width: 0, height: 0 };
+
 function compareCycle(a: CycleEntry, b: CycleEntry): number {
   if (a.kind !== b.kind) return a.kind === 'managed' ? -1 : 1;
   if (a.kind === 'managed') {
@@ -51,8 +57,8 @@ function compareCycle(a: CycleEntry, b: CycleEntry): number {
     if (sa !== sb) return sa - sb;
     return a.id - b.id;
   }
-  const ra = a.rect ?? { x: 0, y: 0, width: 0, height: 0 };
-  const rb = b.rect ?? { x: 0, y: 0, width: 0, height: 0 };
+  const ra = a.rect ?? ORIGIN_RECT;
+  const rb = b.rect ?? ORIGIN_RECT;
   const dx = ra.x - rb.x;
   if (Math.abs(dx) > 1) return dx;
   const dy = ra.y - rb.y;
@@ -73,7 +79,18 @@ function compareCycle(a: CycleEntry, b: CycleEntry): number {
  * that focusing a float (which raises it) cannot re-order the lap in flight.
  */
 export function cycleSequence(entries: readonly CycleEntry[]): number[] {
-  return entries.filter((entry) => entry.minimized !== true).sort(compareCycle).map((entry) => entry.id);
+  // One pass to drop the minimized entries, one in-place sort, one pass to
+  // project the ids. That removes the filter/map callback allocations and the
+  // intermediate array `Array.prototype.map` would build; the order (position
+  // within 1px, then stacking, then id) is unchanged.
+  const live: CycleEntry[] = [];
+  for (const entry of entries) {
+    if (entry.minimized !== true) live.push(entry);
+  }
+  live.sort(compareCycle);
+  const ids: number[] = [];
+  for (const entry of live) ids.push(entry.id);
+  return ids;
 }
 
 /**
@@ -105,31 +122,41 @@ export function pickDirectional(
   direction: FocusDirection,
 ): number | null {
   const horizontal = direction === 'left' || direction === 'right';
-  const pick = (requireOverlap: boolean): number | null => {
-    let best: number | null = null;
-    let bestDistance = Number.POSITIVE_INFINITY;
-    for (const candidate of candidates) {
-      const q = candidate.rect;
-      const along = horizontal
-        ? direction === 'left'
-          ? current.x - (q.x + q.width)
-          : q.x - (current.x + current.width)
-        : direction === 'up'
-          ? current.y - (q.y + q.height)
-          : q.y - (current.y + current.height);
-      if (along < -1) continue;
-      if (requireOverlap) {
-        const overlap = horizontal
-          ? Math.min(current.y + current.height, q.y + q.height) - Math.max(current.y, q.y)
-          : Math.min(current.x + current.width, q.x + q.width) - Math.max(current.x, q.x);
-        if (overlap <= 0) continue;
-      }
-      if (along < bestDistance) {
-        bestDistance = along;
-        best = candidate.id;
+  // left/up measure from the far edge of `current`, right/down from the near
+  // edge, so a single flag replaces the nested ternaries per candidate.
+  const backwards = direction === 'left' || direction === 'up';
+  // One pass tracks both answers the two passes used to compute separately: the
+  // nearest overlapping candidate (the preferred one) and the nearest candidate
+  // overall (the fallback). No closure is allocated per call.
+  let best: number | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let overlapBest: number | null = null;
+  let overlapDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    const q = candidate.rect;
+    const along = horizontal
+      ? backwards
+        ? current.x - (q.x + q.width)
+        : q.x - (current.x + current.width)
+      : backwards
+        ? current.y - (q.y + q.height)
+        : q.y - (current.y + current.height);
+    if (along < -1) continue;
+    if (along < bestDistance) {
+      bestDistance = along;
+      best = candidate.id;
+    }
+    // Only an `along` that can beat the current overlapping best needs the
+    // overlap test; everything else can never win it.
+    if (along < overlapDistance) {
+      const overlap = horizontal
+        ? Math.min(current.y + current.height, q.y + q.height) - Math.max(current.y, q.y)
+        : Math.min(current.x + current.width, q.x + q.width) - Math.max(current.x, q.x);
+      if (overlap > 0) {
+        overlapDistance = along;
+        overlapBest = candidate.id;
       }
     }
-    return best;
-  };
-  return pick(true) ?? pick(false);
+  }
+  return overlapBest ?? best;
 }

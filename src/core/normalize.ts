@@ -71,6 +71,15 @@ export function rectArea(rect: Rect): number {
 }
 
 /**
+ * Ranking comparator: most visible surface first, then leftmost, then id, so
+ * ties are deterministic. One definition replaces the two inline copies the
+ * dominant and pair branches used to carry.
+ */
+function byVisibleThenPosition(a: NormalizeWindow, b: NormalizeWindow): number {
+  return b.visibleArea - a.visibleArea || a.rect.x - b.rect.x || a.id - b.id;
+}
+
+/**
  * The normalisation decision for one workspace. `windows` may contain floats,
  * fullscreen windows and dialogs; they are ignored, never minimised.
  */
@@ -79,38 +88,52 @@ export function normalizePlan(
   area: Rect,
   threshold: number = DOMINANCE_THRESHOLD,
 ): NormalizeDecision {
-  const managed = windows.filter((win) => win.managed && !win.floating && !win.fullscreen);
+  // One pass builds the managed set. The dominant branch below needs no further
+  // copy: a single scan finds its top, and the pair branch sorts this array in
+  // place (safe — the sorted order is only consumed there).
+  const managed: NormalizeWindow[] = [];
+  for (const win of windows) {
+    if (win.managed && !win.floating && !win.fullscreen) managed.push(win);
+  }
   if (managed.length === 0) return emptyDecision('none');
   if (managed.length === 1) return { ...emptyDecision('lone'), maximize: [managed[0].id] };
 
   const total = rectArea(area);
-  const dominant = total > 0 ? managed.filter((win) => win.visibleArea >= threshold * total) : [];
-  if (dominant.length > 0) {
-    const top = [...dominant].sort(
-      (a, b) => b.visibleArea - a.visibleArea || a.rect.x - b.rect.x || a.id - b.id,
-    )[0];
-    return {
-      ...emptyDecision('dominant'),
-      maximize: [top.id],
-      minimize: managed.filter((win) => win.id !== top.id).map((win) => win.id),
-    };
+  // The ranking's first element, found without sorting. Ties keep the earliest
+  // index, matching a stable sort.
+  let top = managed[0];
+  for (let i = 1; i < managed.length; i += 1) {
+    if (byVisibleThenPosition(managed[i], top) < 0) top = managed[i];
+  }
+
+  // The top-ranked entry has the maximum visible surface, so dominance exists
+  // exactly when it qualifies; when it does, it is the entry the old sort
+  // picked. The rest are minimised in their original order.
+  if (total > 0 && top.visibleArea >= threshold * total) {
+    const id = top.id;
+    const minimize: number[] = [];
+    for (const win of managed) if (win.id !== id) minimize.push(win.id);
+    return { ...emptyDecision('dominant'), maximize: [id], minimize };
   }
 
   // The two with the most visible surface become the pair; the leftmost takes
   // the left slot. Ties on surface fall back to position, then id, so the
   // decision is deterministic.
-  const ranked = [...managed].sort(
-    (a, b) => b.visibleArea - a.visibleArea || a.rect.x - b.rect.x || a.id - b.id,
-  );
-  const pair = ranked.slice(0, 2);
-  const rest = ranked.slice(2).map((win) => win.id);
-  const leftmost = [...pair].sort((a, b) => a.rect.x - b.rect.x || a.id - b.id);
+  managed.sort(byVisibleThenPosition);
+  const first = managed[0];
+  const second = managed[1];
+  const minimize: number[] = [];
+  for (let i = 2; i < managed.length; i += 1) minimize.push(managed[i].id);
+  const leftFirst =
+    first.rect.x < second.rect.x || (first.rect.x === second.rect.x && first.id < second.id);
+  const left = leftFirst ? first : second;
+  const right = leftFirst ? second : first;
   return {
     ...emptyDecision('pair'),
-    minimize: rest,
+    minimize,
     slots: [
-      { id: leftmost[0].id, slot: 0 },
-      { id: leftmost[1].id, slot: 1 },
+      { id: left.id, slot: 0 },
+      { id: right.id, slot: 1 },
     ],
   };
 }

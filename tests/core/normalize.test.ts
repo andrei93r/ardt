@@ -5,7 +5,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { DOMINANCE_THRESHOLD, normalizePlan, rectArea } from '../../src/core/normalize.js';
-import type { NormalizeWindow } from '../../src/core/normalize.js';
+import type { NormalizeDecision, NormalizeWindow } from '../../src/core/normalize.js';
+import type { Rect } from '../../src/core/types.js';
 import { rect } from './helpers.js';
 
 const area = rect(0, 0, 1000, 800); // 800 000 px²
@@ -107,5 +108,115 @@ describe('normalizePlan (§20 enable-time normalisation)', () => {
 
   it('rectArea is never negative', () => {
     expect(rectArea(rect(0, 0, -5, 5))).toBe(0);
+  });
+});
+
+/**
+ * A literal transcription of the pre-optimisation `normalizePlan` body
+ * (filter + sorts + copies). It is the behaviour authority: the tests below
+ * assert the rewritten single-scan/single-sort version produces byte-identical
+ * decisions, including on ties and duplicate ids.
+ */
+function referenceNormalize(
+  windows: readonly NormalizeWindow[],
+  area: Rect,
+  threshold: number = DOMINANCE_THRESHOLD,
+): NormalizeDecision {
+  const managed = windows.filter((win) => win.managed && !win.floating && !win.fullscreen);
+  if (managed.length === 0) return { kind: 'none', maximize: [], minimize: [], slots: [] };
+  if (managed.length === 1) return { kind: 'lone', maximize: [managed[0].id], minimize: [], slots: [] };
+
+  const total = rectArea(area);
+  const dominant = total > 0 ? managed.filter((win) => win.visibleArea >= threshold * total) : [];
+  if (dominant.length > 0) {
+    const top = [...dominant].sort(
+      (a, b) => b.visibleArea - a.visibleArea || a.rect.x - b.rect.x || a.id - b.id,
+    )[0];
+    return {
+      kind: 'dominant',
+      maximize: [top.id],
+      minimize: managed.filter((win) => win.id !== top.id).map((win) => win.id),
+      slots: [],
+    };
+  }
+
+  const ranked = [...managed].sort(
+    (a, b) => b.visibleArea - a.visibleArea || a.rect.x - b.rect.x || a.id - b.id,
+  );
+  const pair = ranked.slice(0, 2);
+  const rest = ranked.slice(2).map((win) => win.id);
+  const leftmost = [...pair].sort((a, b) => a.rect.x - b.rect.x || a.id - b.id);
+  return {
+    kind: 'pair',
+    maximize: [],
+    minimize: rest,
+    slots: [
+      { id: leftmost[0].id, slot: 0 },
+      { id: leftmost[1].id, slot: 1 },
+    ],
+  };
+}
+
+function lcg(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+}
+
+describe('normalizePlan — rewritten scan matches the original', () => {
+  it('breaks a dominant tie by leftmost position, then id', () => {
+    const total = rectArea(area);
+    const covering = (id: number, x: number): NormalizeWindow => {
+      const w = win(id, x, 0, 200, 200);
+      w.visibleArea = total; // every candidate dominates
+      return w;
+    };
+    expect(normalizePlan([covering(5, 500), covering(6, 100)], area).maximize).toEqual([6]);
+    expect(normalizePlan([covering(9, 100), covering(3, 100)], area).maximize).toEqual([3]);
+  });
+
+  it('breaks a pair tie on surface by position, then id', () => {
+    const a = win(1, 100, 0, 200, 200);
+    const b = win(2, 50, 0, 200, 200);
+    const c = win(3, 400, 0, 100, 100);
+    const decision = normalizePlan([a, b, c], area);
+    expect(decision.slots).toEqual([
+      { id: 2, slot: 0 },
+      { id: 1, slot: 1 },
+    ]);
+    expect(decision.minimize).toEqual([3]);
+  });
+
+  it('breaks a pair tie on position by the stable id', () => {
+    const a = win(7, 0, 0, 200, 200);
+    const b = win(2, 0, 0, 200, 200);
+    const c = win(9, 400, 0, 100, 100);
+    expect(normalizePlan([a, b, c], area).slots).toEqual([
+      { id: 2, slot: 0 },
+      { id: 7, slot: 1 },
+    ]);
+  });
+
+  it('matches the original filter/sort implementation on 1000 random inputs', () => {
+    const rand = lcg(0x1234abcd);
+    const pick = (n: number): number => Math.floor(rand() * n);
+    for (let iter = 0; iter < 1000; iter += 1) {
+      const count = pick(6);
+      const windows: NormalizeWindow[] = [];
+      for (let i = 0; i < count; i += 1) {
+        windows.push({
+          id: pick(5), // duplicate ids on purpose
+          rect: rect(pick(4) * 250, 0, 1 + pick(4) * 250, 1 + pick(4) * 200),
+          visibleArea: pick(6) * 100000, // coarse buckets force ties
+          managed: rand() > 0.25,
+          fullscreen: rand() > 0.8,
+          floating: rand() > 0.8,
+        });
+      }
+      const threshold = rand() > 0.5 ? DOMINANCE_THRESHOLD : 0.4;
+      expect(normalizePlan(windows, area, threshold)).toEqual(referenceNormalize(windows, area, threshold));
+    }
   });
 });
