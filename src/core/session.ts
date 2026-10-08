@@ -11,7 +11,11 @@
 export type SessionMode = 'user' | 'unlock-dialog' | 'screen-sharing';
 
 export interface SessionEffects {
-  /** True when tiling, retiles and the scan tick must stop. */
+  /**
+   * True when tiling, retiles and the drain must stop: a locked session or a
+   * manual pause (`isPaused`). The scan tick is governed separately by
+   * `scanTickRunning`, so the two fields can disagree during a manual pause.
+   */
   paused: boolean;
   /** Whether the border may be shown (before other suppressions). */
   indicatorVisible: boolean;
@@ -37,15 +41,23 @@ export class SessionMachine {
    * existing pause consumer (tiling, the drain, the indicator) sees it.
    */
   private manualPaused = false;
+  /**
+   * A stable, frozen snapshot of the two public fields. The getter returns this
+   * object by reference, so a poll does not allocate per read; every transition
+   * that can change it (`setMode`, `setManualPause`) rebuilds it once.
+   */
+  private stateView: SessionState;
 
   constructor(mode: SessionMode = 'user') {
     this.mode = mode;
+    this.stateView = Object.freeze({ mode, paused: this.isPaused });
   }
 
   get state(): SessionState {
-    return { mode: this.mode, paused: this.isPaused };
+    return this.stateView;
   }
 
+  /** The one pause predicate: a locked session or a manual user pause. */
   get isPaused(): boolean {
     return this.mode === 'unlock-dialog' || this.manualPaused;
   }
@@ -57,7 +69,9 @@ export class SessionMachine {
 
   /** Set the user-requested pause. Idempotent; never touches the session mode. */
   setManualPause(paused: boolean): void {
+    if (this.manualPaused === paused) return;
     this.manualPaused = paused;
+    this.refreshStateView();
   }
 
   get indicatorVisible(): boolean {
@@ -74,8 +88,11 @@ export class SessionMachine {
     this.mode = mode;
     const retileOnResume = previous === 'unlock-dialog' && mode === 'user' && !this.retilePending;
     this.retilePending = retileOnResume;
+    this.refreshStateView();
     return {
-      paused: mode === 'unlock-dialog',
+      // The same combined predicate `state.paused` exposes, so the two answers
+      // cannot diverge: a manual pause keeps tiling stopped across a transition.
+      paused: this.isPaused,
       indicatorVisible: mode === 'user',
       indicatorSuppression: mode === 'unlock-dialog' ? 'pause' : mode === 'screen-sharing' ? 'sharing' : null,
       scanTickRunning: mode !== 'unlock-dialog',
@@ -88,5 +105,10 @@ export class SessionMachine {
     const pending = this.retilePending;
     this.retilePending = false;
     return pending;
+  }
+
+  /** Rebuild the frozen `state` snapshot after a field it exposes changed. */
+  private refreshStateView(): void {
+    this.stateView = Object.freeze({ mode: this.mode, paused: this.isPaused });
   }
 }

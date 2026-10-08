@@ -53,6 +53,39 @@ describe('SessionMachine', () => {
     expect(session.setMode('user').retileOnResume).toBe(false);
   });
 
+  it('answers `paused` the same way through setMode and state', () => {
+    const session = new SessionMachine();
+    session.setManualPause(true);
+    // The effects agree with state.paused: a manual pause keeps tiling stopped
+    // across a transition, even into a mode that is not itself a pause.
+    expect(session.setMode('screen-sharing').paused).toBe(true);
+    expect(session.state).toEqual({ mode: 'screen-sharing', paused: true });
+    session.setManualPause(false);
+    expect(session.setMode('screen-sharing').paused).toBe(false);
+  });
+
+  it('returns a stable frozen state view until a transition changes it', () => {
+    const session = new SessionMachine();
+    const initial = session.state;
+    expect(session.state).toBe(initial);
+    expect(Object.isFrozen(initial)).toBe(true);
+
+    session.setMode('unlock-dialog');
+    expect(session.state).not.toBe(initial);
+    expect(session.state).toEqual({ mode: 'unlock-dialog', paused: true });
+
+    const locked = session.state;
+    session.setManualPause(true); // already paused by the mode, but the field flipped
+    const pausedBoth = session.state;
+    session.setManualPause(true); // idempotent: no new view
+    expect(session.state).toBe(pausedBoth);
+    expect(session.state).toEqual({ mode: 'unlock-dialog', paused: true });
+
+    session.setMode('user');
+    expect(session.state).not.toBe(locked);
+    expect(session.state).toEqual({ mode: 'user', paused: true });
+  });
+
   it('folds a manual pause into the one predicate without touching the mode', () => {
     const session = new SessionMachine();
     session.setManualPause(true);
