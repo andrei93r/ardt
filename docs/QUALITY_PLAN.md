@@ -29,10 +29,10 @@
 | --- | --- | --- |
 | P0 | Land ready refactor + repair the green gate | **done** (gate fixes on `perf-gnome`; nested smoke pending) |
 | P1 | Correctness sweep | **done** — 1.1–1.9, 1.11–1.14 committed; 1.10 done for session.ts (injection/parseSpawnEnv leftovers in extension.ts) |
-| P2 | Main-loop & allocation diet | mostly done — 2.1–2.6, 2.8, 2.11 committed; 2.7 (sweep gating, measure first) and 2.9 (profiler) remain |
-| P3 | Zero `any` | **done** — `src` has zero explicit `any` (every GJS namespace in `gi.d.ts` typed), events/compat/prefs/extension/session typed, tests type-checked, `no-explicit-any` enforced as error. Residual: type-aware `no-floating-promises`, one documented dispatch `as unknown as` |
-| P4 | Decomposition & deletion | in progress — dead-code sweep, JSONL unification, trigger table, helper dedupe and split waves 1–2 committed; wave 3 (display/retiler/drag) in flight; settings descriptor (P6b) remains |
-| P5 | Guardrails (CI/tests/docs) | mostly done — check:types, coverage guard, shellcheck, knip, ARCHITECTURE.md, docs hygiene committed; generated fuzz vectors are prose scenarios with no executable reducer (reported), TESTING A1–A77 table stale |
+| P2 | Main-loop & allocation diet | **done** except 2.7 — gating the coherence sweep is deliberately deferred until a live nested measurement (the plan's own "measure first" rule); the 2.9 profiler is in, its churn-workload test remains |
+| P3 | Zero `any` | **done** — zero explicit `any` in `src` including `gi.d.ts`, tests type-checked, `no-explicit-any` and type-aware `no-floating-promises` enforced; one documented D-Bus dispatch `as unknown as` |
+| P4 | Decomposition & deletion | mostly done — split waves 1–3 committed (`session.ts` 4,083 → 1,875), trigger table, JSONL unification, helper dedupe, dead files/exports cleared under knip; settings descriptor (P6b) remains |
+| P5 | Guardrails (CI/tests/docs) | done except two documented blockers — generated fuzz vectors are prose scenarios with no executable reducer (reported, no fake test); `TESTING.md`'s A1–A77 table is stale |
 
 ---
 
