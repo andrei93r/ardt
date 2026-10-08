@@ -267,6 +267,7 @@ export class Retiler {
         const only = tileables[0];
         if (!compat.isMaximized(only.win)) {
           this.deps.tiling.noteSelfApply();
+          this.deps.tiling.noteSelfMaximize();
           this.deps.host.maximize(only.id);
         }
         continue;
@@ -411,6 +412,7 @@ export class Retiler {
         this.maximizeInPlace(tracked);
       } else {
         this.deps.tiling.noteSelfApply();
+        this.deps.tiling.noteSelfMaximize();
         this.deps.host.maximize(id);
       }
     } else if (placement.slot !== undefined) {
@@ -437,6 +439,7 @@ export class Retiler {
       if (other.surface.screenId !== tracked.surface.screenId) continue;
       this.deps.host.minimize(other.id);
     }
+    this.deps.tiling.noteSelfMaximize();
     this.deps.host.maximize(tracked.id);
   }
 
@@ -572,6 +575,7 @@ export class Retiler {
         const only = tileables[0];
         if (!compat.isMaximized(only.win)) {
           this.deps.tiling.noteSelfApply();
+          this.deps.tiling.noteSelfMaximize();
           this.deps.host.maximize(only.id);
           this.deps.history.log('tile', { id: only.id, reason: 'lone-maximize' });
         }
@@ -616,6 +620,7 @@ export class Retiler {
     // law re-maximizes it rather than parking it minimized.
     if (placement.workspace === own && placement.minimize?.includes(tracked.id) === true) {
       this.deps.tiling.noteSelfApply();
+      this.deps.tiling.noteSelfMaximize();
       this.deps.host.maximize(tracked.id);
       this.deps.scheduleReconcile('unmaximize-lone');
       return;

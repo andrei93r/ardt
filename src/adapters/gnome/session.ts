@@ -793,6 +793,7 @@ export class WindowSession {
             const tracked = this.windows.get(id);
             if (tracked === undefined || compat.isMaximized(tracked.win)) continue;
             this.deps.tiling.noteSelfApply();
+            this.deps.tiling.noteSelfMaximize();
             this.deps.host.maximize(id);
             changed = true;
           }
@@ -1769,14 +1770,11 @@ export class WindowSession {
     // or the tiler's own unmaximize in `applyFrame`) must not drive the ladder.
     if (compat.isMaximized(tracked.win)) {
       // A maximize we caused — the lone law, a routed arrival, the coherence
-      // sweep — is not a user request. Without this the drain's §4 property
-      // reads our own maximize as the user's and exiles a window that was only
-      // being tiled (S05: a sweep that saw one member of a forming pair while
-      // its sibling animated maximized it, then exiled it to its own workspace).
-      // Our own workspace moves call `noteSelfApply`, so they are covered here
-      // too; a per-window workspace echo would additionally swallow a real user
-      // maximize that follows a move (A159).
-      if (Date.now() - this.deps.tiling.lastApplyAtMs < SELF_APPLY_MS) return;
+      // sweep, a display replay — is not a user request, so it must not drive
+      // the §4 exile ladder. Only *maximizes* mark this clock: a tile apply
+      // must never swallow a real user maximize (A04/S04; the previous
+      // `lastApplyAtMs` guard did exactly that).
+      if (Date.now() - this.deps.tiling.selfMaximizeAtMs < SELF_APPLY_MS) return;
       tracked.maximizeRequested = true;
       this.scheduleReconcile('maximize');
       return;

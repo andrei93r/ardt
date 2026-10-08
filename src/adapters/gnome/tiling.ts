@@ -65,6 +65,8 @@ export class Tiling {
    * load cannot teach a bogus minimum (A52).
    */
   private lastAppliedAtMs = 0;
+  /** When the last policy maximize went out (see `noteSelfMaximize`). */
+  private lastSelfMaximizeAtMs = 0;
   /** Diagnostics: plans that actually moved at least one window. */
   private appliedPlans = 0;
 
@@ -82,6 +84,20 @@ export class Tiling {
   /** Mark a state change we are about to make (maximize/unmaximize/workspace). */
   noteSelfApply(): void {
     this.lastAppliedAtMs = Date.now();
+  }
+
+  /**
+   * Mark a maximize *we* are about to make. The signal handler suppresses a
+   * maximize only within this window — a tile apply (`noteSelfApply`) must never
+   * swallow a real user maximize (A04/S04).
+   */
+  noteSelfMaximize(): void {
+    this.lastSelfMaximizeAtMs = Date.now();
+  }
+
+  /** When the last policy maximize was applied. */
+  get selfMaximizeAtMs(): number {
+    return this.lastSelfMaximizeAtMs;
   }
 
   /**

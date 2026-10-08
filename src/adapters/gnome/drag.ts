@@ -772,6 +772,7 @@ export class DragController {
         break;
       case 'maximize':
         this.deps.tiling.noteSelfApply();
+        this.deps.tiling.noteSelfMaximize();
         this.deps.host.maximize(tracked.id);
         break;
       case 'swap': {

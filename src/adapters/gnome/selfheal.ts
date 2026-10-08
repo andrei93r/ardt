@@ -332,6 +332,7 @@ export class SelfHeal {
             this.coherenceRetryAt.set(only.id, Date.now() + COHERENCE_RETRY_MS);
             only.stubborn = false;
             this.host.tiling.noteSelfApply();
+            this.host.tiling.noteSelfMaximize();
             this.host.host.maximize(only.id);
             this.host.diagnostics.noteCoherenceFix();
             this.host.history.log('tile', { reason: 'coherence-maximize', id: only.id, workspaceId: index });

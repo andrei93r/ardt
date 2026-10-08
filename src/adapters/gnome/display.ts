@@ -221,6 +221,7 @@ export class DisplayController {
     }
     if (move.maximize === true) {
       this.host.tiling.noteSelfApply();
+      this.host.tiling.noteSelfMaximize();
       this.host.host.maximize(tracked.id);
     } else if (move.slot !== undefined) {
       tracked.pendingSlot = move.slot;
