@@ -147,12 +147,16 @@ export function clamp(value: number, min: number, max: number): number {
  * Keep a rectangle inside an area: the pure geometry behind "windows stay on
  * the screen".
  *
- * Returns `rect` unchanged (the same object, so the hot path allocates nothing)
- * when it already lies fully inside `area` — inside is inclusive, so a window
- * touching every edge is not moved. Otherwise the rectangle is first shrunk to
- * the area when it is larger than it, then moved the smallest distance that
- * puts it fully inside. The result has integer coordinates and never a negative
- * width or height; an empty area yields an empty rectangle at the area origin.
+ * When it already lies fully inside `area` — inside is inclusive, so a window
+ * touching every edge is not moved — a fresh copy with the same coordinates is
+ * returned, so a caller mutating the result can never mutate its input. The
+ * copy keeps the input's coordinates even when they are fractional; only the
+ * moved branch guarantees integers. Callers never mutate the argument (the one
+ * adapter site reads it and compares fields), so this is a safety fix, not a
+ * hot-path concern. Otherwise the rectangle is first shrunk to the area when it
+ * is larger than it, then moved the smallest distance that puts it fully
+ * inside. The moved result has integer coordinates and never a negative width
+ * or height; an empty area yields an empty rectangle at the area origin.
  */
 export function clampRectToArea(rect: Rect, area: Rect): Rect {
   const inside =
@@ -162,7 +166,7 @@ export function clampRectToArea(rect: Rect, area: Rect): Rect {
     rect.y >= area.y &&
     rect.x + rect.width <= area.x + area.width &&
     rect.y + rect.height <= area.y + area.height;
-  if (inside) return rect;
+  if (inside) return { ...rect };
   const width = Math.max(0, Math.min(rect.width, area.width));
   const height = Math.max(0, Math.min(rect.height, area.height));
   return {

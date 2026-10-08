@@ -10,14 +10,24 @@ import type { Rect } from '../../src/core/types.js';
 const area: Rect = { x: 0, y: 0, width: 1280, height: 800 };
 
 describe('clampRectToArea', () => {
-  it('returns the rect unchanged when it is already inside', () => {
+  it('returns a fresh copy with unchanged coordinates when already inside', () => {
     const rect: Rect = { x: 100, y: 100, width: 200, height: 150 };
-    expect(clampRectToArea(rect, area)).toBe(rect);
+    const clamped = clampRectToArea(rect, area);
+    expect(clamped).toEqual(rect);
+    expect(clamped).not.toBe(rect);
   });
 
-  it('returns a rect touching every edge unchanged (inside is inclusive)', () => {
+  it('returns a copy for a rect touching every edge (inside is inclusive)', () => {
     const rect: Rect = { x: 0, y: 0, width: 1280, height: 800 };
-    expect(clampRectToArea(rect, area)).toBe(rect);
+    const clamped = clampRectToArea(rect, area);
+    expect(clamped).toEqual(rect);
+    expect(clamped).not.toBe(rect);
+  });
+
+  it('does not alias the input, so mutating the result leaves the input intact', () => {
+    const rect: Rect = { x: 100, y: 100, width: 200, height: 150 };
+    clampRectToArea(rect, area).x = -999;
+    expect(rect.x).toBe(100);
   });
 
   it('moves a window that hangs off the left edge back inside', () => {
