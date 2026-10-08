@@ -9,7 +9,10 @@
  * feeds the pure functions in `core/timing.ts`.
  *
  * The `notify::` handlers here never run policy: they ask for a read-only
- * re-derivation. `resolve()` itself re-reads the OS on every call.
+ * re-derivation. `resolve()` is cached and re-derived lazily on the next read
+ * after a named invalidation (an OS notify signal, a settings change, a screen
+ * change, a new frame sample, or `resetObserved`), so the per-frame callers do
+ * not re-read St properties, GSettings and the screen list on every tick.
  */
 
 import Gio from 'gi://Gio';
@@ -82,11 +85,45 @@ function reducedMotionValue(value: unknown): boolean | null {
   return null;
 }
 
+/**
+ * The nominal refresh rate of a screen, 60 when unknown. Kept free so a caller
+ * that already holds a resolved value (e.g. `effectiveDuration`) can read a
+ * screen without resolving a second time.
+ */
+function refreshRateFrom(timing: ResolvedTiming, screenId: number | undefined): number {
+  if (screenId === undefined) return timing.screens[0]?.refreshRate ?? DEFAULT_REFRESH_RATE;
+  return timing.screens.find((screen) => screen.index === screenId)?.refreshRate ?? DEFAULT_REFRESH_RATE;
+}
+
+/**
+ * The OS readings `resolve()` folds into `ResolvedTiming`. Cached on its own so
+ * a new frame sample (which only changes the observed part) does not force a
+ * re-read of St properties, GSettings, Mutter and the screen list.
+ */
+interface TimingReadings {
+  animationsEnabled: boolean;
+  osAnimationsEnabled: boolean;
+  reducedMotion: boolean;
+  slowDownFactor: number;
+  adaptiveSync: boolean;
+  screens: readonly Screen[];
+}
+
 export class GnomeTiming {
   private readonly stSettings: any;
   private interfaceSettings: any = null;
+  private mutterSettings: any = null;
   private notifyIds: number[] = [];
+  private interfaceChangedId = 0;
+  private mutterChangedId = 0;
   private readonly tracker = new FrameIntervalTracker();
+  /**
+   * OS/screen readings and the value derived from them. Both are `null` when
+   * they must be re-derived; each is dropped by a named event (see each field's
+   * invalidation site), never recomputed per call.
+   */
+  private readingsCache: TimingReadings | null = null;
+  private resolvedCache: ResolvedTiming | null = null;
 
   constructor(private readonly deps: TimingDeps) {
     this.stSettings = safeStSettings();
@@ -107,8 +144,23 @@ export class GnomeTiming {
     }
     try {
       this.interfaceSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
+      // The St properties are the primary source; these keys are the fallback
+      // on a Shell that lacks them, so watch the schema directly rather than
+      // letting a fallback read go stale.
+      this.interfaceChangedId = this.interfaceSettings.connect('changed', () => this.invalidate());
     } catch {
       this.interfaceSettings = null;
+      this.interfaceChangedId = 0;
+    }
+    try {
+      // `deps.adaptiveSync` reads `org.gnome.mutter` on the host; a change to
+      // the experimental-features list has no signal of its own, so this mirror
+      // watch is what drops the cached `adaptiveSync` reading.
+      this.mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
+      this.mutterChangedId = this.mutterSettings.connect('changed', () => this.invalidate());
+    } catch {
+      this.mutterSettings = null;
+      this.mutterChangedId = 0;
     }
   }
 
@@ -123,16 +175,39 @@ export class GnomeTiming {
       }
     }
     this.notifyIds = [];
+    if (this.interfaceSettings !== null && typeof this.interfaceSettings.disconnect === 'function') {
+      try {
+        this.interfaceSettings.disconnect(this.interfaceChangedId);
+      } catch {
+        /* already gone */
+      }
+    }
+    this.interfaceChangedId = 0;
+    if (this.mutterSettings !== null && typeof this.mutterSettings.disconnect === 'function') {
+      try {
+        this.mutterSettings.disconnect(this.mutterChangedId);
+      } catch {
+        /* already gone */
+      }
+    }
+    this.mutterChangedId = 0;
+    this.readingsCache = null;
+    this.resolvedCache = null;
   }
 
-  /** A screen/setting changed: ask for a read-only re-derivation (no policy). */
+  /** A screen/setting changed: drop the cached readings and ask for a re-derivation. */
   invalidate(): void {
+    this.readingsCache = null;
+    this.resolvedCache = null;
     this.deps.onChanged?.();
   }
 
   /** Feed one observed compositor frame interval (ms). Keeps re-measuring. */
   observeFrame(intervalMs: number): boolean {
     if (!this.tracker.observe(intervalMs)) return false;
+    // The observed interval is part of the resolved value, so re-derive that;
+    // the OS/screen readings did not change, so they stay cached.
+    this.resolvedCache = null;
     this.deps.onChanged?.();
     return true;
   }
@@ -144,34 +219,54 @@ export class GnomeTiming {
   /** Drop measured intervals: a screen/topology change makes them stale. */
   resetObserved(): void {
     this.tracker.reset();
+    this.resolvedCache = null;
   }
 
   /**
-   * The resolved timing property. Deliberately stateless: the OS settings and
-   * the screen list are re-read on every call, so a change is followed even if
-   * a `notify::` signal is missed. The `notify::` handlers only ask for a
-   * read-only re-derivation, never run policy.
+   * The resolved timing property, rebuilt lazily after one of the named
+   * invalidations above. Frozen so a caller cannot mutate the shared value.
    */
   resolve(): ResolvedTiming {
-    return resolveTiming(
-      this.deps.screens(),
-      this.animationsEnabled(),
-      this.slowDownFactor(),
+    if (this.resolvedCache !== null) return this.resolvedCache;
+    const readings = this.readings();
+    return (this.resolvedCache = freezeResolved(resolveTiming(
+      readings.screens,
+      readings.animationsEnabled,
+      readings.slowDownFactor,
       this.tracker.summary(),
-      this.deps.adaptiveSync?.() === true,
-    );
+      readings.adaptiveSync,
+    )));
+  }
+
+  /** The OS readings behind `resolve()`, re-derived lazily after an invalidation. */
+  private readings(): TimingReadings {
+    if (this.readingsCache !== null) return this.readingsCache;
+    const reducedMotion = this.readReducedMotion();
+    const osAnimationsEnabled = this.readOsAnimationsEnabled(reducedMotion);
+    this.readingsCache = Object.freeze({
+      animationsEnabled: this.deps.animationsDisabled?.() === true ? false : osAnimationsEnabled,
+      osAnimationsEnabled,
+      reducedMotion,
+      slowDownFactor: this.readSlowDownFactor(),
+      adaptiveSync: this.deps.adaptiveSync?.() === true,
+      screens: this.deps.screens(),
+    });
+    return this.readingsCache;
   }
 
   /** `St.Settings.enable_animations`, never overriding an explicit adrt disable. */
   animationsEnabled(): boolean {
-    if (this.deps.animationsDisabled?.() === true) return false;
-    return this.osAnimationsEnabled();
+    return this.readings().animationsEnabled;
   }
 
   /** The OS's own animation state, ignoring adrt's internal `disable-animations`. */
   osAnimationsEnabled(): boolean {
+    return this.readings().osAnimationsEnabled;
+  }
+
+  private readOsAnimationsEnabled(reducedMotion: boolean): boolean {
     // GNOME 51's reduced-motion preference is the strongest signal: no motion.
-    if (this.reducedMotion()) return false;
+    if (reducedMotion) return false;
     const fromSt = booleanProperty(this.stSettings, 'enable_animations');
     if (fromSt !== null) return fromSt;
     try {
@@ -187,6 +282,10 @@ export class GnomeTiming {
    * the schema has one, else false.
    */
   reducedMotion(): boolean {
+    return this.readings().reducedMotion;
+  }
+
+  private readReducedMotion(): boolean {
     for (const name of ['reduced_motion', 'reduced-motion']) {
       const value = reducedMotionValue(rawProperty(this.stSettings, name));
       if (value !== null) return value;
@@ -204,6 +303,10 @@ export class GnomeTiming {
 
   /** `St.Settings.slow_down_factor`, the accessibility slow-down multiplier. */
   slowDownFactor(): number {
+    return this.readings().slowDownFactor;
+  }
+
+  private readSlowDownFactor(): number {
     const fromSt = numberProperty(this.stSettings, 'slow_down_factor');
     if (fromSt !== null) return fromSt;
     try {
@@ -213,15 +316,13 @@ export class GnomeTiming {
     }
   }
 
-  screens(): ScreenTiming[] {
+  screens(): readonly ScreenTiming[] {
     return this.resolve().screens;
   }
 
   /** The nominal Mutter refresh rate of a screen, 60 when unknown. */
   refreshRateFor(screenId: number | undefined): number {
-    const timing = this.resolve();
-    if (screenId === undefined) return timing.screens[0]?.refreshRate ?? DEFAULT_REFRESH_RATE;
-    return timing.screens.find((screen) => screen.index === screenId)?.refreshRate ?? DEFAULT_REFRESH_RATE;
+    return refreshRateFrom(this.resolve(), screenId);
   }
 
   /** The frame interval for a screen; a measured variable interval wins. */
@@ -241,11 +342,13 @@ export class GnomeTiming {
    * screen keeps using its own nominal rate in a mixed setup.
    */
   effectiveDuration(baseMs: number, screenId?: number): number {
+    // One resolve: the per-screen rate is read off the same resolved value, not
+    // through a second `resolve()` (the old `refreshRateFor` call).
     const timing = this.resolve();
     return effectiveDuration(baseMs, {
       animationsEnabled: timing.animationsEnabled,
       slowDownFactor: timing.slowDownFactor,
-      refreshRate: this.refreshRateFor(screenId),
+      refreshRate: refreshRateFrom(timing, screenId),
       observedIntervalMs: timing.adaptiveSync ? timing.observedFrameIntervalMs : null,
     });
   }
@@ -261,7 +364,7 @@ export class GnomeTiming {
     adaptiveSync: boolean;
     variableRefresh: boolean;
     resolvedFrameIntervalMs: number;
-    screens: ScreenTiming[];
+    screens: readonly ScreenTiming[];
   } {
     const timing = this.resolve();
     return {
@@ -277,4 +380,10 @@ export class GnomeTiming {
       screens: timing.screens,
     };
   }
+}
+
+/** Freeze a resolved value and its screen list so callers cannot mutate the cache. */
+function freezeResolved(timing: ResolvedTiming): ResolvedTiming {
+  const screens: ScreenTiming[] = timing.screens.map((screen) => Object.freeze(screen));
+  return Object.freeze({ ...timing, screens: Object.freeze(screens) });
 }

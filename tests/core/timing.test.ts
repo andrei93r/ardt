@@ -131,6 +131,55 @@ describe('FrameIntervalTracker', () => {
     for (let i = 0; i < 4; i++) tracker.observe(8.3);
     expect(tracker.summary().intervalMs).toBeCloseTo(8.3, 3);
   });
+
+  it('reports the exact min/median/max/spread of the window', () => {
+    const even = new FrameIntervalTracker();
+    for (const interval of [30, 10, 20, 40]) even.observe(interval);
+    const evenSummary = even.summary();
+    expect(evenSummary.samples).toBe(4);
+    expect(evenSummary.intervalMs).toBe(25);
+    expect(evenSummary.minMs).toBe(10);
+    expect(evenSummary.maxMs).toBe(40);
+    expect(evenSummary.spread).toBeCloseTo(1.2, 6);
+    expect(evenSummary.variable).toBe(true);
+
+    const odd = new FrameIntervalTracker();
+    for (const interval of [3, 1, 2]) odd.observe(interval);
+    const oddSummary = odd.summary();
+    expect(oddSummary.intervalMs).toBe(2);
+    expect(oddSummary.minMs).toBe(1);
+    expect(oddSummary.maxMs).toBe(3);
+    expect(oddSummary.spread).toBeCloseTo(1, 6);
+    // Fewer than four samples never claims variable refresh.
+    expect(oddSummary.variable).toBe(false);
+  });
+
+  it('invalidates the cached sorted view when a sample is observed', () => {
+    const tracker = new FrameIntervalTracker({ capacity: 4 });
+    for (const interval of [30, 10, 20, 40]) tracker.observe(interval);
+    const first = tracker.summary();
+    expect(first.intervalMs).toBe(25);
+    // Reading again with no new sample returns the same cached result.
+    expect(tracker.summary()).toEqual(first);
+    // One observation evicts the oldest and must be reflected exactly.
+    tracker.observe(5);
+    const after = tracker.summary();
+    expect(after.samples).toBe(4);
+    expect(after.intervalMs).toBe(15);
+    expect(after.minMs).toBe(5);
+    expect(after.maxMs).toBe(40);
+  });
+
+  it('invalidates the cached sorted view on reset', () => {
+    const tracker = new FrameIntervalTracker();
+    tracker.observe(16.7);
+    expect(tracker.summary().intervalMs).toBeCloseTo(16.7, 3);
+    tracker.reset();
+    expect(tracker.summary()).toEqual({ samples: 0, intervalMs: 0, minMs: 0, maxMs: 0, spread: 0, variable: false });
+    // A fresh sample after reset builds a new sorted view.
+    for (const interval of [8, 12]) tracker.observe(interval);
+    expect(tracker.summary().intervalMs).toBe(10);
+  });
 });
 
 describe('effectiveIntervalMs', () => {

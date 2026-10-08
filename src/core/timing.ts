@@ -49,7 +49,8 @@ export interface ScreenTiming {
 export interface ResolvedTiming {
   animationsEnabled: boolean;
   slowDownFactor: number;
-  screens: ScreenTiming[];
+  /** Read-only: callers hold a shared, frozen resolution and must not mutate it. */
+  screens: readonly ScreenTiming[];
   /**
    * The tightest nominal frame interval across every screen. Signal-sampling
    * cadences use it so they are never slower than the fastest fixed display.
@@ -154,6 +155,13 @@ const EMPTY_SUMMARY: FrameIntervalSummary = {
  */
 export class FrameIntervalTracker {
   private readonly window: number[] = [];
+  /**
+   * Sorted view of `window`, rebuilt lazily after an `observe()`/`reset()`.
+   * `summary()` may be read several times between two samples (a resolve and a
+   * diagnostic dump in the same frame), so the copy+sort is paid once per
+   * sample instead of once per read; `null` means "stale, rebuild on next read".
+   */
+  private sorted: number[] | null = null;
   private readonly capacity: number;
   private readonly variableThreshold: number;
 
@@ -168,6 +176,7 @@ export class FrameIntervalTracker {
     if (intervalMs > MAX_FRAME_GAP_MS) return false;
     this.window.push(intervalMs);
     if (this.window.length > this.capacity) this.window.shift();
+    this.sorted = null;
     return true;
   }
 
@@ -177,11 +186,18 @@ export class FrameIntervalTracker {
 
   reset(): void {
     this.window.length = 0;
+    this.sorted = null;
+  }
+
+  /** The window in ascending order, copying and sorting at most once per sample. */
+  private sortedWindow(): number[] {
+    if (this.sorted === null) this.sorted = [...this.window].sort((a, b) => a - b);
+    return this.sorted;
   }
 
   summary(): FrameIntervalSummary {
     if (this.window.length === 0) return { ...EMPTY_SUMMARY };
-    const sorted = [...this.window].sort((a, b) => a - b);
+    const sorted = this.sortedWindow();
     const mid = Math.floor(sorted.length / 2);
     const median = sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
     const min = sorted[0];
