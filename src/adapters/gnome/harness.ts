@@ -96,7 +96,9 @@ function parseSpawnEnv(envJson: string): [string, string][] {
   return out;
 }
 
-interface ExtraHandlers {
+/** Extra test triggers the harness adds on top of the §22 surface. A type
+ * alias for the same implicit-index-signature reason as `DbusHandlers`. */
+type ExtraHandlers = {
   ActivateWindow(id: number): boolean;
   ActivateWorkspace(index: number): boolean;
   ToggleFloat(id: number): boolean;

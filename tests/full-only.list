@@ -140,3 +140,7 @@ S26-app-compatibility
 #   headless form — a documented manual check (tests/MANUAL.md §13), never a
 #   flaky automated one. The decision is covered nested by A155.
 S27-tab-tear-off
+
+# P2.9 dev-gated section profiler: needs trace-enabled and a real resize;
+# full suite only (not in the smoke subset).
+A165-probe-sections

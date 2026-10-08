@@ -2,8 +2,10 @@
 // Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
 // and can maintain this code.
 
-/** Method surface exposed on `org.adrt.Adrt` (§22). JSON payloads are strings. */
-export interface DbusHandlers {
+/** Method surface exposed on `org.adrt.Adrt` (§22). JSON payloads are strings.
+ * A type alias (not an interface) so the reflective dispatch boundary can see
+ * the implicit string index signature without a double cast. */
+export type DbusHandlers = {
   DumpState(): string;
   LookupWindow(id: number): string;
   ListWindows(): string;

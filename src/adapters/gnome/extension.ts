@@ -1394,6 +1394,14 @@ export default class AdrtExtension extends Extension {
       ['history-enabled', () => this.history.setEnabled(this.settings.boolean('history-enabled', true))],
       ['history-max-bytes', () => this.history.setMaxBytes(this.settings.int('history-max-bytes', 8388608))],
       ['disable-animations', () => this.applyAnimationSetting()],
+      // §P6e: the dev-gated section profiler and the journal's noisy-write
+      // switch follow `trace-enabled` live, so a debug session does not need a
+      // re-enable to arm them.
+      ['trace-enabled', () => {
+        const on = this.settings.boolean('trace-enabled', false);
+        this.probe.enabled = on;
+        this.journal.setNoisyWrites(on);
+      }],
       // §19: flipping the sharing option re-derives the suppression at once
       // (on or off) without waiting for a session transition.
       ['pause-during-sharing', () => this.mode.refreshSharingSuppression()],
@@ -1801,13 +1809,13 @@ export default class AdrtExtension extends Extension {
    * here — inside `enable()` — rather than silently dropping a method.
    *
    * Each method has its own signature, so a reflective walk cannot keep those
-   * signatures: `Object.keys` erases them. The table is widened to a string-keyed
-   * function map once here (the single boundary cast) and the table type is
-   * re-attached on return. `guardValue` forwards every argument unchanged, so
+   * signatures: `Object.keys` erases them. The handler types are aliases (not
+   * interfaces), so the table is assignable to a string-keyed function map
+   * without a double cast; `guardValue` forwards every argument unchanged, so
    * the arities still hold.
    */
   private guardedHandlers(): Handlers {
-    const raw = this.harness.handlers() as unknown as Record<string, (...args: unknown[]) => unknown>;
+    const raw: Record<string, (...args: never[]) => unknown> = this.harness.handlers();
     const dispatch = buildDispatch(TRIGGERS, raw, (name, handler) => this.guardValue(`dbus:${name}`, handler));
     return Object.assign({} as Handlers, dispatch);
   }
