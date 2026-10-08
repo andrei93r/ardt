@@ -133,6 +133,66 @@ function parseSpawnEnv(envJson: string): [string, string][] {
   return out;
 }
 
+/**
+ * Structural views of the GJS/Shell surfaces `extension.ts` reads. `gi.d.ts`
+ * declares these namespaces as `any`, so each view names only the members the
+ * code uses and marks optional exactly what the code probes — the same pattern
+ * as `compat.ts`/`host.ts`, one structural boundary per API.
+ */
+
+/** The private `WorkspaceAnimationController` behind `Main.wm._workspaceAnimation` (§23.2). */
+interface WorkspaceAnimationController {
+  gestureActive?: boolean;
+  _switchData?: unknown;
+  _swipeTracker?: {
+    _touchpadGesture?: { _state?: number };
+  };
+  cancelSwitchAnimation(): void;
+  _prepareWorkspaceSwitch?(): void;
+  _finishWorkspaceSwitch(data: unknown): void;
+}
+
+/** The private `path` GNOME Shell assigns to an `Extension` instance. */
+interface ShellExtensionPath {
+  path?: string;
+}
+
+/** The legacy GJS `imports` global; only `misc.config` is read here. */
+interface GjsImports {
+  misc?: { config?: { PACKAGE_VERSION?: unknown } };
+}
+
+/**
+ * A `Clutter.Seat` used for the §17 input injection. `compat.defaultSeat()`
+ * types `create_virtual_device` as optional because it probes for it; the
+ * injection path only runs once that probe passed, so it is required here.
+ */
+interface InjectionSeat {
+  create_virtual_device(type: number): InjectedVirtualDevice;
+}
+
+/** A Clutter virtual input device, as driven by the §17 injection harness. */
+interface InjectedVirtualDevice {
+  notify_absolute_motion(time: number, x: number, y: number): void;
+  notify_button(time: number, button: number, state: unknown): void;
+  notify_keyval(time: number, keyval: number, state: unknown): void;
+}
+
+/** A window in the compositor stacking order, read only for its id. */
+interface IdentifiedWindow {
+  get_id(): number;
+}
+
+/**
+ * The id of a window returned by `compat.sortByStacking`. That API types its
+ * elements by the probe surface it needs (which omits `get_id`); the objects it
+ * returns are the Mutter windows it was given, so the id is read through this
+ * one structural view rather than an `any`.
+ */
+function stackingId(win: unknown): number {
+  return (win as IdentifiedWindow).get_id();
+}
+
 interface ExtraHandlers {
   ActivateWindow(id: number): boolean;
   ActivateWorkspace(index: number): boolean;
@@ -201,9 +261,9 @@ export default class AdrtExtension extends Extension {
   /** Why focus last moved, as far as adrt knows (the shell moves it itself). */
   private focusReason = 'shell';
   private injectionEnabled = false;
-  private injectSeat: any = null;
-  private injectPointer: any = null;
-  private injectKeyboard: any = null;
+  private injectSeat: InjectionSeat | null = null;
+  private injectPointer: InjectedVirtualDevice | null = null;
+  private injectKeyboard: InjectedVirtualDevice | null = null;
   /** Errors caught by the outer boundaries (enable, signal handlers). */
   private errorCount = 0;
   /**
@@ -313,7 +373,7 @@ export default class AdrtExtension extends Extension {
     // Record which build is loaded: on Wayland a logout is needed to reload, so
     // "is the running module the one I installed?" must be answerable at a glance.
     try {
-      const dir = (this as unknown as { path?: string }).path;
+      const dir = (this as ShellExtensionPath).path;
       if (typeof dir === 'string' && dir.length > 0) {
         const info = Gio.File.new_for_path(dir).query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
         const when = info.get_modification_date_time();
@@ -344,7 +404,7 @@ export default class AdrtExtension extends Extension {
       this.settings.boolean('history-daily-folders', false),
       this.settings.int('history-max-bytes', 8388608),
     );
-    this.history.setSink((event) => this.journal.decide(event.ev, event as unknown as Record<string, unknown>));
+    this.history.setSink((event) => this.journal.decide(event.ev, event));
     this.history.prune();
     this.migrate();
     this.registry = new RegistryStore({ onError: (context, error) => this.reportError(context, error) });
@@ -1001,9 +1061,19 @@ export default class AdrtExtension extends Extension {
    * else still running after a second and a half is torn down.
    */
   private switchWatchStart = 0;
+  /**
+   * `Main.wm._workspaceAnimation`, a private Shell field. `wm` has no public
+   * type, so it is read through one structural view here; every member of the
+   * controller is optional because Shell internals move between releases.
+   */
+  private workspaceAnimation(): WorkspaceAnimationController | null {
+    const controller = (wm as { _workspaceAnimation?: WorkspaceAnimationController | null })._workspaceAnimation;
+    return controller ?? null;
+  }
+
   private watchWorkspaceAnimation(): void {
-    const controller = (wm as { _workspaceAnimation?: any })._workspaceAnimation;
-    if (controller === undefined || controller === null) return;
+    const controller = this.workspaceAnimation();
+    if (controller === null) return;
     // A live gesture owns the animation: during the swipe `gestureActive` is
     // still false, so check the tracker's touchpad state too.
     const touchpadState = controller._swipeTracker?._touchpadGesture?._state;
@@ -1056,8 +1126,8 @@ export default class AdrtExtension extends Extension {
 
   /** True while GNOME is sliding workspaces (animation or live gesture). */
   private workspaceAnimationActive(): boolean {
-    const controller = (wm as any)?._workspaceAnimation;
-    return controller !== null && controller !== undefined && controller._switchData != null;
+    const controller = this.workspaceAnimation();
+    return controller !== null && controller._switchData != null;
   }
 
   /**
@@ -1280,7 +1350,7 @@ export default class AdrtExtension extends Extension {
     // compositor, never assumed from the layer.
     const order = compat
       .sortByStacking([focused.win, ...others.map((tracked) => tracked.win)])
-      .map((win: any) => win.get_id());
+      .map(stackingId);
     const focusIdx = order.indexOf(focused.id);
     for (const other of others) {
       if (other.surface.flags.minimized) continue;
@@ -1775,14 +1845,21 @@ export default class AdrtExtension extends Extension {
   private restoreState(): void {
     const text = readText(this.stateFile());
     if (text === null) return;
-    let raw: any;
+    let raw: unknown;
     try {
       raw = JSON.parse(text);
     } catch (e) {
       console.error(`[adrt] state.json is corrupt: ${(e as Error).message}`);
       return;
     }
-    if (raw.ratios !== undefined) this.tiling.loadRatios(raw.ratios, raw.swapPairs ?? []);
+    if (typeof raw !== 'object' || raw === null) return;
+    const state = raw as Record<string, unknown>;
+    if (state.ratios !== undefined) {
+      this.tiling.loadRatios(
+        state.ratios as Record<string, number>,
+        (state.swapPairs as string[] | undefined) ?? [],
+      );
+    }
   }
 
   private saveState(): void {
@@ -1957,8 +2034,8 @@ export default class AdrtExtension extends Extension {
   /** §22/Stage 6: the recorded journal + decisions as a replayable trace. */
   private dumpTrace(limit: number): string {
     const initial = this.recordInitial ?? this.buildTraceInitial();
-    const events = this.journal.tail(4000, 'model') as unknown as TraceEntry[];
-    const decisions = this.journal.decisionsTail(limit) as unknown as TraceEntry[];
+    const events: TraceEntry[] = this.journal.tail(4000, 'model');
+    const decisions: TraceEntry[] = this.journal.decisionsTail(limit);
     return JSON.stringify({ version: 1, initial, events, decisions });
   }
 
@@ -1967,7 +2044,7 @@ export default class AdrtExtension extends Extension {
   /** The capability JSON the harness depends on (§40.4, Stage 0). */
   /** The screen with this Mutter index, from the last screen read (§10). */
   private screenAt(monitor: number): Screen | undefined {
-    return this.host.screens().find((screen) => screen.index === monitor);
+    return this.host.screenByIndex(monitor) ?? undefined;
   }
 
   /** The screen whose geometry contains a rect's centre, if any. */
@@ -2009,7 +2086,7 @@ export default class AdrtExtension extends Extension {
     }
     let gnome = 'unknown';
     try {
-      const config = (globalThis as any).imports?.misc?.config;
+      const config = (globalThis as { imports?: GjsImports }).imports?.misc?.config;
       if (typeof config?.PACKAGE_VERSION === 'string') gnome = config.PACKAGE_VERSION;
     } catch {
       gnome = 'unknown';
@@ -2062,21 +2139,31 @@ export default class AdrtExtension extends Extension {
     });
   }
 
-  private ensureInjection(): boolean {
-    if (!this.injectionEnabled) return false;
+  /**
+   * Ensure the virtual pointer/keyboard exist, returning them together so the
+   * callers below need no null check after a truthy result. A missing seat or
+   * device throws here, exactly as the old direct call did, and the boundary
+   * disables injection for the session.
+   */
+  private ensureInjection(): { pointer: InjectedVirtualDevice; keyboard: InjectedVirtualDevice } | null {
+    if (!this.injectionEnabled) return null;
     try {
-      if (this.injectSeat === null) this.injectSeat = compat.defaultSeat();
+      // The one cast: `compat.defaultSeat()` returns its probe view, where the
+      // device factory is optional; injection only runs after that probe passed.
+      if (this.injectSeat === null) this.injectSeat = compat.defaultSeat() as InjectionSeat | null;
+      if (this.injectSeat === null) throw new Error('no Clutter seat for input injection');
       if (this.injectPointer === null) {
         this.injectPointer = this.injectSeat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
       }
       if (this.injectKeyboard === null) {
         this.injectKeyboard = this.injectSeat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
       }
-      return this.injectPointer !== null && this.injectKeyboard !== null;
+      if (this.injectPointer === null || this.injectKeyboard === null) return null;
+      return { pointer: this.injectPointer, keyboard: this.injectKeyboard };
     } catch (error) {
       console.warn(`[adrt] input injection unavailable: ${(error as Error).message}`);
       this.injectionEnabled = false;
-      return false;
+      return null;
     }
   }
 
@@ -2089,9 +2176,10 @@ export default class AdrtExtension extends Extension {
   }
 
   private injectPointerMove(x: number, y: number): boolean {
-    if (!this.ensureInjection()) return false;
+    const injection = this.ensureInjection();
+    if (injection === null) return false;
     try {
-      this.injectPointer.notify_absolute_motion(this.eventTime(), Math.trunc(x), Math.trunc(y));
+      injection.pointer.notify_absolute_motion(this.eventTime(), Math.trunc(x), Math.trunc(y));
       this.journal.record('inject', 'pointer-move', { x, y });
       return true;
     } catch {
@@ -2100,10 +2188,11 @@ export default class AdrtExtension extends Extension {
   }
 
   private injectPointerButton(button: number, pressed: boolean): boolean {
-    if (!this.ensureInjection()) return false;
+    const injection = this.ensureInjection();
+    if (injection === null) return false;
     try {
       const state = pressed ? Clutter.ButtonState.PRESSED : Clutter.ButtonState.RELEASED;
-      this.injectPointer.notify_button(this.eventTime(), button, state);
+      injection.pointer.notify_button(this.eventTime(), button, state);
       this.journal.record('inject', 'pointer-button', { button, pressed });
       return true;
     } catch {
@@ -2112,10 +2201,11 @@ export default class AdrtExtension extends Extension {
   }
 
   private injectKey(keyval: number, pressed: boolean): boolean {
-    if (!this.ensureInjection()) return false;
+    const injection = this.ensureInjection();
+    if (injection === null) return false;
     try {
       const state = pressed ? Clutter.KeyState.PRESSED : Clutter.KeyState.RELEASED;
-      this.injectKeyboard.notify_keyval(this.eventTime(), keyval, state);
+      injection.keyboard.notify_keyval(this.eventTime(), keyval, state);
       this.journal.record('inject', 'key', { keyval, pressed });
       return true;
     } catch {
@@ -2146,7 +2236,7 @@ export default class AdrtExtension extends Extension {
         const store = new Gio.Settings({ schema_id: schema });
         const type = store.get_default_value(key)?.get_type_string();
         if (type === undefined || type === null) return false;
-        let parsed: any;
+        let parsed: unknown;
         try {
           parsed = GLib.Variant.parse(new GLib.VariantType(type), value, null, null);
         } catch {
@@ -2168,6 +2258,12 @@ export default class AdrtExtension extends Extension {
    * §Self-heal containment: every D-Bus method runs through the error boundary
    * with its return value preserved — a throw reports and returns `undefined`
    * to the caller instead of escaping the dispatch.
+   *
+   * Each method has its own signature, so a reflective walk cannot keep those
+   * signatures: `Object.keys` erases them. The table is widened to a string-keyed
+   * function map once here (the single boundary cast) and the table type is
+   * re-attached on return. `guardValue` forwards every argument unchanged, so
+   * the arities still hold.
    */
   private guardedHandlers(): Handlers {
     const raw = this.handlers() as unknown as Record<string, (...args: unknown[]) => unknown>;
@@ -2175,7 +2271,7 @@ export default class AdrtExtension extends Extension {
     for (const name of Object.keys(raw)) {
       wrapped[name] = this.guardValue(`dbus:${name}`, raw[name]);
     }
-    return wrapped as unknown as Handlers;
+    return Object.assign({} as Handlers, wrapped);
   }
 
   private handlers(): Handlers {
@@ -2903,8 +2999,8 @@ export default class AdrtExtension extends Extension {
     const first = this.session.windows.get(a);
     const second = this.session.windows.get(b);
     if (first === undefined || second === undefined) return false;
-    const screen = this.host.screens().find((s) => s.index === first.surface.screenId);
-    if (screen === undefined) return false;
+    const screen = this.host.screenByIndex(first.surface.screenId);
+    if (screen === null) return false;
     const axis = screen.geometry.width >= screen.geometry.height ? 'horizontal' : 'vertical';
     this.session.capturePairChange(a, b);
     this.tiling.setRatio(ratioKey(screen.connector, first.surface.workspaceId, axis), ratio);
@@ -2974,13 +3070,13 @@ export default class AdrtExtension extends Extension {
    * hide for the whole time, then come back.
    */
   private simulateWorkspaceSwitch(holdMs: number): boolean {
-    const controller = (wm as any)?._workspaceAnimation;
-    if (controller === null || controller === undefined || typeof controller._prepareWorkspaceSwitch !== 'function') return false;
+    const controller = this.workspaceAnimation();
+    if (controller === null || typeof controller._prepareWorkspaceSwitch !== 'function') return false;
     const hold = holdMs > 0 ? Math.min(holdMs, 5000) : 600;
     controller._prepareWorkspaceSwitch();
     this.timers.add('simulate-workspace-switch', hold, () => {
-      const current = (wm as any)?._workspaceAnimation;
-      if (current !== null && current !== undefined && current._switchData != null) {
+      const current = this.workspaceAnimation();
+      if (current !== null && current._switchData != null) {
         current._finishWorkspaceSwitch(current._switchData);
       }
     });
