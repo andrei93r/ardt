@@ -1775,14 +1775,16 @@ export class WindowSession {
 
   private onMaximizeSignal(tracked: TrackedWindow): void {
     if (!tracked.ready) return;
-    // A maximize that rides our own workspace move is that move's echo, not a
-    // user request; the old `suppress` set was already empty by signal time.
-    if (this.hasWorkspaceEcho(tracked.id)) return;
     tracked.surface.refresh();
     // §11: a Mutter signal records the intent; the drain re-derives the state
     // and applies it (the A45 pattern). An unmaximize we caused (`withSelfUnmaximize`,
     // or the tiler's own unmaximize in `applyFrame`) must not drive the ladder.
     if (compat.isMaximized(tracked.win)) {
+      // A maximize that rides our own workspace move is that move's echo, not
+      // a user request. This check must sit inside the maximize branch: at the
+      // top it also swallowed a real user unmaximize that happened shortly
+      // after a programmatic move (A90/A152).
+      if (this.hasWorkspaceEcho(tracked.id)) return;
       // A maximize we caused — the lone law, a routed arrival, the coherence
       // sweep — is not a user request. Without this the drain's §4 property
       // reads our own maximize as the user's and exiles a window that was only
