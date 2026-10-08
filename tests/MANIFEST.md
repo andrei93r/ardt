@@ -6,7 +6,7 @@ why, so no skip is ever a surprise.
 
 Totals: 156 agent scenarios, 25 session scenarios.
 
-## Where things run (this laptop, 2026-10-01)
+## Where things run (this laptop, 2026-10-08)
 
 | target | state |
 | --- | --- |
