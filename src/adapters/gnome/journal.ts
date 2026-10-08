@@ -28,6 +28,8 @@ const MAX_PARTS = 5;
 const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 /** Ring buffer size: enough for a run's worth of `DumpEvents` without growth. */
 const RING = 4000;
+/** One buffered flush per this interval; the compositor thread never blocks. */
+const FLUSH_MS = 1000;
 
 export interface JournalEntry {
   seq: number;
@@ -69,6 +71,16 @@ export class EventJournal {
    * Null when nothing is recording, so the funnel costs one null check.
    */
   private sink: ((entry: JournalEntry) => void) | null = null;
+  /**
+   * When false (the default), `surface-frame-changed` lines stay in the ring
+   * and reach the sink but are not persisted: they fire per animated frame and
+   * would otherwise turn every notification into a disk write.
+   */
+  private noisyWrites = false;
+  /** Serialized lines awaiting one buffered flush to disk. */
+  private pending: string[] = [];
+  private pendingDay = '';
+  private flushSource: number | null = null;
 
   constructor(
     private readonly retentionDays = 30,
@@ -92,6 +104,15 @@ export class EventJournal {
    */
   setSink(sink: ((entry: JournalEntry) => void) | null): void {
     this.sink = sink;
+  }
+
+  /**
+   * Arm persistence of `surface-frame-changed` (the `trace-enabled` setting, or
+   * any live recorder whose sink is attached). Every other event is always
+   * persisted; the ring and the sink see noisy entries regardless.
+   */
+  setNoisyWrites(enabled: boolean): void {
+    this.noisyWrites = enabled;
   }
 
   /** Record one raw platform event. Returns the entry, sequence assigned. */
@@ -166,6 +187,7 @@ export class EventJournal {
   }
 
   destroy(): void {
+    this.flush();
     this.ring.length = 0;
     this.decisions.length = 0;
   }
@@ -183,6 +205,11 @@ export class EventJournal {
     return entry;
   }
 
+  /**
+   * Offer one entry to the sink (in order, synchronously) and buffer its file
+   * line. Disk work happens once per `flush()`, never per event: a platform
+   * event on the compositor thread must not open/append/close a file.
+   */
   private writeLine(entry: JournalEntry): void {
     if (this.sink !== null) {
       try {
@@ -191,24 +218,54 @@ export class EventJournal {
         /* recording must never break logging */
       }
     }
-    const base = `${journalDir()}/${dayString(new Date())}.jsonl`;
+    if (entry.event === 'surface-frame-changed' && !this.noisyWrites && this.sink === null) return;
+    const day = dayString(new Date());
+    if (this.pendingDay !== day && this.pending.length > 0) this.flush();
+    this.pendingDay = day;
+    this.pending.push(`${JSON.stringify(entry)}\n`);
+    this.scheduleFlush();
+  }
+
+  /** Flush every buffered line to today's file: one open/append/close. */
+  flush(): void {
+    if (this.flushSource !== null) {
+      GLib.source_remove(this.flushSource);
+      this.flushSource = null;
+    }
+    if (this.pending.length === 0) return;
+    const day = this.pendingDay.length > 0 ? this.pendingDay : dayString(new Date());
+    const text = this.pending.join('');
+    const count = this.pending.length;
+    this.pending = [];
+    this.pendingDay = '';
+    const base = `${journalDir()}/${day}.jsonl`;
     let path = base;
-    if (shouldRotate(this.sizeOf(base), this.maxBytes)) path = this.rotate(base);
-    const line = `${JSON.stringify(entry)}\n`;
+    // One rotation check for the whole batch: account for the bytes about to be
+    // appended so a single flush cannot blow past the cap.
+    if (shouldRotate(this.sizeOf(base) + text.length, this.maxBytes)) path = this.rotate(base);
     try {
       const stream = Gio.File.new_for_path(path).append_to(Gio.FileCreateFlags.NONE, null);
-      stream.write_all(encodeText(line), null);
+      stream.write_all(encodeText(text), null);
       stream.close(null);
-      this.written += 1;
+      this.written += count;
     } catch {
       // Bounded by rotation, so a read-modify-write fallback is acceptable.
       try {
-        writeAtomic(path, `${readText(path) ?? ''}${line}`);
-        this.written += 1;
+        writeAtomic(path, `${readText(path) ?? ''}${text}`);
+        this.written += count;
       } catch {
         /* never let logging break the shell */
       }
     }
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushSource !== null) return;
+    this.flushSource = GLib.timeout_add(GLib.PRIORITY_LOW, FLUSH_MS, () => {
+      this.flushSource = null;
+      this.flush();
+      return GLib.SOURCE_REMOVE;
+    });
   }
 
   private sizeOf(path: string): number {

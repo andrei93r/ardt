@@ -18,6 +18,8 @@ import { dataDir, readText, writeAtomic } from './adapt.js';
 const MAX_HISTORY_PARTS = 5;
 /** Default size of one part (bytes). */
 const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
+/** One buffered flush per this interval; the compositor thread never blocks. */
+const FLUSH_MS = 1000;
 
 export interface HistoryEvent {
   t: number;
@@ -62,6 +64,10 @@ export class History {
   private written = 0;
   /** Optional sink for the event journal: every logged decision (§22). */
   private sink: ((event: HistoryEvent) => void) | null = null;
+  /** Serialized lines awaiting one buffered flush to disk. */
+  private pending: string[] = [];
+  private pendingDay = '';
+  private flushSource: number | null = null;
 
   get logEvents(): number {
     return this.written;
@@ -168,7 +174,11 @@ export class History {
     for (const day of this.days()) {
       if (day >= cutoffDay) continue;
       const file = Gio.File.new_for_path(this.pathFor(day));
-      file.delete(null);
+      try {
+        file.delete(null);
+      } catch {
+        /* already gone */
+      }
       for (const part of partsToPrune(MAX_HISTORY_PARTS, 1)) {
         const extra = Gio.File.new_for_path(partPath(this.pathFor(day), part));
         try {
@@ -186,6 +196,7 @@ export class History {
   }
 
   destroy(): void {
+    this.flush();
     this.stopTail();
   }
 
@@ -207,25 +218,56 @@ export class History {
   }
 
   /**
-   * Append one JSON line. This must never read the file back: the old
-   * read-modify-write version loaded the whole file into a string per event,
-   * which is what turned a 200 MB log into an out-of-memory crash.
+   * Buffer one JSON line. Disk work happens once per `flush()`, never per
+   * event: a decision on the compositor thread must not open/append/close a
+   * file. This never reads the file back.
    */
   private append(event: HistoryEvent): void {
     const day = dayString(new Date());
+    if (this.pendingDay !== day && this.pending.length > 0) this.flush();
+    this.pendingDay = day;
+    this.pending.push(`${JSON.stringify(event)}\n`);
+    this.scheduleFlush();
+  }
+
+  /** Flush every buffered line to the day's file: one open/append/close. */
+  flush(): void {
+    if (this.flushSource !== null) {
+      GLib.source_remove(this.flushSource);
+      this.flushSource = null;
+    }
+    if (this.pending.length === 0) return;
+    const day = this.pendingDay.length > 0 ? this.pendingDay : dayString(new Date());
+    const text = this.pending.join('');
+    this.pending = [];
+    this.pendingDay = '';
     const base = this.pathFor(day);
     let path = base;
-    if (shouldRotate(this.sizeOf(base), this.maxBytes)) path = this.rotate(base);
-    const line = `${JSON.stringify(event)}\n`;
+    // One rotation check for the whole batch: account for the bytes about to be
+    // appended so a single flush cannot blow past the cap.
+    if (shouldRotate(this.sizeOf(base) + text.length, this.maxBytes)) path = this.rotate(base);
     try {
       const stream = Gio.File.new_for_path(path).append_to(Gio.FileCreateFlags.NONE, null);
-      stream.write_all(encodeText(line), null);
+      stream.write_all(encodeText(text), null);
       stream.close(null);
     } catch {
       // Last resort (unusual filesystem or no TextEncoder): the part is bounded
       // by rotation, so a read-modify-write here is acceptable.
-      writeAtomic(path, `${readText(path) ?? ''}${line}`);
+      try {
+        writeAtomic(path, `${readText(path) ?? ''}${text}`);
+      } catch {
+        /* never let logging break the shell */
+      }
     }
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushSource !== null) return;
+    this.flushSource = GLib.timeout_add(GLib.PRIORITY_LOW, FLUSH_MS, () => {
+      this.flushSource = null;
+      this.flush();
+      return GLib.SOURCE_REMOVE;
+    });
   }
 
   /** Size of a file in bytes, 0 when it does not exist. */

@@ -37,6 +37,10 @@ export class RegistryStore {
   /** A registry file from a newer format is left untouched (no downgrade). */
   private loadedVersion = 0;
   private readonly ttlMs: number;
+  /** Reports a failed write without letting it escape a GLib timer. */
+  private readonly onError: (context: string, error: unknown) => void;
+  /** True once `destroy()` ran, so a failed flush never re-arms a timer. */
+  private destroyed = false;
   /** Whether timing adaptation is recorded (`adaptation-enabled`). */
   private enabled = true;
   /** §12: the timing-only adaptation fields. */
@@ -44,8 +48,9 @@ export class RegistryStore {
   private readonly consecutive = new Map<string, number>();
   private stubbornUntilMs = 0;
 
-  constructor(options: { ttlMs?: number } = {}) {
+  constructor(options: { ttlMs?: number; onError?: (context: string, error: unknown) => void } = {}) {
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
+    this.onError = options.onError ?? ((): void => undefined);
     this.registry = new AppRegistry({ ttlMs: this.ttlMs });
   }
 
@@ -321,7 +326,16 @@ export class RegistryStore {
     if (!this.dirty) return;
     if (this.loadedVersion > 1) return; // never overwrite a newer file
     this.dirty = false;
-    writeAtomic(this.file, JSON.stringify(this.registry.toJSON()));
+    try {
+      writeAtomic(this.file, JSON.stringify(this.registry.toJSON()));
+    } catch (error) {
+      // The write runs inside a GLib timeout; a throw would escape into the
+      // main loop. Re-mark dirty so the state is not lost, report, and retry on
+      // the next debounce (unless teardown already ran).
+      this.dirty = true;
+      this.onError('registry:save', error);
+      if (!this.destroyed) this.scheduleSave();
+    }
   }
 
   flush(): void {
@@ -333,6 +347,7 @@ export class RegistryStore {
   }
 
   destroy(): void {
+    this.destroyed = true;
     this.flush();
   }
 

@@ -313,6 +313,9 @@ export default class AdrtExtension extends Extension {
       this.buildDirMtimeMs = 0;
     }
     this.settings = new GnomeSettings(this.getSettings());
+    // 1.3: `surface-frame-changed` fires per animated frame; persist it only
+    // when tracing (or while the recorder's sink is attached).
+    this.journal.setNoisyWrites(this.settings.boolean('trace-enabled', false));
     this.signals = new SignalRegistry();
     this.timers = new TimeoutRegistry();
     this.disabled = false;
@@ -332,8 +335,9 @@ export default class AdrtExtension extends Extension {
       this.settings.int('history-max-bytes', 8388608),
     );
     this.history.setSink((event) => this.journal.decide(event.ev, event as unknown as Record<string, unknown>));
+    this.history.prune();
     this.migrate();
-    this.registry = new RegistryStore();
+    this.registry = new RegistryStore({ onError: (context, error) => this.reportError(context, error) });
     this.registry.load();
     // §12: fold the legacy stores in exactly once (copy-verify-delete).
     this.registry.migrateLegacy({
@@ -511,7 +515,6 @@ export default class AdrtExtension extends Extension {
   private disableWith(): void {
     // §36: every teardown step is independent and guarded — if `enable()` threw
     // half-built, or one resource misbehaves, the rest still tears down cleanly.
-    this.teardown('journal', () => this.journal?.destroy());
     this.teardown('log-disable', () => this.history?.log('disable', {}));
     this.teardown('motion', () => this.stopMotionWatch());
     this.teardown('coherence', () => this.timers.clear('coherence'));
@@ -545,14 +548,17 @@ export default class AdrtExtension extends Extension {
     this.teardown('animator', () => this.animator?.destroy());
     this.teardown('indicator', () => this.indicator?.destroy());
     this.teardown('host', () => this.host?.disable());
-    this.teardown('registry', () => this.registry?.flush());
+    this.teardown('registry', () => this.registry?.destroy());
     this.teardown('display-memory', () => this.saveDisplayMemory());
-    this.teardown('history', () => this.history?.destroy());
     this.teardown('state', () => this.saveState());
     // §18: restore GNOME's animations to what we found, never force them on for
     // a user who had turned them off.
     this.teardown('animation-baseline', () => this.restoreAnimationSetting());
     this.teardown('timing', () => this.timing?.destroy());
+    // The buffered stores flush last, after every step that can still log, and
+    // cancel their one-shot flush timers here (1.3).
+    this.teardown('history', () => this.history?.destroy());
+    this.teardown('journal', () => this.journal?.destroy());
   }
 
   /** Run one teardown step; a failure is logged and never stops the rest. */
