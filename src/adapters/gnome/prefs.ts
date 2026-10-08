@@ -49,13 +49,14 @@ import { _, loadTranslations } from './i18n.js';
 import { RegistryStore } from './registry.js';
 import { TILE_MODES, validateRule } from '../../core/rules.js';
 import type { TileMode } from '../../core/rules.js';
+import type { SettingKey } from '../../core/settings-descriptor.js';
 
 /** The widget a settings row is rendered with. */
 type RowKind = 'switch' | 'spin' | 'combo' | 'entry' | 'accelerator' | 'picker';
 
 export interface RowSpec {
-  /** The GSettings key. */
-  key: string;
+  /** The GSettings key. `SettingKey` makes a renamed/removed key a `tsc` error. */
+  key: SettingKey;
   kind: RowKind;
   title: string;
   subtitle?: string;
