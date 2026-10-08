@@ -536,7 +536,7 @@ export class WindowSession {
     const rightAppId = leftIsTracked ? sibling.surface.appId : tracked.surface.appId;
     const sortedFirstIsLeft = leftAppId <= rightAppId;
     const axis = horizontal ? 'horizontal' : 'vertical';
-    const key = ratioKey(screen.index, tracked.surface.workspaceId, axis);
+    const key = ratioKey(screen.connector, tracked.surface.workspaceId, axis);
     this.captureChange([tracked.id, sibling.id]);
     this.deps.tiling.setRatio(key, sortedFirstIsLeft ? ratioLeft : 1 - ratioLeft);
     this.deps.history.log('split_resize', { pair: key, ratio: ratioLeft, reason: 'drag' });

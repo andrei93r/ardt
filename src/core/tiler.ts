@@ -36,7 +36,7 @@ export interface TilerConfig {
   /** 0..1, clamped to 0.2–0.8 when applied. */
   primaryAppRatio: number;
   /**
-   * §10 ratios keyed by `screen:workspace:axis` (see `ratioKey`), fraction
+   * §10 ratios keyed by `connector:workspace:axis` (see `ratioKey`), fraction
    * belonging to the sorted-first app of the pair.
    */
   ratios: Readonly<Record<string, number>>;
@@ -87,28 +87,63 @@ export function pairKey(a: number, b: number): string {
 
 /**
  * §10: ratios are per workspace (per pair). A pair lives on one screen, and two
- * screens can show the same workspace, so the key is `screen:workspace:axis`.
- * The old key was the app pair (`appA|appB|axis`), which leaked a ratio the user
- * set on one pair to every later pair of the same apps — decision 14 says there
- * is no app-pair ratio learning. The fraction stored is the sorted-first app's
- * share (see `resolveRatio`), so the pair is recognised regardless of which
- * window opened first or sits on which side.
+ * screens can show the same workspace, so the key is
+ * `connector:workspace:axis`. The monitor is named by its connector (`eDP-1`,
+ * `HDMI-1`) rather than its index, so a replug or reorder cannot bind a saved
+ * ratio to the wrong screen. The old key was the app pair
+ * (`appA|appB|axis`), which leaked a ratio the user set on one pair to every
+ * later pair of the same apps — decision 14 says there is no app-pair ratio
+ * learning. The fraction stored is the sorted-first app's share (see
+ * `resolveRatio`), so the pair is recognised regardless of which window opened
+ * first or sits on which side.
  */
-export function ratioKey(screenId: number, workspaceId: number, axis: SplitAxis): string {
-  return `${screenId}:${workspaceId}:${axis}`;
+export function ratioKey(connector: string, workspaceId: number, axis: SplitAxis): string {
+  return `${connector}:${workspaceId}:${axis}`;
 }
 
 export interface RatioKeyParts {
-  screenId: number;
+  connector: string;
   workspaceId: number;
   axis: SplitAxis;
 }
 
-/** Parse a `screen:workspace:axis` ratio key; null for a legacy app-pair key. */
+/**
+ * Parse a `connector:workspace:axis` ratio key; null for a legacy app-pair key.
+ * The connector is any non-empty segment without a colon, so hyphenated names
+ * (`eDP-1`, `HDMI-1`) and the numeric form of an unmigrated legacy key both
+ * parse. `migrateLegacyRatioKeys` resolves the numeric form before use.
+ */
 export function parseRatioKey(key: string): RatioKeyParts | null {
-  const match = /^(\d+):(\d+):(horizontal|vertical)$/.exec(key);
+  const match = /^([^:]+):(\d+):(horizontal|vertical)$/.exec(key);
   if (match === null) return null;
-  return { screenId: Number(match[1]), workspaceId: Number(match[2]), axis: match[3] as SplitAxis };
+  return { connector: match[1], workspaceId: Number(match[2]), axis: match[3] as SplitAxis };
+}
+
+/**
+ * §23 migration: ratios persisted before keys named the monitor by connector
+ * used the monitor index (`0:2:horizontal`). Such a key can be bound to a
+ * different screen after a replug or reorder, so map each numeric first segment
+ * through the current `index → connector` table. A legacy key whose index has no
+ * live screen is dropped; keys that already name a connector pass through
+ * untouched. Pure, so the rewrite is unit-testable.
+ */
+export function migrateLegacyRatioKeys(
+  raw: Readonly<Record<string, number>>,
+  connectorByIndex: ReadonlyMap<number, string>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const colon = key.indexOf(':');
+    const first = colon === -1 ? key : key.slice(0, colon);
+    if (colon === -1 || !/^\d+$/.test(first)) {
+      out[key] = value;
+      continue;
+    }
+    const connector = connectorByIndex.get(Number(first));
+    if (connector === undefined) continue;
+    out[`${connector}${key.slice(colon)}`] = value;
+  }
+  return out;
 }
 
 /**
@@ -146,7 +181,7 @@ export function remapRatiosAfterReap(
     if (removed.has(parts.workspaceId)) continue;
     let workspaceId = parts.workspaceId;
     for (const index of reaped) if (index < workspaceId) workspaceId -= 1;
-    out[ratioKey(parts.screenId, workspaceId, parts.axis)] = value;
+    out[ratioKey(parts.connector, workspaceId, parts.axis)] = value;
   }
   return out;
 }
@@ -322,8 +357,8 @@ function isPrimary(appId: string, primaryApps: readonly string[]): boolean {
 }
 
 /** Fraction of the split that belongs to window index 0. */
-function resolveRatio(w0: TilerWindow, w1: TilerWindow, axis: SplitAxis, config: TilerConfig): number {
-  const saved = config.ratios[ratioKey(w0.screenId, w0.workspaceId, axis)];
+function resolveRatio(w0: TilerWindow, w1: TilerWindow, axis: SplitAxis, connector: string, config: TilerConfig): number {
+  const saved = config.ratios[ratioKey(connector, w0.workspaceId, axis)];
   if (saved !== undefined) {
     const w0First = w0.appId <= w1.appId;
     return w0First ? saved : 1 - saved;
@@ -469,7 +504,7 @@ export function computePlans(windows: readonly TilerWindow[], screen: Screen, co
   const override = findRuleOverride([w0, w1], config.rules);
   if (override !== null) return applyRuleOverride(override, w0, w1, avail, gap, screen);
 
-  const ratio = resolveRatio(w0, w1, defaultAxis, config);
+  const ratio = resolveRatio(w0, w1, defaultAxis, screen.connector, config);
 
   let split: SplitResult;
   if (config.minSizePolicy === 'stack') {
@@ -482,7 +517,7 @@ export function computePlans(windows: readonly TilerWindow[], screen: Screen, co
     if (chosen === undefined) {
       split = stackLayout(avail, gap, w0, w1, defaultAxis, screen.scale);
     } else {
-      const base = resolveRatio(w0, w1, chosen, config);
+      const base = resolveRatio(w0, w1, chosen, screen.connector, config);
       const clamped = clampRatioForMin(clamp(base, 0.05, 0.95), avail, gap, chosen, w0.min, w1.min);
       split = splitAt(avail, gap, chosen, clamped, screen.scale);
     }

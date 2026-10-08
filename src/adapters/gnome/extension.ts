@@ -2908,7 +2908,7 @@ export default class AdrtExtension extends Extension {
     if (screen === undefined) return false;
     const axis = screen.geometry.width >= screen.geometry.height ? 'horizontal' : 'vertical';
     this.session.capturePairChange(a, b);
-    this.tiling.setRatio(ratioKey(screen.index, first.surface.workspaceId, axis), ratio);
+    this.tiling.setRatio(ratioKey(screen.connector, first.surface.workspaceId, axis), ratio);
     this.session.clearSignatures();
     this.session.retile(first.surface.workspaceId, 'simulate-resize');
     if (this.settings.boolean('dry-run-mode', false)) this.history.log('dry_run', { ratio });
