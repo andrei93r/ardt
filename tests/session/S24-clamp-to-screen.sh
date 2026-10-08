@@ -100,12 +100,9 @@ if not ok:
     print("out of geometry", r, g); sys.exit(1)
 print("inside", r)
 ' 20
-after_clamps="$(state_expr 'd["counters"]["clampsApplied"]')"
-if python3 -c "import sys; sys.exit(0 if float('$after_clamps') > float('$clamps_before') else 1)"; then
-  pass "the clamp counter grew ($clamps_before -> $after_clamps)"
-else
-  fail "the clamp counter did not grow ($clamps_before -> $after_clamps)"
-fi
+# The counter is asserted after section 2: an off-corner move can be
+# constrained by the compositor before adrt ever sees an off-screen frame, so
+# section 1 legitimately may not clamp. The oversized float below always does.
 
 # 2. Larger than the monitor: it is shrunk to the whole surface.
 adrt MoveWindow "$float" 40 40 4000 3000 >/dev/null
@@ -113,6 +110,13 @@ if inside_geometry "$float" 20; then
   pass "a float larger than the monitor is shrunk inside it"
 else
   fail "a float larger than the monitor stayed out of bounds"
+fi
+
+after_clamps="$(state_expr 'd["counters"]["clampsApplied"]')"
+if python3 -c "import sys; sys.exit(0 if float('$after_clamps') > float('$clamps_before') else 1)"; then
+  pass "the clamp counter grew ($clamps_before -> $after_clamps)"
+else
+  fail "the clamp counter did not grow ($clamps_before -> $after_clamps)"
 fi
 
 sleep 1
