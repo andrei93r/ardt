@@ -1742,18 +1742,6 @@ export class WindowSession {
     return matched;
   }
 
-  /** True while `id` still has an unexpired workspace echo (our own move). */
-  private hasWorkspaceEcho(id: number): boolean {
-    const echo = this.selfEcho.get(id);
-    if (echo === undefined || echo.workspaceAtUs === 0) return false;
-    if (GLib.get_monotonic_time() - echo.workspaceAtUs > SELF_APPLY_MS * 1000) {
-      echo.workspaceAtUs = 0;
-      if (echo.maximizeAtUs === 0) this.selfEcho.delete(id);
-      return false;
-    }
-    return true;
-  }
-
   /**
    * §4/§11: record that *we* are about to unmaximize `id` (the tiler calls this
    * through its deps before its own `applyFrame` unmaximize). The echo must
@@ -1780,16 +1768,14 @@ export class WindowSession {
     // and applies it (the A45 pattern). An unmaximize we caused (`withSelfUnmaximize`,
     // or the tiler's own unmaximize in `applyFrame`) must not drive the ladder.
     if (compat.isMaximized(tracked.win)) {
-      // A maximize that rides our own workspace move is that move's echo, not
-      // a user request. This check must sit inside the maximize branch: at the
-      // top it also swallowed a real user unmaximize that happened shortly
-      // after a programmatic move (A90/A152).
-      if (this.hasWorkspaceEcho(tracked.id)) return;
       // A maximize we caused — the lone law, a routed arrival, the coherence
       // sweep — is not a user request. Without this the drain's §4 property
       // reads our own maximize as the user's and exiles a window that was only
       // being tiled (S05: a sweep that saw one member of a forming pair while
       // its sibling animated maximized it, then exiled it to its own workspace).
+      // Our own workspace moves call `noteSelfApply`, so they are covered here
+      // too; a per-window workspace echo would additionally swallow a real user
+      // maximize that follows a move (A159).
       if (Date.now() - this.deps.tiling.lastApplyAtMs < SELF_APPLY_MS) return;
       tracked.maximizeRequested = true;
       this.scheduleReconcile('maximize');
