@@ -225,22 +225,47 @@ export class EventJournal {
     const batch = this.buffer.drain();
     if (batch === null) return;
     const base = `${journalDir()}/${batch.day}.jsonl`;
-    let path = base;
-    // One rotation check for the whole batch: account for the bytes about to be
-    // appended so a single flush cannot blow past the cap.
-    if (shouldRotate(this.sizeOf(base) + batch.text.length, this.maxBytes)) path = this.rotate(base);
+    // A batch larger than the cap cannot be written in one append: fall back
+    // to per-line appends with a rotation check each, so the live part stays
+    // bounded (normal batches take the single-append path).
+    if (shouldRotate(this.sizeOf(base) + batch.text.length, this.maxBytes)) {
+      this.appendLines(base, batch.text);
+      return;
+    }
     try {
-      const stream = Gio.File.new_for_path(path).append_to(Gio.FileCreateFlags.NONE, null);
+      const stream = Gio.File.new_for_path(base).append_to(Gio.FileCreateFlags.NONE, null);
       stream.write_all(encodeText(batch.text), null);
       stream.close(null);
       this.written += batch.count;
     } catch {
       // Bounded by rotation, so a read-modify-write fallback is acceptable.
       try {
-        writeAtomic(path, `${readText(path) ?? ''}${batch.text}`);
+        writeAtomic(base, `${readText(base) ?? ''}${batch.text}`);
         this.written += batch.count;
       } catch {
         /* never let logging break the shell */
+      }
+    }
+  }
+
+  /** Append a batch line by line, rotating whenever the live part fills. */
+  private appendLines(base: string, text: string): void {
+    for (const line of text.split('\n')) {
+      if (line.length === 0) continue;
+      let path = base;
+      if (shouldRotate(this.sizeOf(path) + line.length, this.maxBytes)) path = this.rotate(path);
+      try {
+        const stream = Gio.File.new_for_path(path).append_to(Gio.FileCreateFlags.NONE, null);
+        stream.write_all(encodeText(`${line}\n`), null);
+        stream.close(null);
+        this.written += 1;
+      } catch {
+        try {
+          writeAtomic(path, `${readText(path) ?? ''}${line}\n`);
+          this.written += 1;
+        } catch {
+          /* never let logging break the shell */
+        }
       }
     }
   }
