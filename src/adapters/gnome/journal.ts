@@ -19,6 +19,7 @@
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 
+import { RingBuffer } from '../../core/ringbuffer.js';
 import { partPath, partsToPrune, shouldRotate } from '../../core/rotation.js';
 import { clipPayload } from '../../core/text.js';
 import { dataDir, readText, writeAtomic } from './adapt.js';
@@ -62,8 +63,8 @@ function journalDir(): string {
 
 export class EventJournal {
   private seq = 0;
-  private readonly ring: JournalEntry[] = [];
-  private readonly decisions: JournalEntry[] = [];
+  private readonly ring = new RingBuffer<JournalEntry>(RING);
+  private readonly decisions = new RingBuffer<JournalEntry>(RING);
   private written = 0;
   private maxBytes: number;
   /**
@@ -126,24 +127,23 @@ export class EventJournal {
     const entry = this.make('decision', event, fields);
     if (trace !== undefined) entry.trace = trace;
     this.decisions.push(entry);
-    while (this.decisions.length > RING) this.decisions.shift();
     this.writeLine(entry);
     return entry;
   }
 
   /** The last `limit` journal entries, optionally filtered by a substring. */
   tail(limit = 200, filter = ''): JournalEntry[] {
-    const all = filter.length > 0
-      ? this.ring.filter((e) => e.event.includes(filter) || e.source.includes(filter))
-      : this.ring;
     const n = Math.max(0, Math.trunc(limit));
-    return n === 0 ? [] : all.slice(Math.max(0, all.length - n));
+    if (n === 0) return [];
+    return filter.length > 0
+      ? this.ring.tailWhere((e) => e.event.includes(filter) || e.source.includes(filter), n)
+      : this.ring.tail(n);
   }
 
   /** The last `limit` decisions. */
   decisionsTail(limit = 200): JournalEntry[] {
     const n = Math.max(0, Math.trunc(limit));
-    return n === 0 ? [] : this.decisions.slice(Math.max(0, this.decisions.length - n));
+    return n === 0 ? [] : this.decisions.tail(n);
   }
 
   /** Delete day files older than the retention window. */
@@ -188,8 +188,8 @@ export class EventJournal {
 
   destroy(): void {
     this.flush();
-    this.ring.length = 0;
-    this.decisions.length = 0;
+    this.ring.clear();
+    this.decisions.clear();
   }
 
   private make(source: string, event: string, data?: Record<string, unknown>): JournalEntry {
@@ -200,7 +200,6 @@ export class EventJournal {
 
   private append(entry: JournalEntry): JournalEntry {
     this.ring.push(entry);
-    while (this.ring.length > RING) this.ring.shift();
     this.writeLine(entry);
     return entry;
   }
