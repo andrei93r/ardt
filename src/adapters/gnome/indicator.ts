@@ -21,6 +21,49 @@ import type { GnomeTiming } from './timing.js';
 const CSS_CLASS = 'adrt-indicator';
 const PREVIEW_CLASS = 'adrt-indicator-preview';
 
+/**
+ * Structural views of the GJS chrome actors and settings this file drives.
+ * `gi.d.ts` declares `St`/`Gio` as `any`, so each view names only the members
+ * used — the same pattern as `compat.ts`/`host.ts`.
+ */
+
+/** The subset of `Clutter.Actor.ease` the indicator passes. */
+interface EaseParams {
+  opacity: number;
+  duration: number;
+  mode: unknown;
+  repeatCount?: number;
+  autoReverse?: boolean;
+  onComplete?: () => void;
+}
+
+/** A chrome parent (`layoutManager.uiGroup`), read for its child ordering. */
+interface StContainerLike {
+  set_child_below_sibling(child: StWidgetLike, sibling: unknown): void;
+  get_children(): StWidgetLike[];
+}
+
+/** A `St.Widget` chrome actor: position, styling, visibility and transitions. */
+interface StWidgetLike {
+  visible: boolean;
+  opacity: number;
+  connect<A extends unknown[]>(signal: string, callback: (...args: A) => unknown): number;
+  destroy(): void;
+  show(): void;
+  hide(): void;
+  set_position(x: number, y: number): void;
+  set_size(width: number, height: number): void;
+  set_style(style: string): void;
+  ease(params: EaseParams): void;
+  remove_all_transitions(): void;
+  get_parent(): StContainerLike | null;
+}
+
+/** The `org.gnome.desktop.interface` surface read for the accent colour. */
+interface SystemSettingsLike {
+  get_string(key: string): string;
+}
+
 /** GNOME's accent palette (libadwaita). */
 const ACCENT_COLORS: Record<string, string> = {
   blue: '#3584e4',
@@ -35,14 +78,14 @@ const ACCENT_COLORS: Record<string, string> = {
 };
 
 export class GnomeIndicator implements IndicatorBackend {
-  private readonly widget: any;
-  private readonly preview: any;
-  private readonly ghosts = new Set<any>();
+  private readonly widget: StWidgetLike;
+  private readonly preview: StWidgetLike;
+  private readonly ghosts = new Set<StWidgetLike>();
   /** Ghost fade timers, drained in `destroy()` (§36). */
   private readonly timers = new TimeoutRegistry();
   private ghostSeq = 0;
   private pulseActive = false;
-  private interfaceSettings: any = null;
+  private interfaceSettings: SystemSettingsLike | null = null;
   /** The last rect handed to `showPreview`, for `DumpState` and diagnostics. */
   private previewRect: Rect | null = null;
   /**
@@ -52,7 +95,7 @@ export class GnomeIndicator implements IndicatorBackend {
    * would log a Gjs "already been disposed" critical, even inside a try/catch.
    */
   private destroyed = false;
-  private readonly goneActors = new WeakSet<any>();
+  private readonly goneActors = new WeakSet<StWidgetLike>();
   private stageGone = false;
   /** Stage-lifetime subscription, drained in `destroy()` (§36). */
   private readonly signals = new SignalRegistry();
@@ -125,7 +168,7 @@ export class GnomeIndicator implements IndicatorBackend {
     // §18: an OS that disabled animations, or a zero resolved duration, means
     // no fade at all rather than an instant flash of chrome.
     if (!this.timing.animationsEnabled() || durationMs <= 0) return;
-    const ghost = new St.Widget({ style_class: CSS_CLASS, reactive: false });
+    const ghost: StWidgetLike = new St.Widget({ style_class: CSS_CLASS, reactive: false });
     ghost.set_position(rect.x, rect.y);
     ghost.set_size(rect.width, rect.height);
     ghost.set_style(this.styleString());
@@ -217,7 +260,7 @@ export class GnomeIndicator implements IndicatorBackend {
   }
 
   /** Remove chrome and destroy one actor, each guarded against a prior destroy. */
-  private destroyActor(actor: any): void {
+  private destroyActor(actor: StWidgetLike | null | undefined): void {
     if (actor === null || actor === undefined || this.goneActors.has(actor)) return;
     try {
       actor.destroy();
@@ -227,7 +270,7 @@ export class GnomeIndicator implements IndicatorBackend {
   }
 
   /** `removeChrome`, skipped when the actor or the stage is already gone. */
-  private removeChrome(actor: any): void {
+  private removeChrome(actor: StWidgetLike | null | undefined): void {
     if (actor === null || actor === undefined || this.stageGone || this.goneActors.has(actor)) return;
     try {
       layoutManager.removeChrome(actor);
@@ -259,7 +302,7 @@ export class GnomeIndicator implements IndicatorBackend {
   }
 
   /** Keep `actor` under the notification tray, so a banner paints over it. */
-  private stackBelowTray(actor: any): void {
+  private stackBelowTray(actor: StWidgetLike): void {
     if (this.stageGone || this.goneActors.has(actor)) return;
     try {
       const parent = actor.get_parent();
@@ -353,10 +396,13 @@ export class GnomeIndicator implements IndicatorBackend {
 
   private systemAccentName(): string {
     try {
-      if (this.interfaceSettings === null) {
-        this.interfaceSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
+      let settings = this.interfaceSettings;
+      if (settings === null) {
+        const created: SystemSettingsLike = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
+        this.interfaceSettings = created;
+        settings = created;
       }
-      const accent: string = this.interfaceSettings.get_string('accent-color');
+      const accent: string = settings.get_string('accent-color');
       return accent.length > 0 ? accent : 'blue';
     } catch (e) {
       console.error(`[adrt] could not read the system accent colour: ${(e as Error).message}`);

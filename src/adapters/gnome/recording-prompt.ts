@@ -33,6 +33,71 @@ export interface RecordingPromptCallbacks {
   onCancel(): void;
 }
 
+/**
+ * Structural views of the GJS actors the prompt drives. `gi.d.ts` declares the
+ * `St`/`Shell` namespaces as `any`, so each view names only the members this file
+ * uses and marks optional exactly what the code probes — the same pattern as
+ * `compat.ts`/`host.ts`.
+ */
+
+/** A `St.Widget`/`St.BoxLayout`, read for layout, size and child management. */
+interface StActorLike {
+  spacing?: number;
+  connect<A extends unknown[]>(signal: string, callback: (...args: A) => unknown): number;
+  destroy(): void;
+  add_child(child: unknown): void;
+  set_x_align(align: unknown): void;
+  set_position(x: number, y: number): void;
+  set_size(width: number, height: number): void;
+  get_transformed_position(): [number, number];
+  get_transformed_size(): [number, number];
+  get_preferred_width(forHeight: number): [number, number];
+  get_preferred_height(forWidth: number): [number, number];
+}
+
+/** A focusable `St.Entry` and the `Clutter.Text` it wraps. */
+interface StEntryLike extends StActorLike {
+  set_text(text: string): void;
+  get_text?(): string;
+  clutter_text?: {
+    connect<A extends unknown[]>(signal: string, callback: (...args: A) => unknown): number;
+    has_key_focus?(): boolean;
+  };
+  has_key_focus?(): boolean;
+  grab_key_focus?(): void;
+}
+
+/** A `St.Button`; only its `clicked` emission is driven programmatically. */
+interface StButtonLike extends StActorLike {
+  emit(signal: string, ...args: unknown[]): unknown;
+}
+
+/** Whatever is currently on screen: the `Shell.ModalDialog` or the overlay actor. */
+interface PromptActorLike {
+  close?(): void;
+  destroy(): void;
+}
+
+/** One entry of `Shell.ModalDialog.setButtons`. */
+interface ModalDialogButton {
+  label: string;
+  action: () => void;
+  key?: unknown;
+  default?: boolean;
+}
+
+/** The `Shell.ModalDialog` built when the running Shell exposes it. */
+interface ModalDialogLike extends PromptActorLike {
+  contentLayout: StActorLike;
+  setButtons(buttons: ModalDialogButton[]): void;
+  open(): void;
+}
+
+/** A `Clutter.Event` as read by the overlay's key handler. */
+interface KeyEventLike {
+  get_key_symbol(): unknown;
+}
+
 export type RecordingPromptKind = 'modal' | 'overlay';
 
 /** The on-screen content rect, for `RecordingStatus.promptRect`. */
@@ -44,13 +109,13 @@ export interface PromptRect {
 }
 
 export class RecordingPrompt {
-  private actor: any = null;
-  private overlay: any = null;
-  private contentBox: any = null;
-  private entry: any = null;
-  private noteEntry: any = null;
-  private saveButton: any = null;
-  private cancelButton: any = null;
+  private actor: PromptActorLike | null = null;
+  private overlay: StActorLike | null = null;
+  private contentBox: StActorLike | null = null;
+  private entry: StEntryLike | null = null;
+  private noteEntry: StEntryLike | null = null;
+  private saveButton: StButtonLike | null = null;
+  private cancelButton: StButtonLike | null = null;
   private mechanism: RecordingPromptKind | null = null;
   private callbacks: RecordingPromptCallbacks | null = null;
   /** True while a modal grab is held (either mechanism). */
@@ -176,25 +241,27 @@ export class RecordingPrompt {
     }
   }
 
-  private buildFields(): any {
-    const box = new St.BoxLayout({ vertical: true, style_class: 'adrt-recording-body' });
+  private buildFields(): StActorLike {
+    const box: StActorLike = new St.BoxLayout({ vertical: true, style_class: 'adrt-recording-body' });
     box.spacing = 8;
     box.add_child(new St.Label({ text: 'What did you observe?', style_class: 'adrt-recording-title' }));
-    this.entry = new St.Entry({
+    const entry: StEntryLike = new St.Entry({
       style_class: 'adrt-recording-entry',
       hint_text: 'Describe the bug you just saw…',
       can_focus: true,
     });
-    box.add_child(this.entry);
+    this.entry = entry;
+    box.add_child(entry);
     box.add_child(new St.Label({ text: 'A short note is enough.', style_class: 'adrt-recording-hint' }));
-    this.noteEntry = new St.Entry({
+    const noteEntry: StEntryLike = new St.Entry({
       style_class: 'adrt-recording-entry',
       hint_text: 'Short note (optional)',
       can_focus: true,
     });
-    box.add_child(this.noteEntry);
+    this.noteEntry = noteEntry;
+    box.add_child(noteEntry);
     // Enter in either field is Save; the overlay's key handler covers Escape.
-    for (const field of [this.entry, this.noteEntry]) {
+    for (const field of [entry, noteEntry]) {
       try {
         field.clutter_text?.connect('activate', () => this.submit());
       } catch {
@@ -205,16 +272,18 @@ export class RecordingPrompt {
     return box;
   }
 
-  private buildButtons(): any {
-    const buttons = new St.BoxLayout({ style_class: 'adrt-recording-buttons' });
+  private buildButtons(): StActorLike {
+    const buttons: StActorLike = new St.BoxLayout({ style_class: 'adrt-recording-buttons' });
     buttons.spacing = 8;
     buttons.set_x_align(Clutter.ActorAlign.END);
-    this.cancelButton = new St.Button({ label: 'Cancel', style_class: 'adrt-recording-button' });
-    this.cancelButton.connect('clicked', () => this.cancel());
-    this.saveButton = new St.Button({ label: 'Save', style_class: 'adrt-recording-button', can_focus: true });
-    this.saveButton.connect('clicked', () => this.submit());
-    buttons.add_child(this.cancelButton);
-    buttons.add_child(this.saveButton);
+    const cancelButton: StButtonLike = new St.Button({ label: 'Cancel', style_class: 'adrt-recording-button' });
+    cancelButton.connect('clicked', () => this.cancel());
+    this.cancelButton = cancelButton;
+    const saveButton: StButtonLike = new St.Button({ label: 'Save', style_class: 'adrt-recording-button', can_focus: true });
+    saveButton.connect('clicked', () => this.submit());
+    this.saveButton = saveButton;
+    buttons.add_child(cancelButton);
+    buttons.add_child(saveButton);
     return buttons;
   }
 
@@ -241,7 +310,7 @@ export class RecordingPrompt {
   private tryModal(): boolean {
     try {
       if (typeof Shell.ModalDialog !== 'function') return false;
-      const dialog = new Shell.ModalDialog({ styleClass: 'adrt-recording-dialog' });
+      const dialog: ModalDialogLike = new Shell.ModalDialog({ styleClass: 'adrt-recording-dialog' });
       dialog.contentLayout.add_child(this.buildFields());
       dialog.setButtons([
         { label: 'Cancel', action: () => this.cancel(), key: Clutter.KEY_Escape },
@@ -266,20 +335,21 @@ export class RecordingPrompt {
   }
 
   private tryOverlay(): boolean {
-    let overlay: any = null;
+    let overlay: StActorLike | null = null;
     try {
-      overlay = new St.Widget({
+      const built: StActorLike = new St.Widget({
         style_class: 'adrt-recording-overlay',
         reactive: true,
         // A full-screen backdrop under the centred content; the dim colour comes
         // from the stylesheet, and the size is set in `resize()`.
       });
+      overlay = built;
       const box = this.buildFields();
       box.add_child(this.buildButtons());
-      overlay.add_child(box);
-      uiGroup.add_child(overlay);
-      this.actor = overlay;
-      this.overlay = overlay;
+      built.add_child(box);
+      uiGroup.add_child(built);
+      this.actor = built;
+      this.overlay = built;
       this.mechanism = 'overlay';
 
       // Fit the backdrop to the stage and re-fit on every stage resize.
@@ -288,7 +358,7 @@ export class RecordingPrompt {
       this.stageSignals.push(global.stage.connect('notify::height', () => this.resize()));
 
       // Escape anywhere on the overlay cancels; Enter in a field is Save.
-      overlay.connect('key-press-event', (_actor: any, event: any) => {
+      built.connect('key-press-event', (_actor: StActorLike, event: KeyEventLike) => {
         if (event.get_key_symbol() === Clutter.KEY_Escape) {
           this.cancel();
           return Clutter.EVENT_STOP;
@@ -297,7 +367,7 @@ export class RecordingPrompt {
       });
 
       // Without the grab the Shell keeps sending keys to the focused window.
-      this.takeGrab(overlay);
+      this.takeGrab(built);
       this.focusEntry();
       this.settle();
       return true;
@@ -325,7 +395,7 @@ export class RecordingPrompt {
   }
 
   /** Take the modal grab once; guarded so a double call is a no-op. */
-  private takeGrab(actor: any): void {
+  private takeGrab(actor: StActorLike): void {
     if (this.grabHeld) return;
     try {
       pushModal(actor);

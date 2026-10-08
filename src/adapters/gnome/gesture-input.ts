@@ -51,6 +51,52 @@ const PINCH_COMMIT = 0.02;
 const MIN_SWIPE_FINGERS = 3;
 const MAX_SWIPE_FINGERS = 4;
 
+/**
+ * Structural views of the GJS gesture objects. `gi.d.ts` declares `Clutter` as
+ * `any`, so each view names only the members this file calls and marks optional
+ * exactly what the code probes — the same pattern as `compat.ts`.
+ */
+
+/** A Clutter action (the `PanGesture`, or the legacy `GestureAction`) on the stage. */
+interface ClutterActionLike {
+  connect<A extends unknown[]>(signal: string, callback: (...args: A) => unknown): number;
+  disconnect(id: number): void;
+}
+
+/** The modern `Clutter.PanGesture`, read for its point count and delta. */
+interface PanGestureLike extends ClutterActionLike {
+  get_n_points?(): number;
+  get_delta_abs?(): { get_x?(): number; x?: number; get_y?(): number; y?: number };
+}
+
+/** The `Clutter.Stage` methods the gesture wiring uses. */
+interface GestureStageLike {
+  connect<A extends unknown[]>(signal: string, callback: (...args: A) => unknown): number;
+  disconnect(id: number): void;
+  add_action(action: ClutterActionLike): void;
+  remove_action(action: ClutterActionLike): void;
+}
+
+/** The recognizer constructors/enums, exactly where `Clutter` is dynamic (§41.4). */
+interface PanGestureApi {
+  PanGesture: new (params: { min_n_points: number; max_n_points: number; pan_axis: number }) => PanGestureLike;
+  PanAxis?: { BOTH?: number };
+}
+
+/** The legacy pre-45 `new Clutter.GestureAction()` (§41.4). */
+interface GestureActionApi {
+  GestureAction: new () => ClutterActionLike;
+}
+
+/** A `Clutter.Event` carrying a raw touchpad swipe/pinch, as `compat` reads it. */
+interface TouchpadGestureEventLike {
+  type(): unknown;
+  get_gesture_phase?(): unknown;
+  get_touchpad_gesture_finger_count?(): unknown;
+  get_gesture_pinch_scale?(): unknown;
+  get_gesture_motion_delta_unaccelerated(): [unknown, unknown];
+}
+
 interface SwipeTracker {
   kind: GestureKind | null;
   fingers: number;
@@ -79,15 +125,15 @@ function emptyPinch(): PinchTracker {
 export class GestureInput {
   private state: GestureState = initialGestureState();
   /** Legacy `Clutter.GestureAction` (last-resort fallback only). */
-  private action: any = null;
+  private action: ClutterActionLike | null = null;
   private signalIds: number[] = [];
   private lastPointer: [number, number] | null = null;
   /** Modern `Clutter.PanGesture` recognizer on the stage. */
-  private panGesture: any = null;
+  private panGesture: PanGestureLike | null = null;
   private panSignalIds: number[] = [];
   private pan: SwipeTracker = emptySwipe();
   /** Raw touchpad swipe/pinch events on the stage. */
-  private stage: any = null;
+  private stage: GestureStageLike | null = null;
   private touchpadSignalId = 0;
   private touchpad: SwipeTracker = emptySwipe();
   private pinch: PinchTracker = emptyPinch();
@@ -287,10 +333,10 @@ export class GestureInput {
 
   private attachTouchpadGestures(): boolean {
     if (!compat.hasTouchpadGestureEvents()) return false;
-    const stage: any = global.stage;
+    const stage: GestureStageLike | null | undefined = global.stage;
     if (stage === null || stage === undefined || typeof stage.connect !== 'function') return false;
     try {
-      this.touchpadSignalId = stage.connect('event::touchpad', (_stage: any, event: any) => this.onTouchpadEvent(event));
+      this.touchpadSignalId = stage.connect('event::touchpad', (_stage: GestureStageLike, event: TouchpadGestureEventLike) => this.onTouchpadEvent(event));
       this.stage = stage;
       return true;
     } catch (e) {
@@ -302,7 +348,7 @@ export class GestureInput {
   }
 
   /** Return `EVENT_STOP` once we own a gesture, so GNOME's own handler defers. */
-  private onTouchpadEvent(event: any): boolean {
+  private onTouchpadEvent(event: TouchpadGestureEventLike): boolean {
     if (!this.config().enabled) return Clutter.EVENT_PROPAGATE;
     const reading = compat.readTouchpadGesture(event);
     if (reading === null) return Clutter.EVENT_PROPAGATE;
@@ -378,11 +424,12 @@ export class GestureInput {
   private attachPanGesture(): boolean {
     if (!compat.hasPanGesture()) return false;
     try {
-      const PanGesture = (Clutter as any).PanGesture;
-      this.panGesture = new PanGesture({
+      // `Clutter` is declared `any`: this view is the recognizer surface used here.
+      const api: PanGestureApi = Clutter;
+      this.panGesture = new api.PanGesture({
         min_n_points: MIN_SWIPE_FINGERS,
         max_n_points: MAX_SWIPE_FINGERS,
-        pan_axis: (Clutter as any)?.PanAxis?.BOTH ?? 0,
+        pan_axis: api.PanAxis?.BOTH ?? 0,
       });
       this.panSignalIds.push(this.panGesture.connect('recognize', () => this.onPanRecognize()));
       this.panSignalIds.push(this.panGesture.connect('pan-update', () => this.onPanUpdate()));
@@ -438,7 +485,9 @@ export class GestureInput {
   private connectClutterAction(): void {
     if (!compat.hasLegacyGestureAction()) return;
     try {
-      this.action = new (Clutter as any).GestureAction();
+      // `Clutter` is declared `any`: this view is the legacy action constructor.
+      const api: GestureActionApi = Clutter;
+      this.action = new api.GestureAction();
       global.stage.add_action(this.action);
       this.signalIds.push(this.action.connect('gesture-begin', () => this.onClutterPhase('begin')));
       this.signalIds.push(this.action.connect('gesture-end', () => this.onClutterPhase('end')));
