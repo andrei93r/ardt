@@ -58,7 +58,12 @@ bash scripts/keybinding-test.sh   # Adrt enabled + ydotoold running
 It injects `Super+Z`, `Super+Right` and `Super+f`, so expect your desktop to see
 those shortcuts.
 
-### Agent scenarios (§40.4)
+### Agent scenarios
+
+The authoritative list is `tests/MANIFEST.md`, regenerated from the scenario
+files (currently 156 in `tests/agent/` and 25 live-session scenarios in
+`tests/session/`). The table below is the original §40.4 seed list, kept as a
+quick orientation:
 
 | #   | Area             | How it is driven                          |
 | --- | ---------------- | ----------------------------------------- |
