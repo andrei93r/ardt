@@ -29,7 +29,7 @@
 | --- | --- | --- |
 | P0 | Land ready refactor + repair the green gate | **done** (gate fixes on `perf-gnome`; nested smoke pending) |
 | P1 | Correctness sweep | **done** — 1.1–1.9, 1.11–1.14 committed; 1.10 done for session.ts (injection/parseSpawnEnv leftovers in extension.ts) |
-| P2 | Main-loop & allocation diet | **done** except 2.7 — gating the coherence sweep is deliberately deferred until a live nested measurement (the plan's own "measure first" rule); the 2.9 profiler is in, its churn-workload test remains |
+| P2 | Main-loop & allocation diet | **done** — 2.7 resolved by live measurement: idle 12 s with a window shows `sweeps` +18 at ~0.15 ms each, `classifyMisses` 0, `plansComputed` 0, `sweepFrameReads` 0, `configBuilds` 0, `drains` 0; gating would save ~0.2 ms/s and weaken the §35 guarantee, so the 700 ms sweep stays. 2.9 profiler in; its churn-workload test remains |
 | P3 | Zero `any` | **done** — zero explicit `any` in `src` including `gi.d.ts`, tests type-checked, `no-explicit-any` and type-aware `no-floating-promises` enforced; one documented D-Bus dispatch `as unknown as` |
 | P4 | Decomposition & deletion | mostly done — split waves 1–3 committed (`session.ts` 4,083 → 1,875), trigger table, JSONL unification, helper dedupe, dead files/exports cleared under knip; settings descriptor (P6b) remains |
 | P5 | Guardrails (CI/tests/docs) | done except two documented blockers — generated fuzz vectors are prose scenarios with no executable reducer (reported, no fake test); `TESTING.md`'s A1–A77 table is stale |
@@ -236,11 +236,13 @@ Idle targets: `configBuilds` 0, `classifyMisses` 0, `hostScans` 0;
 6. **O(1) screen lookup (M).** `screenFor` is a linear scan
    (`session.ts:2515-2520`) called ~30× across the file. Have `GnomeHost`
    maintain `Map<screenIndex, Screen>` and pass it down.
-7. **Gate the 700 ms coherence sweep (M–L).** `extension.ts:468` still runs
-   `workspaces × screens × tileables` forever. Run it when signatures are dirty
-   or the window set changed, with a slow heartbeat (e.g. 30 s) to keep the §35
-   guarantee. Prove with the `coherenceFixes` counter first — do not gate what
-   was never measured.
+7. **Gate the 700 ms coherence sweep (M–L) — resolved by measurement
+   (2026-10-08), kept as-is.** Idle 12 s in a nested Shell with a window:
+   `sweeps` +18 (~0.15 ms each ≈ 0.2 ms/s), `classifyMisses` 0,
+   `plansComputed` 0, `sweepFrameReads` 0, `configBuilds` 0, `drains` 0. The
+   earlier stages removed the churn this item targeted; gating would add state
+   and weaken the §35 guarantee for noise. Revisit only if a future workload
+   makes `sweepMsAvg` visible.
 8. **Allocation hygiene in core (M).** `computePlans` copies/sorts up to 4× and
    re-snaps rects at scale 1 (`tiler.ts:426-494`; `snapRect` can return its
    input); `profiles.profileFor` re-normalizes every family per call
