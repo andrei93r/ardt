@@ -122,4 +122,23 @@ describe('mergeBundles', () => {
     expect(result.bundle.settings['gaps-base']).toBe(16);
     expect(result.settings.applied).toContain('gaps-base');
   });
+
+  const withRegistry = (appId: string) => ({
+    ...v3,
+    tracked: { ...v3.tracked, registry: { version: 1, entries: [{ appId }] } },
+  });
+
+  it('carries the registry through a merge, the incoming one winning', () => {
+    const base = parseBundle(JSON.stringify(withRegistry('base'))).bundle!;
+    const incoming = parseBundle(JSON.stringify(withRegistry('incoming'))).bundle!;
+    const result = mergeBundles(base, incoming, 'merge');
+    expect(result.bundle.tracked.registry).toEqual({ version: 1, entries: [{ appId: 'incoming' }] });
+  });
+
+  it('keeps the base registry when the incoming bundle has none', () => {
+    const base = parseBundle(JSON.stringify(withRegistry('base'))).bundle!;
+    const incoming = parseBundle(JSON.stringify(v3)).bundle!;
+    const result = mergeBundles(base, incoming, 'merge');
+    expect(result.bundle.tracked.registry).toEqual({ version: 1, entries: [{ appId: 'base' }] });
+  });
 });

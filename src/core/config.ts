@@ -243,6 +243,12 @@ export function mergeBundles(base: Bundle, incoming: Bundle, mode: ImportMode): 
 
   const adaptations = mergeAdaptations(base.tracked.adaptations, incoming.tracked.adaptations, mode);
   const behavior = mergeRecords(base.tracked.behavior, incoming.tracked.behavior, mode);
+  // The serialised registry is opaque to this module (`AppRegistry` owns entry
+  // merging), so it is carried through by reference: in merge mode the incoming
+  // one wins and falls back to the base; replace mode takes the incoming one
+  // wholesale. Rebuilding `tracked` without it silently dropped every placement.
+  const registry =
+    mode === 'replace' ? incoming.tracked.registry : (incoming.tracked.registry ?? base.tracked.registry);
 
   return {
     bundle: {
@@ -250,7 +256,11 @@ export function mergeBundles(base: Bundle, incoming: Bundle, mode: ImportMode): 
       version: BUNDLE_VERSION,
       exportedAt: new Date().toISOString(),
       settings,
-      tracked: { adaptations: adaptations.record, behavior: behavior.record },
+      tracked: {
+        adaptations: adaptations.record,
+        behavior: behavior.record,
+        ...(registry === undefined ? {} : { registry }),
+      },
     },
     settings: settingsReport,
     adaptations: adaptations.report,
