@@ -21,7 +21,7 @@ import Gio from 'gi://Gio';
 
 import { RingBuffer } from '../../core/ringbuffer.js';
 import { JsonlBuffer, dayString, encodeText, jsonLine } from '../../core/jsonl.js';
-import { partPath, partsToPrune, shouldRotate } from '../../core/rotation.js';
+import { partPath, shouldRotate } from '../../core/rotation.js';
 import { clipPayload } from '../../core/text.js';
 import { dataDir, readText, writeAtomic } from './adapt.js';
 
@@ -270,9 +270,13 @@ export class EventJournal {
     } catch {
       /* nothing to delete */
     }
-    for (const part of partsToPrune(MAX_PARTS, MAX_PARTS)) {
-      const from = Gio.File.new_for_path(partPath(base, part - 1));
-      const to = Gio.File.new_for_path(partPath(base, part));
+    // Shift live -> .2 -> .3 ... so the current file starts empty after
+    // rotation. `partsToPrune(MAX_PARTS, MAX_PARTS)` is empty by definition,
+    // so the previous loop never moved anything and the live file grew past
+    // the cap for the rest of the day.
+    for (let part = MAX_PARTS - 1; part >= 1; part--) {
+      const from = Gio.File.new_for_path(partPath(base, part));
+      const to = Gio.File.new_for_path(partPath(base, part + 1));
       try {
         if (from.query_exists(null)) from.move(to, Gio.FileCopyFlags.OVERWRITE, null, null);
       } catch {
