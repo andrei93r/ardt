@@ -23,6 +23,22 @@ export interface SignalHandle {
 }
 
 /**
+ * The minimal GObject signal emitter surface the registry needs. `never[]` is
+ * the standard idiom for "a callback taking arbitrary arguments" — every
+ * concrete callback is assignable to it, without an explicit `any`.
+ *
+ * `add` accepts `object` and narrows to this view once, because the hand-written
+ * `gi.d.ts` emitters are not uniformly typed yet (`MetaDisplay` does not declare
+ * `connect`/`disconnect`, `MetaWindow.connect` takes `unknown[]` callbacks).
+ * The registry only ever duck-types these at runtime, so the narrowing is
+ * behaviour-preserving and keeps every caller on its existing type.
+ */
+interface Connectable {
+  connect(signal: string, callback: (...args: never[]) => void): number;
+  disconnect(id: number): void;
+}
+
+/**
  * Registry for GObject signal connections.
  *
  * Usage:
@@ -34,7 +50,7 @@ export interface SignalHandle {
  * ```
  */
 export class SignalRegistry {
-  private entries: Array<{ group: string; obj: any; signal: string; id: number }> = [];
+  private entries: Array<{ group: string; obj: Connectable; signal: string; id: number }> = [];
 
   /**
    * Connect a signal and track it under a teardown group. Returns a handle
@@ -44,19 +60,20 @@ export class SignalRegistry {
    */
   add(
     group: string,
-    obj: any,
+    obj: object,
     signal: string,
-    callback: (...args: any[]) => void,
+    callback: (...args: never[]) => void,
   ): SignalHandle {
-    const id = obj.connect(signal, callback);
-    const entry = { group, obj, signal, id };
+    const connectable = obj as Connectable;
+    const id = connectable.connect(signal, callback);
+    const entry = { group, obj: connectable, signal, id };
     this.entries.push(entry);
     return {
       disconnect: () => {
         const idx = this.entries.indexOf(entry);
         if (idx >= 0) {
           this.entries.splice(idx, 1);
-          try { obj.disconnect(id); } catch { /* already gone */ }
+          try { connectable.disconnect(id); } catch { /* already gone */ }
         }
       },
     };
