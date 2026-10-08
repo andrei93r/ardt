@@ -32,8 +32,7 @@ import { dragOutcome } from '../../core/drag.js';
 import type { DragOutcome } from '../../core/drag.js';
 import { dragIsWindowMove } from '../../core/windowmove.js';
 import { reapPlan } from '../../core/workspaces.js';
-import type { Change, ChangeLog, InstanceConfig, LiveInstance } from '../../core/undo.js';
-import { validateChange } from '../../core/undo.js';
+import type { ChangeLog } from '../../core/undo.js';
 
 /** §10: how long a maintenance pass waits for the surface to settle (struts are
  * set asynchronously by the Shell; internal safety, not a frame cadence). */
@@ -47,21 +46,22 @@ import { checkPlan } from '../../core/invariants.js';
 import { SignatureCache, planSignature, shouldApplyPlan } from '../../core/scheduler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
 import { computePlans, ratioKey, resolveGaps, screenArea } from '../../core/tiler.js';
-import type { FocusDirection } from '../../core/focus.js';
-import { cycleOrder, cycleSequence, pickDirectional } from '../../core/focus.js';
-import type { CycleEntry } from '../../core/focus.js';
 import { Layer, clampRectToArea, rectEquals } from '../../core/types.js';
 import type { Rect, Screen, Size, TilePlan } from '../../core/types.js';
 import { shouldClampWindow } from '../../core/clamp.js';
 import * as compat from './compat.js';
+import { FocusController } from './focus.js';
 import type { GnomeHost } from './host.js';
 import type { History } from './history.js';
+import { SessionDiagnostics } from './diagnostics.js';
+import type { SessionCounters, SessionPerf } from './diagnostics.js';
 import { instanceIdFor, resolveWindowIdentity } from './appidentity.js';
 import type { RegistryStore } from './registry.js';
 import type { GnomeSettings } from './settings.js';
 import type { GnomeTiming } from './timing.js';
 import type { Tiling } from './tiling.js';
 import { TrackedWindow } from './tracked-window.js';
+import { UndoCoordinator } from './undo.js';
 
 export interface SessionDeps {
   host: GnomeHost;
@@ -147,8 +147,6 @@ const SWITCH_ANIMATION_PATCH_MS = 400;
 /** Two settle passes after an action, so reaping sees the final state. */
 const PRUNE_FIRST_MS = 300;
 const PRUNE_SECOND_MS = 900;
-/** Ignore plan-mismatch re-applies for this long after Undo (internal). */
-const MISMATCH_SUPPRESSION_MS = 4000;
 /** Backoff before re-trying a lone-window maximize the same window refused. */
 const COHERENCE_RETRY_MS = 3000;
 /**
@@ -182,12 +180,8 @@ export class WindowSession {
   private drainArmed: { 1: boolean; 2: boolean; 3: boolean } = { 1: false, 2: false, 3: false };
   /** True once `destroy()` has run; a later-deferred drain must then be a no-op. */
   private destroyed = false;
-  private drains = 0;
-  private drainMsMax = 0;
-  /** §22 perf: bounded samples for p50/p95 of drain and apply latency. */
-  private readonly drainSamples: number[] = [];
-  private readonly applySamples: number[] = [];
-  private static readonly SAMPLE_RING = 256;
+  /** §21/§36: counters and latency samples, owned by the diagnostics module. */
+  private readonly diagnostics = new SessionDiagnostics();
   private readonly timeoutSources = new Set<number>();
   private reorderSignal = 0;
   private displaySignals: number[] = [];
@@ -244,28 +238,45 @@ export class WindowSession {
   private readonly dropPending = new Map<number, { mode: AdjustMode; start: Rect | null }>();
   /** While set, plan-mismatch re-applies are suppressed (e.g. right after Undo). */
   private ignoreMismatchUntilMs = 0;
-  private scanPerfCounter = 0;
-  private lastReconcileMs = 0;
-  private lastApplyMs = 0;
-  private lastApplyAtMs = 0;
-  /** Diagnostics (PERFORMANCE_PLAN.md stage 0): counted, never used to decide. */
-  private classifyCalls = 0;
-  private classifyMisses = 0;
-  private plansComputed = 0;
-  private sweepFrameReads = 0;
-  private sweepMsTotal = 0;
-  private sweepMsMax = 0;
-  /** Frames the clamp-to-screen pass pulled back inside a monitor. */
-  private clampsApplied = 0;
-  /**
-   * §6/§17: the fixed order of the focus-cycle lap in progress, and the last
-   * window it focused. A lap is built once (from the live stacking order) and
-   * kept until it wraps or focus changes by another route, so raising a float
-   * as it is focused cannot re-order the lap.
-   */
-  private cycleLap: { workspaceId: number; screenId: number; order: number[]; startId: number; lastId: number } | null = null;
+  /** §6/§17: the focus cycle and directional focus, owned by the focus module. */
+  private readonly focusController: FocusController;
+  /** §13: capture/restore/undo, owned by the undo module. */
+  private readonly undoCoordinator: UndoCoordinator;
 
-  constructor(private readonly deps: SessionDeps) {}
+  constructor(private readonly deps: SessionDeps) {
+    this.focusController = new FocusController({
+      focused: () => this.focused(),
+      focus: (id) => this.focus(id),
+      allWindows: () => this.windows.values(),
+      window: (id) => this.windows.get(id),
+      classify: (tracked) => this.classify(tracked),
+      slotFor: (tracked) => this.slotFor(tracked),
+      tileables: (workspaceId) => this.tileables(workspaceId),
+      logFocus: (event, fields) => {
+        if (this.deps.settings.boolean('debug-focus', false)) this.deps.history.log(event, fields);
+      },
+    });
+    this.undoCoordinator = new UndoCoordinator({
+      changes: deps.changes,
+      tiling: deps.tiling,
+      host: deps.host,
+      history: deps.history,
+      onNotice: deps.onNotice,
+      tileables: (workspaceId) => this.tileables(workspaceId),
+      window: (id) => this.windows.get(id),
+      allWindows: () => this.windows.values(),
+      screenFor: (index) => this.screenFor(index),
+      slotFor: (tracked) => this.slotFor(tracked),
+      moveWindowToWorkspace: (tracked, index) => this.moveWindowToWorkspace(tracked, index),
+      withSelfUnmaximize: (tracked, fn) => this.withSelfUnmaximize(tracked, fn),
+      activateWorkspace: (index) => this.activateWorkspace(index),
+      activeWorkspaceId: () => this.deps.host.activeWorkspaceId(),
+      clearSignatures: () => this.signatures.clearAll(),
+      suppressMismatchUntil: (until) => {
+        this.ignoreMismatchUntilMs = until;
+      },
+    });
+  }
 
   /** §24 item 8: adaptive back-off scan tick. */
   private scanSource: number | null = null;
@@ -1524,7 +1535,7 @@ export class WindowSession {
     const started = GLib.get_monotonic_time();
     const events = this.queue.drain();
     if (events.length === 0) return;
-    this.drains += 1;
+    this.diagnostics.noteDrain();
     // §19: a pause lets the queue finish what it already holds. `isPaused()` is
     // consulted through the extension, which returns false while this flag is
     // set; new work is still refused at push time, so only the backlog runs.
@@ -1539,8 +1550,7 @@ export class WindowSession {
       this.drainingBacklog = false;
     }
     const ms = (GLib.get_monotonic_time() - started) / 1000;
-    this.drainMsMax = Math.max(this.drainMsMax, ms);
-    this.pushSample(this.drainSamples, ms);
+    this.diagnostics.noteDrainMs(ms);
   }
 
   /**
@@ -1843,7 +1853,7 @@ export class WindowSession {
         continue;
       }
       const startedUs = GLib.get_monotonic_time();
-      this.plansComputed += 1;
+      this.diagnostics.notePlanComputed();
       const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, config);
       // §36: pass the per-window minimum so the below-min invariant actually
       // runs in production, not just in the tests; a violation is still logged,
@@ -1875,11 +1885,10 @@ export class WindowSession {
       });
       this.deps.tiling.applyPlan(plan, screen, reason, animate, rememberUndo);
       // §36.14: one retile must complete well under 10ms.
-      this.lastApplyMs = (GLib.get_monotonic_time() - startedUs) / 1000;
-      this.lastApplyAtMs = Date.now();
-      this.pushSample(this.applySamples, this.lastApplyMs);
-      if (this.lastApplyMs > 5 && this.deps.settings.boolean('debug-enabled', false)) {
-        this.deps.history.log('perf', { workspaceId, screen: screen.index, apply_ms: this.lastApplyMs });
+      const applyMs = (GLib.get_monotonic_time() - startedUs) / 1000;
+      this.diagnostics.noteApply(applyMs);
+      if (applyMs > 5 && this.deps.settings.boolean('debug-enabled', false)) {
+        this.deps.history.log('perf', { workspaceId, screen: screen.index, apply_ms: applyMs });
       }
     }
     this.deps.onStateChanged();
@@ -2040,85 +2049,7 @@ export class WindowSession {
    * a screen or a workspace; focusing a float raises it.
    */
   focusCycle(): void {
-    const current = this.focused();
-    if (current === null) {
-      this.cycleLap = null;
-      return;
-    }
-    const workspaceId = current.surface.workspaceId;
-    const screenId = current.surface.screenId;
-    const entries = this.cycleEntries(workspaceId, screenId);
-    const live = new Set(entries.filter((entry) => entry.minimized !== true).map((entry) => entry.id));
-    // Keep the lap's snapshot while it still describes this plane and the
-    // focused window is the one this lap last focused; a focus change by any
-    // other route (a click, a direction key) starts a fresh lap.
-    const lap = this.cycleLap;
-    const sameSet =
-      lap !== null &&
-      lap.order.length === live.size &&
-      lap.order.every((id) => live.has(id));
-    const order =
-      lap !== null &&
-      lap.workspaceId === workspaceId &&
-      lap.screenId === screenId &&
-      lap.lastId === current.id &&
-      sameSet
-        ? lap.order
-        : cycleSequence(entries);
-    if (lap === null || order !== lap.order) {
-      this.cycleLap = { workspaceId, screenId, order, startId: current.id, lastId: current.id };
-    }
-    const next = cycleOrder(current.id, entries, order);
-    if (next === null || next === current.id) {
-      this.cycleLap = null;
-      return;
-    }
-    const target = this.windows.get(next);
-    if (target === undefined) {
-      this.cycleLap = null;
-      return;
-    }
-    if (target.surface.flags.floating || target.autoFloated) {
-      target.win.raise();
-    }
-    this.logFocus('focus_cycle', { from: current.id, to: next });
-    this.focus(next);
-    const active = this.cycleLap;
-    if (active !== null) {
-      // A lap ends when it wraps back to its first window; the next press then
-      // rebuilds the order from the then-live stacking.
-      if (next === active.startId) this.cycleLap = null;
-      else active.lastId = next;
-    }
-  }
-
-  /** Per-subsystem debug logging (§22): gated on `debug-focus`. */
-  private logFocus(event: string, fields: Record<string, unknown>): void {
-    if (this.deps.settings.boolean('debug-focus', false)) this.deps.history.log(event, fields);
-  }
-
-  /** The focus cycle of one plane: managed in slot order, then floats. */
-  private cycleEntries(workspaceId: number, screenId: number): CycleEntry[] {
-    const entries: CycleEntry[] = [];
-    for (const tracked of this.windows.values()) {
-      if (tracked.surface.workspaceId !== workspaceId) continue;
-      if (tracked.surface.screenId !== screenId) continue;
-      // A float is unmanaged but still part of the cycle; a dialog or popup is
-      // neither managed nor a float and is skipped.
-      const floating = tracked.surface.flags.floating || tracked.autoFloated;
-      if (!floating && !this.classify(tracked).tileable) continue;
-      if (tracked.surface.flags.minimized) {
-        entries.push({ id: tracked.id, kind: 'managed', minimized: true });
-        continue;
-      }
-      if (floating) {
-        tracked.surface.captureZ();
-        entries.push({ id: tracked.id, kind: 'float', rect: tracked.surface.frame, z: tracked.surface.zPosition });
-        continue;
-      }
-      entries.push({ id: tracked.id, kind: 'managed', slot: this.slotFor(tracked) ?? 0 });
-    }
-    return entries;
+    this.focusController.focusCycle();
   }
 
   /** §13: keyboard move toward the sibling toggles the swap flag. */
@@ -2215,7 +2146,7 @@ export class WindowSession {
 
   /** §13: capture the pair's current configuration before a user ratio change. */
   capturePairChange(a: number, b: number): void {
-    this.captureChange([a, b]);
+    this.undoCoordinator.capturePairChange(a, b);
   }
 
   /**
@@ -2225,114 +2156,17 @@ export class WindowSession {
    * nothing.
    */
   undo(): boolean {
-    const change = this.deps.changes.take();
-    if (change === null) {
-      // §13: an undo with nothing to revert is announced, never silent.
-      this.deps.onNotice?.('nothing-to-undo', 'undo');
-      return false;
-    }
-    const live: LiveInstance[] = [];
-    for (const tracked of this.windows.values()) {
-      live.push({ id: tracked.id, workspace: tracked.surface.workspaceId, slot: this.slotFor(tracked) });
-    }
-    const check = validateChange(change, live);
-    if (!check.ok) {
-      this.deps.history.log('undo_impossible', { problem: check.problem, instances: change.instances.map((instance) => instance.id) });
-      this.deps.onNotice?.('undo-impossible', check.problem ?? 'unknown');
-      return false;
-    }
-    // Ratios first, so the retile that follows agrees with the restored rects.
-    if (change.ratios !== undefined) this.deps.tiling.restoreRatios(change.ratios);
-    for (const instance of change.instances) {
-      const tracked = this.windows.get(instance.id);
-      if (tracked === undefined) continue;
-      // Workspace.
-      if (tracked.surface.workspaceId !== instance.workspace) {
-        this.moveWindowToWorkspace(tracked, instance.workspace);
-      }
-      // Floated flag (§6): undoing an un-float puts the window back in tiling.
-      if (tracked.surface.flags.floating !== instance.floating) {
-        tracked.autoFloated = false;
-        tracked.surface.setFloating(instance.floating);
-        this.deps.tiling.noteSelfApply();
-        this.deps.host.applyLayer(tracked.id, instance.floating ? Layer.FLOATING : Layer.TILED);
-        tracked.invalidateClassification();
-      }
-      // Maximized (§4).
-      if (instance.maximized !== compat.isMaximized(tracked.win)) {
-        this.deps.tiling.noteSelfApply();
-        if (instance.maximized) {
-          this.deps.host.maximize(tracked.id);
-        } else {
-          this.withSelfUnmaximize(tracked, () => this.deps.host.unmaximize(tracked.id));
-        }
-      }
-      tracked.refreshFrame();
-    }
-    // Slots: clear stale pins on the workspaces involved, then set the change's.
-    const touched = new Set<number>();
-    for (const instance of change.instances) touched.add(instance.workspace);
-    for (const other of this.windows.values()) {
-      if (touched.has(other.surface.workspaceId) && !change.instances.some((instance) => instance.id === other.id)) {
-        other.pendingSlot = null;
-      }
-    }
-    for (const instance of change.instances) {
-      const tracked = this.windows.get(instance.id);
-      if (tracked !== undefined) tracked.pendingSlot = instance.slot;
-    }
-    // Geometry last, from the rects captured before the change.
-    for (const instance of change.instances) {
-      const tracked = this.windows.get(instance.id);
-      if (tracked === undefined) continue;
-      // §10: the screen is read fresh; a vanished screen is not invented. A
-      // window with no screen cannot be given a frame — the retile that follows
-      // re-homes it.
-      const screen = this.screenFor(tracked.surface.screenId);
-      if (screen === null) continue;
-      this.deps.tiling.applyFrame(tracked, instance.rect, screen, false, 'undo', 0);
-    }
-    if (change.instances.length > 0 && this.deps.host.activeWorkspaceId() !== change.instances[0].workspace) {
-      this.activateWorkspace(change.instances[0].workspace);
-    }
-    this.deps.history.log('undo', { instances: change.instances.map((instance) => instance.id) });
-    // Do not immediately re-tile over the restored rects.
-    this.ignoreMismatchUntilMs = Date.now() + MISMATCH_SUPPRESSION_MS;
-    this.signatures.clearAll();
-    return true;
+    return this.undoCoordinator.undo();
   }
 
   /** Capture every tiled window on the given workspaces of one screen. */
   private capturePlane(workspaceIds: readonly number[], screenId: number): void {
-    const ids: number[] = [];
-    for (const workspaceId of workspaceIds) {
-      for (const tracked of this.tileables(workspaceId)) {
-        if (tracked.surface.screenId === screenId) ids.push(tracked.id);
-      }
-    }
-    if (ids.length > 0) this.captureChange(ids);
+    this.undoCoordinator.capturePlane(workspaceIds, screenId);
   }
 
   /** Snapshot the current configuration of `ids` as the single undo change. */
   private captureChange(ids: readonly number[], workspaceOverride?: number): void {
-    const instances: InstanceConfig[] = [];
-    for (const id of ids) {
-      const tracked = this.windows.get(id);
-      if (tracked === undefined) continue;
-      tracked.refreshFrame();
-      instances.push({
-        id,
-        workspace: workspaceOverride ?? tracked.surface.workspaceId,
-        slot: this.slotFor(tracked),
-        rect: { ...tracked.surface.frame },
-        maximized: compat.isMaximized(tracked.win),
-        floating: tracked.surface.flags.floating,
-      });
-    }
-    if (instances.length === 0) return;
-    const ratios: Record<string, number> = this.deps.tiling.getRatios();
-    this.deps.changes.set({ instances, ratios } satisfies Change);
-    this.deps.history.log('undo_captured', { instances: instances.map((instance) => instance.id) });
+    this.undoCoordinator.captureChange(ids, workspaceOverride);
   }
 
   /** The slot a window holds: its pin, else read from its rect and screen axis. */
@@ -2560,14 +2394,14 @@ export class WindowSession {
   }
 
   classify(tracked: TrackedWindow): ReturnType<TrackedWindow['classify']> {
-    this.classifyCalls += 1;
-    // §24 item 1 / Phase 2: a hit is the common case — `tileables`,
-    // `buildPlacementState`, `cycleEntries` and `refreshOcclusion` classify per
-    // window — so return the cached answer before building either input. The
-    // live-title context is O(n) strings and must not be allocated on a hit.
+    this.diagnostics.noteClassifyCall();
+    // §24 item 1 / Phase 2: a hit is the common case — `tileables`, the focus
+    // cycle, `buildPlacementState` and `refreshOcclusion` classify per window —
+    // so return the cached answer before building either input. The live-title
+    // context is O(n) strings and must not be allocated on a hit.
     const cached = tracked.peekClassification();
     if (cached !== null) return cached;
-    this.classifyMisses += 1;
+    this.diagnostics.noteClassifyMiss();
     const config = this.deps.settings.classifierConfig();
     // The context is read only by the heuristic modal check, so build the title
     // list only when the heuristic is enabled; otherwise an empty context yields
@@ -3773,18 +3607,15 @@ export class WindowSession {
     this.deps.registry.save();
     this.reapEmptyWorkspaces();
     this.retileAll('scan');
-    this.lastReconcileMs = (GLib.get_monotonic_time() - startedUs) / 1000;
-    this.scanPerfCounter += 1;
+    const reconcileMs = (GLib.get_monotonic_time() - startedUs) / 1000;
+    const perfDue = this.diagnostics.noteReconcile(reconcileMs);
     // §21: one perf event every 60 scans, gated on debug-enabled.
-    if (this.scanPerfCounter >= 60) {
-      this.scanPerfCounter = 0;
-      if (this.deps.settings.boolean('debug-enabled', false)) {
-        this.deps.history.log('perf', {
-          last_reconcile_ms: this.lastReconcileMs,
-          last_apply_ms: this.lastApplyMs,
-          windows: this.windows.size,
-        });
-      }
+    if (perfDue && this.deps.settings.boolean('debug-enabled', false)) {
+      this.deps.history.log('perf', {
+        last_reconcile_ms: reconcileMs,
+        last_apply_ms: this.diagnostics.lastApplyDurationMs(),
+        windows: this.windows.size,
+      });
     }
   }
 
@@ -3846,7 +3677,7 @@ export class WindowSession {
         continue;
       }
       tracked.clamped = true;
-      this.clampsApplied += 1;
+      this.diagnostics.noteClamp();
       this.deps.history.log('clamp_to_screen', { id: tracked.id, from: current, to: clamped });
       this.deps.tiling.noteSelfApply();
       this.deps.tiling.applyFrame(tracked, clamped, screen, false, 'clamp-to-screen', 0);
@@ -3880,7 +3711,7 @@ export class WindowSession {
     // The backstop for a clamp the lane-2 drain missed: an off-screen window is
     // pulled back here even if no frame signal scheduled a reconcile.
     this.clampWindowsToScreen();
-    this.coherenceRuns += 1;
+    this.diagnostics.noteCoherenceRun();
     const sweepStartedUs = GLib.get_monotonic_time();
     // One config per sweep, not per workspace×screen: the settings half is
     // memoised and the live ratios/swap-pair set do not vary within the sweep
@@ -3922,7 +3753,7 @@ export class WindowSession {
             only.stubborn = false;
             this.deps.tiling.noteSelfApply();
             this.deps.host.maximize(only.id);
-            this.coherenceFixes += 1;
+            this.diagnostics.noteCoherenceFix();
             this.deps.history.log('tile', { reason: 'coherence-maximize', id: only.id, workspaceId: index });
           }
           continue;
@@ -3933,13 +3764,13 @@ export class WindowSession {
         // next reconcile resolve them.
         if (tileables.length > 2) continue;
 
-        this.plansComputed += 1;
+        this.diagnostics.notePlanComputed();
         const plan = computePlans(tileables.map((t) => this.toTilerWindow(t)), screen, config);
         let offender = false;
         for (const placement of plan.placements) {
           const tracked = this.windows.get(placement.surfaceId);
           if (tracked === undefined) continue;
-          this.sweepFrameReads += 1;
+          this.diagnostics.noteSweepFrameRead();
           tracked.refreshFrame();
           const r = tracked.surface.frame;
           const off =
@@ -3958,79 +3789,34 @@ export class WindowSession {
         this.signatures.clearAll();
         this.ignoreMismatchUntilMs = 0;
         this.deps.tiling.applyPlan(plan, screen, 'coherence', false, false);
-        this.coherenceFixes += 1;
+        this.diagnostics.noteCoherenceFix();
         this.deps.history.log('tile', { reason: 'coherence', workspaceId: index, screen: screen.index });
         this.deps.onStateChanged();
       }
     }
     const sweepMs = (GLib.get_monotonic_time() - sweepStartedUs) / 1000;
-    this.sweepMsTotal += sweepMs;
-    if (sweepMs > this.sweepMsMax) this.sweepMsMax = sweepMs;
+    this.diagnostics.noteSweep(sweepMs);
   }
 
-  /** How many periodic coherence sweeps have run (diagnostics). */
-  private coherenceRuns = 0;
-  /** How many corrections the sweeps have made (diagnostics). */
-  private coherenceFixes = 0;
   /** Per-window throttle for re-maximizing a lone window (ms epoch). */
   private readonly coherenceRetryAt = new Map<number, number>();
+
+  /** How many periodic coherence sweeps have run (diagnostics). */
   coherenceSweepCount(): number {
-    return this.coherenceRuns;
+    return this.diagnostics.coherenceSweepCount();
   }
 
   /** How many corrections the sweeps have made (diagnostics). */
   coherenceFixCount(): number {
-    return this.coherenceFixes;
+    return this.diagnostics.coherenceFixCount();
   }
 
   /**
    * Stage 0 counters (PERFORMANCE_PLAN.md). They exist only to be observed:
    * no decision anywhere reads them.
    */
-  counters(): {
-    sweeps: number;
-    sweepMsMax: number;
-    sweepMsAvg: number;
-    classifyCalls: number;
-    classifyMisses: number;
-    plansComputed: number;
-    sweepFrameReads: number;
-    drains: number;
-    queuePending: number;
-    drainMsMax: number;
-    drainMsP50: number;
-    drainMsP95: number;
-    applyMsP50: number;
-    applyMsP95: number;
-    applySamples: number;
-    clampsApplied: number;
-    errors: number;
-  } {
-    const round = (value: number): number => Math.round(value * 1000) / 1000;
-    return {
-      sweeps: this.coherenceRuns,
-      sweepMsMax: round(this.sweepMsMax),
-      sweepMsAvg: this.coherenceRuns > 0 ? round(this.sweepMsTotal / this.coherenceRuns) : 0,
-      classifyCalls: this.classifyCalls,
-      classifyMisses: this.classifyMisses,
-      plansComputed: this.plansComputed,
-      sweepFrameReads: this.sweepFrameReads,
-      drains: this.drains,
-      queuePending: this.queue.pending,
-      drainMsMax: round(this.drainMsMax),
-      drainMsP50: round(percentile(this.drainSamples, 0.5)),
-      drainMsP95: round(percentile(this.drainSamples, 0.95)),
-      applyMsP50: round(percentile(this.applySamples, 0.5)),
-      applyMsP95: round(percentile(this.applySamples, 0.95)),
-      applySamples: this.applySamples.length,
-      clampsApplied: this.clampsApplied,
-      errors: this.errorCount,
-    };
-  }
-
-  private pushSample(samples: number[], value: number): void {
-    samples.push(value);
-    while (samples.length > WindowSession.SAMPLE_RING) samples.shift();
+  counters(): SessionCounters {
+    return this.diagnostics.counters(this.queue.pending, this.errorCount);
   }
 
   /** §21: bounded state assertion. */
@@ -4042,8 +3828,8 @@ export class WindowSession {
   }
 
   /** §21: retile timings for the perf event. */
-  perf(): { lastReconcileMs: number; lastApplyMs: number; lastApplyAtMs: number } {
-    return { lastReconcileMs: this.lastReconcileMs, lastApplyMs: this.lastApplyMs, lastApplyAtMs: this.lastApplyAtMs };
+  perf(): SessionPerf {
+    return this.diagnostics.perf();
   }
 
   /**
@@ -4052,32 +3838,6 @@ export class WindowSession {
    * to "a request that changes nothing toasts".
    */
   focusDirection(direction: string): void {
-    const current = this.focused();
-    if (current === null) return;
-    this.focusClosest(current, direction);
+    this.focusController.focusDirection(direction);
   }
-
-  /**
-   * Focus the nearest tile in `direction`, relative to the focused window.
-   * Only the current workspace is considered: focus never navigates to another
-   * workspace, it only reaches what is on screen (including other monitors).
-   */
-  private focusClosest(current: TrackedWindow, direction: string): boolean {
-    const r = current.surface.frame;
-    const candidates = this.tileables(current.surface.workspaceId)
-      .filter((t) => t.id !== current.id)
-      .map((t) => ({ id: t.id, rect: t.surface.frame }));
-    const next = pickDirectional(r, candidates, direction as FocusDirection);
-    if (next === null) return false;
-    this.focus(next);
-    return true;
-  }
-}
-
-/** Nearest-rank percentile of a small bounded sample set; 0 when empty. */
-function percentile(samples: readonly number[], p: number): number {
-  if (samples.length === 0) return 0;
-  const sorted = [...samples].sort((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1));
-  return sorted[index];
 }
