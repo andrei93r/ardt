@@ -30,7 +30,7 @@
 | P0 | Land ready refactor + repair the green gate | **done** (gate fixes on `perf-gnome`; nested smoke pending) |
 | P1 | Correctness sweep | **done** — 1.1–1.9, 1.11–1.14 committed; 1.10 done for session.ts (injection/parseSpawnEnv leftovers in extension.ts) |
 | P2 | Main-loop & allocation diet | mostly done — 2.1–2.6, 2.8, 2.11 committed; 2.7 (sweep gating, measure first) and 2.9 (profiler) remain |
-| P3 | Zero `any` | in progress — 3.2 events, 3.3 compat, 3.4 prefs, 3.5 extension, host slice + test typecheck committed; small-file sweep in flight; gi.d.ts finalization and eslint enforcement next |
+| P3 | Zero `any` | **done** — `src` has zero explicit `any` (every GJS namespace in `gi.d.ts` typed), events/compat/prefs/extension/session typed, tests type-checked, `no-explicit-any` enforced as error. Residual: type-aware `no-floating-promises`, one documented dispatch `as unknown as` |
 | P4 | Decomposition & deletion | in progress — dead-code sweep committed; JSONL unification in flight; session/extension split, helpers dedupe, trigger registry, DumpState schema, ARCHITECTURE.md remain |
 | P5 | Guardrails (CI/tests/docs) | in progress — check:types + scenario-coverage in CI; knip, shellcheck, fuzz wiring remain |
 

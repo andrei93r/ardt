@@ -24,9 +24,11 @@ code changes, MINOR for features, PATCH for fixes.
   resolved timing is cached behind named invalidation events; the event queue
   `has()` is O(1) and `drain()` reuses a documented buffer; focus/normalize are
   single-pass; screens are indexed by monitor.
-- **Typing**: `PlatformHost.on` is generic over the `PlatformEvent` union;
-  `compat.ts` drops from 48 `any` to zero via local structural interfaces; a
-  new `check:types` gate type-checks `src` and `tests` locally and in CI.
+- **Typing**: `src` now has **zero explicit `any`** — every GJS namespace in
+  `gi.d.ts` is declared, `PlatformHost.on` is generic over the event union,
+  and `compat.ts` uses structural interfaces. `eslint no-explicit-any` is an
+  error, and a new `check:types` gate type-checks `src` and `tests` locally
+  and in CI.
 - **Dead code**: `platform/gestures.ts`, `RetileScheduler`,
   `AdaptationStore`/`FloatStore` and five zero-reference compat exports
   removed.
