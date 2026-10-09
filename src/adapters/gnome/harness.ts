@@ -128,6 +128,7 @@ type ExtraHandlers = {
   SimulateWorkspaceReorder(from: number, to: number): boolean;
   SimulateWorkspaceOrientation(vertical: boolean): boolean;
   CursorToCentre(): boolean;
+  WarpPointerToMonitor(index: number): boolean;
   TogglePause(): boolean;
   InjectFault(context: string): boolean;
   SimulateChromeTeardown(): boolean;
@@ -292,6 +293,7 @@ export class Harness {
       SimulateWorkspaceReorder: (from, to) => deps.session.simulateWorkspaceReorder(from, to),
       SimulateWorkspaceOrientation: (vertical) => deps.session.simulateWorkspaceOrientation(vertical),
       CursorToCentre: () => deps.session.centreCursorNow(),
+      WarpPointerToMonitor: (index) => this.warpPointerToMonitor(index),
       TogglePause: () => {
         deps.setTilingPaused(!deps.sessionMachine.manualPause);
         return true;
@@ -655,5 +657,18 @@ export class Harness {
       }
     });
     return true;
+  }
+
+  /**
+   * Test hook: put the pointer at the centre of monitor `index`. Mutter opens a
+   * new window on the monitor under the pointer, so the live suite parks it on
+   * the primary monitor before spawning — the user's own windows may fill
+   * another monitor and would otherwise become the newcomers' peers.
+   */
+  private warpPointerToMonitor(index: number): boolean {
+    const screen = this.deps.host.screenByIndex(index);
+    if (screen === null) return false;
+    const g = screen.geometry;
+    return this.deps.host.warpPointer(g.x + g.width / 2, g.y + g.height / 2);
   }
 }

@@ -127,8 +127,19 @@ session_begin() {
   export START_WS
   adrt ActivateWorkspace "$START_WS" >/dev/null 2>&1 || true
   sleep 1
+  park_pointer
   BASE_IDS="$(list_ids)"
   export BASE_IDS
+}
+
+# Mutter opens a new window on the monitor under the pointer. The user's own
+# windows can fill a non-primary monitor (all windows there are sticky), so park
+# the pointer on the primary monitor before spawning; the sandbox workspace
+# there is empty and the newcomers stay alone.
+park_pointer() {
+  local primary
+  primary="$(state_expr 'next((m["index"] for m in d["monitors"] if m.get("isPrimary")), 0)')"
+  adrt WarpPointerToMonitor "$primary" >/dev/null 2>&1 || true
 }
 
 test_ids() {
@@ -167,6 +178,7 @@ appcheck_reset() {
     sleep 0.5
   done
   adrt ActivateWorkspace "${START_WS:-0}" >/dev/null 2>&1 || true
+  park_pointer
 }
 
 # Open a real client over D-Bus and block until it is tracked. Prints the new

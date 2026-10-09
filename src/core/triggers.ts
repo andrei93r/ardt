@@ -90,6 +90,10 @@ export const TRIGGERS: readonly Trigger[] = [
   { name: 'SimulateWorkspaceReorder', handler: 'SimulateWorkspaceReorder', in: ['u', 'u'], out: ['b'], taxonomy: 'simulate' },
   { name: 'SimulateWorkspaceOrientation', handler: 'SimulateWorkspaceOrientation', in: ['b'], out: ['b'], taxonomy: 'simulate' },
   { name: 'CursorToCentre', handler: 'CursorToCentre', in: [], out: ['b'], taxonomy: 'api' },
+  // Test-only: park the pointer on a monitor centre so new windows open there
+  // (Mutter places a window under the pointer); the live suite uses it to keep
+  // spawns on the primary monitor when the user's windows fill another one.
+  { name: 'WarpPointerToMonitor', handler: 'WarpPointerToMonitor', in: ['i'], out: ['b'], taxonomy: 'api' },
   { name: 'TogglePause', handler: 'TogglePause', in: [], out: ['b'], taxonomy: 'api' },
   { name: 'InjectFault', handler: 'InjectFault', in: ['s'], out: ['b'], taxonomy: 'inject' },
   { name: 'SimulateChromeTeardown', handler: 'SimulateChromeTeardown', in: [], out: ['b'], taxonomy: 'simulate' },

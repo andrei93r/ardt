@@ -86,6 +86,7 @@ const LEGACY_INTERFACE_XML = `
     <method name="SimulateWorkspaceReorder"><arg type="u" direction="in"/><arg type="u" direction="in"/><arg type="b" direction="out"/></method>
     <method name="SimulateWorkspaceOrientation"><arg type="b" direction="in"/><arg type="b" direction="out"/></method>
     <method name="CursorToCentre"><arg type="b" direction="out"/></method>
+    <method name="WarpPointerToMonitor"><arg type="i" direction="in"/><arg type="b" direction="out"/></method>
     <method name="TogglePause"><arg type="b" direction="out"/></method>
     <method name="InjectFault"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
     <!-- §Shell stability: destroy adrt's chrome actors the way a Shell session
