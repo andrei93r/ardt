@@ -17,7 +17,9 @@ session_begin
 EXT_SCHEMAS="$HOME/.local/share/gnome-shell/extensions/adrt@adrt.dev/schemas"
 
 # Support gate: the setting, the counter and the float trigger must exist.
-if ! gsettings --schemadir "$EXT_SCHEMAS" list-keys org.gnome.shell.extensions.adrt 2>/dev/null | grep -qx 'clamp-windows-to-screen'; then
+# `grep -q` would exit early and let gsettings die on SIGPIPE (141) under
+# pipefail, flaking the gate; consume the whole list instead.
+if ! gsettings --schemadir "$EXT_SCHEMAS" list-keys org.gnome.shell.extensions.adrt 2>/dev/null | grep -x 'clamp-windows-to-screen' >/dev/null; then
   skip "the running build has no clamp-windows-to-screen setting (rebuild, install, log back in)"
   summary
   exit $?
@@ -112,10 +114,14 @@ else
   fail "a float larger than the monitor stayed out of bounds"
 fi
 
-after_clamps="$(state_expr 'd["counters"]["clampsApplied"]')"
-if python3 -c "import sys; sys.exit(0 if float('$after_clamps') > float('$clamps_before') else 1)"; then
+after_clamps=""
+# The clamp is applied by the periodic pass, so the geometry can read clean
+# before the counter moves; poll it instead of sampling once.
+if wait_python 10 "import json,sys; sys.exit(0 if json.load(sys.stdin)['counters']['clampsApplied'] > $clamps_before else 1)"; then
+  after_clamps="$(state_expr 'd["counters"]["clampsApplied"]')"
   pass "the clamp counter grew ($clamps_before -> $after_clamps)"
 else
+  after_clamps="$(state_expr 'd["counters"]["clampsApplied"]')"
   fail "the clamp counter did not grow ($clamps_before -> $after_clamps)"
 fi
 

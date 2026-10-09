@@ -18,7 +18,7 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 session_begin
 
 sig="$(topology_signature)"
-if ! topology_canonical_signatures | grep -qxF "$sig"; then
+if ! topology_canonical_signatures | grep -xF "$sig" >/dev/null; then
   skip "topology $sig present, S25 needs a canonical 1-4 screen topology (one row/column/L/2x2)"
   summary
   exit 0

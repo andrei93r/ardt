@@ -14,7 +14,7 @@ session_begin
 EXT_SCHEMAS="$HOME/.local/share/gnome-shell/extensions/adrt@adrt.dev/schemas"
 
 # Support gate: the setting, the DumpState pointer and the trigger must exist.
-if ! gsettings --schemadir "$EXT_SCHEMAS" list-keys org.gnome.shell.extensions.adrt 2>/dev/null | grep -qx 'cursor-follows-focus'; then
+if ! gsettings --schemadir "$EXT_SCHEMAS" list-keys org.gnome.shell.extensions.adrt 2>/dev/null | grep -x 'cursor-follows-focus' >/dev/null; then
   skip "the running build has no cursor-follows-focus setting (rebuild, install, log back in)"
   summary
   exit $?

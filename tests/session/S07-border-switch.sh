@@ -19,7 +19,7 @@ else
 fi
 
 # Gesture path: hold the switch state open.
-if adrt SimulateWorkspaceSwitch 800 | grep -q true; then
+if adrt SimulateWorkspaceSwitch 800 | grep true >/dev/null; then
   sleep 0.4
   check_python "border hidden while a switch is in progress" '
 import json, sys
