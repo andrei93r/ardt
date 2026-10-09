@@ -45,6 +45,14 @@ ignores a close). If every workspace holds a window, the scenarios exit with a
 message asking you to free one. Results are written to
 `TEST_RESULTS_SESSION.md`.
 
+A live run always exercises the module the Shell loaded **at login**:
+`disable`/`enable` does not re-import the ES modules, so after changing `src/`
+log out and back in before trusting a live run. The harness warns when the
+installed build is newer than the running Shell. Before each spawn the suite
+parks the pointer on the primary monitor (`WarpPointerToMonitor`), because
+Mutter opens new windows on the monitor under the pointer — your own windows
+on another monitor would otherwise become the newcomers' peers.
+
 If a **flatpak** app fails to open with `bwrap: Can't find source path
 /run/user/<uid>/doc/by-app/<app-id>`, the desktop portal's document FUSE mount
 is stale (an ordinary empty directory sits where the mount should be). Repair
