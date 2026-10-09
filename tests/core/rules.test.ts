@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  TILE_MODES,
   compileGlob,
   contextFor,
   firstMatch,
@@ -19,6 +20,14 @@ import {
 } from '../../src/core/rules.js';
 import { SurfaceKind } from '../../src/core/types.js';
 import { surface } from './helpers.js';
+
+describe('TILE_MODES', () => {
+  it('lists every mode in order, including float', () => {
+    // The order is the UI's combo order and the validation list, so it is part
+    // of the contract: float is appended after the placements.
+    expect(TILE_MODES).toEqual(['full', 'left-half', 'right-half', 'float']);
+  });
+});
 
 describe('globMatch', () => {
   it('matches wildcards case-insensitively', () => {
@@ -98,6 +107,11 @@ describe('ruleMatches / firstMatch', () => {
     const rule = { match: { appId: 'org.mozilla.*' }, tile: 'right-half' as const };
     expect(firstMatch([rule], context)?.tile).toBe('right-half');
   });
+
+  it('returns a matching float rule so classification can act on it', () => {
+    const rule = { match: { appId: 'org.mozilla.*' }, tile: 'float' as const };
+    expect(firstMatch([rule], context)?.tile).toBe('float');
+  });
 });
 
 describe('validateRule', () => {
@@ -114,6 +128,13 @@ describe('validateRule', () => {
     const rule = validateRule({ match: { appId: 'a*' }, tile: 'full', enabled: false }, 'rule[0]', errors);
     expect(errors).toEqual([]);
     expect(rule?.enabled).toBe(false);
+  });
+
+  it('accepts the float action', () => {
+    const errors: string[] = [];
+    const rule = validateRule({ match: { appId: 'pavu*' }, tile: 'float' }, 'rule[0]', errors);
+    expect(errors).toEqual([]);
+    expect(rule?.tile).toBe('float');
   });
 
   it('requires a tile action', () => {

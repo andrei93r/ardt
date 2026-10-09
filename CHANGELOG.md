@@ -6,6 +6,26 @@ code changes, MINOR for features, PATCH for fixes.
 
 ## [Unreleased]
 
+### Rules float action, resize shortcuts and registry tools
+
+- **Rules → Action → Float**: a rule can now leave a matching window floating
+  (exactly like an exception app) instead of only forcing `full`/`left half`/
+  `right half`. Matching is unchanged — the app picker plus an optional
+  case-insensitive title glob (`*`, `?`; every filled field must match). The
+  durable per-app alternative stays in "Never tile these apps".
+- **Increase/Decrease window shortcuts** (`kb-increase-window`,
+  `kb-decrease-window`; defaults `<Super><Control>plus` / `<Super><Control>minus`):
+  grow or shrink the focused window along its pair's shared edge — horizontally
+  on a landscape split, vertically on a vertical axis — whichever side the
+  focused window is on. The step moved next to the resize shortcuts (Keys →
+  Resize) and now defaults to 10 % (`nudge-step`; the directional nudges use it
+  too).
+- **Apps → registry data**: Clear all, Export… and Import… for the app
+  registry, with a shape-validated JSON round-trip. Every registry change
+  (Never-tile switch, forget, clear, import) bumps the internal
+  `registry-revision`, which the running Shell watches: it drops its in-memory
+  copy and re-reads the file immediately instead of waiting for the next login.
+
 ### Performance, correctness and typing (`perf-gnome`)
 
 - **Compositor loop**: journal/history writes are buffered into one

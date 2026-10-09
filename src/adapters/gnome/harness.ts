@@ -103,6 +103,7 @@ type ExtraHandlers = {
   ActivateWorkspace(index: number): boolean;
   ToggleFloat(id: number): boolean;
   SimulateResize(a: number, b: number, ratio: number): boolean;
+  ResizeFocused(grow: string, step: number): boolean;
   SwapPair(a: number, b: number): boolean;
   InjectVerifyFailure(id: number, count: number): boolean;
   FocusDirection(direction: string): boolean;
@@ -258,6 +259,11 @@ export class Harness {
       },
       ToggleFloat: (id) => deps.session.toggleFloat(id),
       SimulateResize: (a, b, ratio) => this.simulateResize(a, b, ratio),
+      ResizeFocused: (grow, step) => {
+        // The wire is a string; only the two directions are meaningful.
+        if (grow !== 'increase' && grow !== 'decrease') return false;
+        return deps.session.resizeFocused(grow, step);
+      },
       SwapPair: (a, b) => deps.session.swapPair(a, b),
       InjectVerifyFailure: (id, count) => this.injectVerifyFailure(id, count),
       FocusDirection: (direction) => {

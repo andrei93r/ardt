@@ -2,7 +2,8 @@
 // Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
 // and can maintain this code.
 
-import { globMatch } from './rules.js';
+import type { Rule } from './rules.js';
+import { contextFor, firstMatch, globMatch } from './rules.js';
 import type { Surface } from './types.js';
 import { Layer, NON_TILEABLE_KINDS, SurfaceKind } from './types.js';
 
@@ -16,6 +17,7 @@ type SkipReason =
   | 'fullscreen'
   | 'above'
   | 'exception-app'
+  | 'rule-float'
   | 'floating'
   | 'non-tileable-kind'
   | 'min-equals-max'
@@ -43,6 +45,8 @@ export interface Classification {
 
 export interface ClassifyConfig {
   exceptionApps: readonly string[];
+  /** User rules. Only a `float` match changes classification; placement rules are the tiler's. */
+  rules: readonly Rule[];
   heuristicModalDetect: boolean;
 }
 
@@ -116,6 +120,11 @@ export function classify(
   for (const exception of config.exceptionApps) {
     if (globMatch(exception, surface.appId)) return fail('exception-app');
   }
+  // A `float` rule is the live, editable form of "do not tile this": it mirrors
+  // the exception-app verdict, and the window floats rather than being ignored.
+  // A full/half rule is not a classifier input — the tiler applies it later.
+  const rule = firstMatch(config.rules, contextFor(surface));
+  if (rule?.tile === 'float') return fail('rule-float');
   if (f.floating) return fail('floating');
   if (NON_TILEABLE_KINDS.has(surface.kind)) return fail('non-tileable-kind');
   // A window without size hints reports min == max == 0 on both axes; that is

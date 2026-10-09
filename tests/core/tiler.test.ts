@@ -328,6 +328,32 @@ describe('computePlans — rule override', () => {
     expect(plan.placements[0].rect).toEqual(rect(0, 0, 1920, 1080));
   });
 
+  it('never turns a float rule into a placement', () => {
+    // A float rule is classification's job: the window is excluded before it
+    // reaches the tiler, so a full pair still gets the normal split.
+    const rules = [{ match: { appId: 'special' }, tile: 'float' as const }];
+    const plan = computePlans([window({ id: 1 }), window({ id: 2, appId: 'special' })], landscape, config({ rules }));
+    expect(plan.placements).toHaveLength(2);
+    expect(plan.placements.find((p) => p.surfaceId === 2)?.rect.width).toBe(960);
+  });
+
+  it('does not let a float rule mask a placement rule on the other window', () => {
+    // The float match is skipped, so the full rule on the other window still
+    // applies instead of being hidden behind the float rule.
+    const rules = [
+      { match: { appId: 'floater' }, tile: 'float' as const },
+      { match: { appId: 'special' }, tile: 'full' as const },
+    ];
+    const plan = computePlans(
+      [window({ id: 1, appId: 'floater' }), window({ id: 2, appId: 'special' })],
+      landscape,
+      config({ rules }),
+    );
+    expect(plan.placements).toHaveLength(1);
+    expect(plan.placements[0].surfaceId).toBe(2);
+    expect(plan.placements[0].rect).toEqual(rect(0, 0, 1920, 1080));
+  });
+
   it('picks the lowest-id window when several match', () => {
     const rules = [{ match: { appId: 'special' }, tile: 'right-half' as const }];
     const plan = computePlans(

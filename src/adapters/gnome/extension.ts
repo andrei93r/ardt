@@ -1384,6 +1384,13 @@ export default class AdrtExtension extends Extension {
       ['gesture-4-vertical-action', () => this.gestures.configure()],
       ['gesture-pinch-action', () => this.gestures.configure()],
       ['adaptation-enabled', () => this.registry.setEnabled(this.settings.boolean('adaptation-enabled', true))],
+      // §12: the prefs Apps page writes registry.json directly; the revision
+      // bump is the signal for the running Shell to drop its in-memory copy
+      // (and the timing learned with it) and re-read the file it just wrote.
+      ['registry-revision', () => {
+        this.registry.reload();
+        this.session.invalidateAll();
+      }],
       ['reflow-keeps-edges', () => this.session.invalidateAll()],
       ['indicator-color', () => this.syncIndicator()],
       ['indicator-width', () => this.syncIndicator()],
@@ -1481,6 +1488,8 @@ export default class AdrtExtension extends Extension {
       'kb-nudge-right',
       'kb-nudge-up',
       'kb-nudge-down',
+      'kb-increase-window',
+      'kb-decrease-window',
       'kb-move-left',
       'kb-move-right',
       'kb-move-up',
@@ -1564,6 +1573,12 @@ export default class AdrtExtension extends Extension {
       case 'kb-nudge-down':
         this.nudgeFocused('down');
         break;
+      case 'kb-increase-window':
+        this.resizeFocused('increase');
+        break;
+      case 'kb-decrease-window':
+        this.resizeFocused('decrease');
+        break;
       case 'kb-move-workspace-next':
         this.session.moveFocusedToAdjacentWorkspace('next');
         break;
@@ -1618,7 +1633,12 @@ export default class AdrtExtension extends Extension {
   private nudgeFocused(direction: string): void {
     // §17: a nudge with nothing to split is announced rather than silent; the
     // session owns that decision and the toast.
-    this.session.nudgeFocused(direction, this.settings.int('nudge-step', 5));
+    this.session.nudgeFocused(direction, this.settings.int('nudge-step', 10));
+  }
+
+  private resizeFocused(grow: 'increase' | 'decrease'): void {
+    // Same step as the nudge on the perpendicular axis (§17).
+    this.session.resizeFocused(grow, this.settings.int('nudge-step', 10));
   }
 
   // ------------------------------------------------------------ notifications

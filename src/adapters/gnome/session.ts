@@ -1458,6 +1458,21 @@ export class WindowSession {
     return true;
   }
 
+  /** §17: grow or shrink the focused window along its pair's axis; a no-op request toasts. */
+  resizeFocused(grow: 'increase' | 'decrease', step: number): boolean {
+    const focused = this.focused();
+    if (focused === null) return false;
+    const sibling = this.pairSibling(focused);
+    if (!this.deps.tiling.resizeSplit(focused.id, grow, step)) {
+      this.deps.onNotice?.('nothing-to-nudge', String(focused.id));
+      return false;
+    }
+    if (sibling !== null) this.captureChange([focused.id, sibling.id]);
+    this.signatures.clearAll();
+    this.scheduleReconcile('nudge');
+    return true;
+  }
+
   activateWorkspace(index: number): void {
     const workspace = global.workspace_manager.get_workspace_by_index(index);
     if (workspace !== null) workspace.activate(global.get_current_time());

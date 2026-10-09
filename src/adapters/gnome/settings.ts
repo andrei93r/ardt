@@ -51,7 +51,7 @@ export class GnomeSettings implements SettingsStore {
   private configCache: ClassifyConfig | null = null;
   /** The memoised settings half of the tiler config; null means rebuild. */
   private tilerBaseCache: TilerConfigBase | null = null;
-  /** The memoised parsed rules, shared by the tiler config and diagnostics. */
+  /** The memoised parsed rules, shared by the tiler and classifier configs and diagnostics. */
   private rulesCache: RulesParse | null = null;
   private rulesParseCount = 0;
 
@@ -128,8 +128,9 @@ export class GnomeSettings implements SettingsStore {
 
   /**
    * The parsed `rules-json`, memoised until a setting changes. Shared by the
-   * tiler config and the diagnostics dump; invalidated by the same blanket
-   * `changed` wiring as the config caches (key `rules-json`).
+   * tiler config, the classifier config and the diagnostics dump; invalidated
+   * by the same blanket `changed` wiring as the config caches (key
+   * `rules-json`).
    */
   rules(): RulesParse {
     if (this.rulesCache !== null) return this.rulesCache;
@@ -140,15 +141,16 @@ export class GnomeSettings implements SettingsStore {
 
   /**
    * The resolved classifier config, memoised until a setting changes
-   * (`exception-apps`, `heuristic-modal-detect`). It is read for every window on
-   * every pass, so rebuilding it per call was the single hottest allocation in
-   * the loop (PERFORMANCE_PLAN stage 1, carried forward).
+   * (`exception-apps`, `rules-json`, `heuristic-modal-detect`). It is read for
+   * every window on every pass, so rebuilding it per call was the single hottest
+   * allocation in the loop (PERFORMANCE_PLAN stage 1, carried forward).
    */
   classifierConfig(): ClassifyConfig {
     if (this.configCache !== null) return this.configCache;
     this.configBuildCount += 1;
     this.configCache = {
       exceptionApps: this.strv('exception-apps'),
+      rules: this.rules().rules,
       heuristicModalDetect: this.boolean('heuristic-modal-detect', true),
     };
     return this.configCache;
@@ -182,11 +184,16 @@ export class GnomeSettings implements SettingsStore {
    * `onAnyChange` (and every `write` / `writeSerialized`) funnels here, so the
    * caches below are rebuilt on the same event the classifier cache already
    * used:
-   *   - classifier: `exception-apps`, `heuristic-modal-detect`;
+   *   - classifier: `exception-apps`, `heuristic-modal-detect`, and
+   *     `rules-json` (via `rules()`);
    *   - tiler base: `min-size-policy`, `gaps-*`, `primary-apps`,
    *     `primary-app-ratio`, `reflow-keeps-edges`, and `rules-json` (via
    *     `rules()`);
    *   - rules: `rules-json`.
+   *
+   * `rules-json` now feeds both the tiler config and the classifier config: a
+   * `float` rule is a classifier input, a placement rule is a tiler input, and
+   * both are rebuilt from the same parsed rules.
    */
   invalidateConfig(): void {
     this.configCache = null;

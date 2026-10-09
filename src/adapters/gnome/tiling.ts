@@ -165,6 +165,23 @@ export class Tiling {
     return this.setRatioForPair(first, second, axis, pair.screen.connector, current + delta);
   }
 
+  /**
+   * §17 keyboard resize: grow or shrink the focused window along its pair's
+   * axis. The stored ratio is the first window's share along that axis, so
+   * "increase" moves it toward the focused window whichever side it is on —
+   * the pair's axis (horizontal on a landscape screen, vertical on a portrait
+   * one) is followed without a horizontal/vertical branch here.
+   */
+  resizeSplit(focusedId: number, grow: 'increase' | 'decrease', stepPercent: number): boolean {
+    const pair = this.pairFor(focusedId);
+    if (pair === null) return false;
+    const { first, second, axis } = pair;
+    const key = ratioKey(pair.screen.connector, first.surface.workspaceId, axis);
+    const current = this.getRatio(key);
+    const sign = (grow === 'increase' ? 1 : -1) * (pair.first.id === focusedId ? 1 : -1);
+    return this.setRatioForPair(first, second, axis, pair.screen.connector, current + (sign * stepPercent) / 100);
+  }
+
   setSplitRatioFor(workspaceId: number, connector: string, axis: SplitAxis, ratio: number): boolean {
     for (const tracked of this.deps.windows().values()) {
       if (tracked.surface.workspaceId !== workspaceId) continue;

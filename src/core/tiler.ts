@@ -422,7 +422,13 @@ function findRuleOverride(windows: readonly TilerWindow[], rules: readonly Rule[
   for (const win of sorted) {
     const context = { appId: win.appId, title: win.title, kind: win.kind, transient: false } satisfies RuleContext;
     const rule = firstMatch(rules, context);
-    if (rule !== null) return { window: win, mode: rule.tile };
+    if (rule === null) continue;
+    // Classification owns `float` (§5): a rule-floated window is non-tileable, so
+    // it can never reach `computePlans` as a tileable window. Skipping the float
+    // rule here keeps the placement path purely placement, and lets a later
+    // placement rule for the same window take effect instead of being masked.
+    if (rule.tile === 'float') continue;
+    return { window: win, mode: rule.tile };
   }
   return null;
 }

@@ -78,6 +78,25 @@ export class RegistryStore {
     );
   }
 
+  /**
+   * §12: re-read the registry file after the preferences page wrote it
+   * directly. A pending debounced save is cancelled first: it carries the old
+   * in-memory state and would fire after this reload, overwriting the file the
+   * preferences just wrote with a stale copy. The timing learned from refusals
+   * belongs to the replaced file, so it is dropped with it; `load()` keeps the
+   * `loadedVersion` semantics (a newer-format file stays untouched).
+   */
+  reload(): void {
+    if (this.saveSource !== null) {
+      GLib.source_remove(this.saveSource);
+      this.saveSource = null;
+    }
+    this.dirty = false;
+    this.refusals.clear();
+    this.consecutive.clear();
+    this.load();
+  }
+
   get size(): number {
     return this.registry.size;
   }

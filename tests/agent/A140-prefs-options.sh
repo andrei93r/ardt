@@ -21,12 +21,13 @@ PREFS_SRC="$ROOT_DIR/src/adapters/gnome/prefs.ts"
 # Keys that are internal state, debug-only, or declared but unused. They must
 # never be presented as user options (see the audit in the task report):
 #   settings-version, first-run-complete   internal bookkeeping
+#   registry-revision                      prefs-to-Shell reload signal (internal)
 #   debug-* / record / perf / trace        developer diagnostics
 #   dry-run-mode, max-frame-interval-ms    developer diagnostics
 #   keybindings                            legacy override, superseded by kb-*
 #   float-pins-workspace                   behaviour is unconditional (dead)
 #   rules-enabled                          legacy global gate; per-rule enabled wins
-INTERNAL_KEYS="settings-version first-run-complete debug-enabled debug-tiling debug-focus debug-displays debug-undo debug-session debug-inject-verify-failure debug-toasts record perf-enabled trace-enabled dry-run-mode max-frame-interval-ms keybindings float-pins-workspace rules-enabled"
+INTERNAL_KEYS="settings-version first-run-complete registry-revision debug-enabled debug-tiling debug-focus debug-displays debug-undo debug-session debug-inject-verify-failure debug-toasts record perf-enabled trace-enabled dry-run-mode max-frame-interval-ms keybindings float-pins-workspace rules-enabled"
 CUSTOM_KEYS="rules-json"
 
 internal_csv="$(printf '%s' "$INTERNAL_KEYS" | tr ' ' ',')"

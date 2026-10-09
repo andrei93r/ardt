@@ -47,6 +47,7 @@ export const TRIGGERS: readonly Trigger[] = [
   { name: 'SetSplitRatio', handler: 'SetSplitRatio', in: ['i', 's', 's', 'd'], out: ['b'], taxonomy: 'api' },
   { name: 'Undo', handler: 'Undo', in: [], out: ['b'], taxonomy: 'api' },
   { name: 'NudgeSplit', handler: 'NudgeSplit', in: ['s', 'd'], out: ['b'], taxonomy: 'api' },
+  { name: 'ResizeFocused', handler: 'ResizeFocused', in: ['s', 'd'], out: ['b'], taxonomy: 'api' },
   { name: 'MoveFocusedToWorkspace', handler: 'MoveFocusedToWorkspace', in: ['i'], out: ['b'], taxonomy: 'api' },
   { name: 'ReloadRules', handler: 'ReloadRules', in: [], out: ['b'], taxonomy: 'api' },
   { name: 'ResetPerApp', handler: 'ResetPerApp', in: ['s'], out: ['b'], taxonomy: 'api' },

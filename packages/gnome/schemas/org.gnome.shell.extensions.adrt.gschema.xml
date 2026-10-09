@@ -87,9 +87,9 @@
       <description>Percentage of the split for the primary app, clamped 20-80.</description>
     </key>
     <key name="nudge-step" type="i">
-      <default>5</default>
-      <summary>Keyboard nudge step</summary>
-      <description>Percentage moved per nudge.</description>
+      <default>10</default>
+      <summary>Keyboard resize step</summary>
+      <description>Percentage moved per keyboard resize (nudge, increase and decrease).</description>
     </key>
     <key name="follow-moved-window" type="b">
       <default>true</default>
@@ -402,6 +402,16 @@
       <summary>Nudge split down</summary>
       <description>Move the shared edge down.</description>
     </key>
+    <key name="kb-increase-window" type="as">
+      <default>['&lt;Super&gt;&lt;Control&gt;plus']</default>
+      <summary>Increase window</summary>
+      <description>Grow the focused window along its pair's split axis.</description>
+    </key>
+    <key name="kb-decrease-window" type="as">
+      <default>['&lt;Super&gt;&lt;Control&gt;minus']</default>
+      <summary>Decrease window</summary>
+      <description>Shrink the focused window along its pair's split axis.</description>
+    </key>
     <key name="kb-move-left" type="as">
       <default>['&lt;Super&gt;&lt;Shift&gt;h']</default>
       <summary>Move tile left</summary>
@@ -498,6 +508,11 @@
       <default>0</default>
       <summary>Settings schema version</summary>
       <description>Used to run one-shot migrations.</description>
+    </key>
+    <key name="registry-revision" type="i">
+      <default>0</default>
+      <summary>Internal: bumped by preferences after the app registry changes.</summary>
+      <description>Bumped by preferences after the app registry changes, so the running Shell reloads registry.json without a restart.</description>
     </key>
     <key name="first-run-complete" type="b">
       <default>false</default>

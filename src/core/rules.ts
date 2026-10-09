@@ -30,16 +30,23 @@ interface RuleMatch {
   transient?: boolean;
 }
 
-/** The placement a rule can force. */
-export type TileMode = 'full' | 'left-half' | 'right-half';
+/**
+ * What a rule does to a matching window: force a placement (`full`,
+ * `left-half`, `right-half`) or float it (`float`). A `float` rule keeps the
+ * window out of the tiling exactly like an exception app, but it is *not*
+ * copied into the durable Never-tile list (§16): the list records a persistent
+ * user decision, while a rule is a live condition the user can edit or remove.
+ */
+export type TileMode = 'full' | 'left-half' | 'right-half' | 'float';
 
-export const TILE_MODES: readonly TileMode[] = ['full', 'left-half', 'right-half'];
+export const TILE_MODES: readonly TileMode[] = ['full', 'left-half', 'right-half', 'float'];
 
 /**
- * One rule. `float` was dropped: a rule only ever *forces a placement*, and the
- * durable "never tile" decision lives in the Never-tile list / registry
- * `neverTile` (§16). First match in array order wins; `enabled: false` skips it
- * without removing it.
+ * One rule. A rule may force a placement *or* float the window; the durable
+ * "never tile" decision still lives in the Never-tile list / registry
+ * `neverTile` (§16), and a `float` rule is deliberately not written to it.
+ * First match in array order wins; `enabled: false` skips it without removing
+ * it.
  */
 export interface Rule {
   match: RuleMatch;

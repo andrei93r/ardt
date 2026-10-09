@@ -31,6 +31,7 @@ const LEGACY_INTERFACE_XML = `
     </method>
     <method name="Undo"><arg type="b" direction="out"/></method>
     <method name="NudgeSplit"><arg type="s" direction="in"/><arg type="d" direction="in"/><arg type="b" direction="out"/></method>
+    <method name="ResizeFocused"><arg type="s" direction="in"/><arg type="d" direction="in"/><arg type="b" direction="out"/></method>
     <method name="MoveFocusedToWorkspace"><arg type="i" direction="in"/><arg type="b" direction="out"/></method>
     <method name="ReloadRules"><arg type="b" direction="out"/></method>
     <method name="ResetPerApp"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>

@@ -10,7 +10,7 @@ import { Layer, SurfaceKind } from '../../src/core/types.js';
 import { rect, size, surface } from './helpers.js';
 
 function config(overrides: Partial<ClassifyConfig> = {}): ClassifyConfig {
-  return { exceptionApps: [], heuristicModalDetect: false, ...overrides };
+  return { exceptionApps: [], rules: [], heuristicModalDetect: false, ...overrides };
 }
 
 describe('layerFor', () => {
@@ -90,6 +90,33 @@ describe('classify', () => {
     expect(result.reason).toBe('exception-app');
   });
 
+  it('floats a window matched by a float rule, like an exception app', () => {
+    const rules = [{ match: { appId: 'pavucontrol' }, tile: 'float' as const }];
+    const result = classify(surface({ appId: 'pavucontrol' }), config({ rules }));
+    expect(result.tileable).toBe(false);
+    expect(result.reason).toBe('rule-float');
+    expect(result.layer).toBe(Layer.FLOATING);
+    expect(result.modal).toBe(false);
+  });
+
+  it('does not stop tiling for a placement (full/half) rule', () => {
+    // A placement rule is the tiler's input; classification must still report the
+    // window tileable so the tiler can apply the forced placement.
+    for (const tile of ['full', 'left-half'] as const) {
+      const result = classify(surface({ appId: 'special' }), config({ rules: [{ match: { appId: 'special' }, tile }] }));
+      expect(result.tileable).toBe(true);
+      expect(result.reason).toBeNull();
+      expect(result.layer).toBe(Layer.TILED);
+    }
+  });
+
+  it('ignores an enabled float rule that does not match', () => {
+    const rules = [{ match: { appId: 'other' }, tile: 'float' as const }];
+    const result = classify(surface({ appId: 'app' }), config({ rules }));
+    expect(result.tileable).toBe(true);
+    expect(result.reason).toBeNull();
+  });
+
   it('marks transient, modal and attached windows as modals', () => {
     expect(classify(surface({ flags: { transient: true } }), config()).modal).toBe(true);
     expect(classify(surface({ flags: { modal: true } }), config()).modal).toBe(true);
@@ -97,11 +124,12 @@ describe('classify', () => {
     expect(classify(surface({ flags: { skipTaskbar: true } }), config()).modal).toBe(false);
   });
 
-  it('does not consult placement rules: rules only force a tile (§23 decision 91)', () => {
-    // Rules are a tiler override, never a classifier input: a rule can no longer
-    // float a window (that is the Never-tile list).
-    const result = classify(surface({ appId: 'pavucontrol' }), config());
-    expect(result.tileable).toBe(true);
+  it('acts on a matching float rule but leaves a non-matching one alone (§23 decision 91)', () => {
+    // Classification now consults rules, but only a matching `float` rule acts
+    // here; full/half rules are placement overrides applied later by the tiler.
+    const floatRule = [{ match: { appId: 'pavucontrol' }, tile: 'float' as const }];
+    expect(classify(surface({ appId: 'pavucontrol' }), config({ rules: floatRule })).reason).toBe('rule-float');
+    expect(classify(surface({ appId: 'something-else' }), config({ rules: floatRule })).tileable).toBe(true);
   });
 
   it('detects a heuristic modal when the parent title is live', () => {

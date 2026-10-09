@@ -28,7 +28,7 @@ import type {
   AdwSpinRow,
   AdwSwitchRow,
 } from 'gi://Adw';
-import type { Settings as GioSettings, AppInfo } from 'gi://Gio';
+import type { Settings as GioSettings, AppInfo, File as GioFile, AsyncResult as GioAsyncResult } from 'gi://Gio';
 import type {
   GtkBox,
   GtkButton,
@@ -42,6 +42,8 @@ import type {
   GtkSearchEntry,
   GtkSwitch,
   GtkWidget,
+  GtkFileDialog,
+  GtkWindow,
 } from 'gi://Gtk';
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
@@ -49,6 +51,8 @@ import { _, loadTranslations } from './i18n.js';
 import { RegistryStore } from './registry.js';
 import { TILE_MODES, validateRule } from '../../core/rules.js';
 import type { TileMode } from '../../core/rules.js';
+import { AppRegistry, DEFAULT_TTL_MS } from '../../core/appregistry.js';
+import type { AppRegistryData } from '../../core/appregistry.js';
 import type { SettingKey } from '../../core/settings-descriptor.js';
 
 /** The widget a settings row is rendered with. */
@@ -84,6 +88,18 @@ export interface PageSpec {
 const SWIPE_ACTIONS = ['switch-workspace', 'toggle-overview', 'show-desktop', 'swap-pair', 'none'];
 const VERTICAL_ACTIONS = ['switch-workspace', 'toggle-overview', 'show-desktop', 'none'];
 const PINCH_ACTIONS = ['show-desktop', 'toggle-overview', 'none'];
+
+/**
+ * The user-facing label for each tile mode. Keyed by `TileMode`, so a mode
+ * added to the core list is a `tsc` error until it gets a label; the action
+ * combo is built from `TILE_MODES`, so its order can never drift from core.
+ */
+const TILE_MODE_LABELS: Record<TileMode, string> = {
+  full: _('Full'),
+  'left-half': _('Left half'),
+  'right-half': _('Right half'),
+  float: _('Float'),
+};
 
 /** One installed application, as shown in the pickers. */
 interface AppChoice {
@@ -162,12 +178,11 @@ export const PREFERENCES_LAYOUT: readonly PageSpec[] = [
       },
       {
         title: _('Splitting'),
-        description: _('The default split, the keyboard resize step, and the apps that take the larger share.'),
+        description: _('The default split and the apps that take the larger share.'),
         rows: [
           { key: 'min-size-policy', kind: 'combo', title: _('Minimum-size policy'), choices: ['respect', 'ignore', 'stack'] },
           { key: 'primary-app-ratio', kind: 'spin', title: _('Primary app share'), subtitle: _('Percentage of the split (20–80%).'), lower: 20, upper: 80 },
           { key: 'primary-apps', kind: 'picker', title: _('Primary apps'), subtitle: _('Apps that take the larger share of a split.') },
-          { key: 'nudge-step', kind: 'spin', title: _('Keyboard resize step'), subtitle: _('Percentage moved per nudge.'), lower: 1, upper: 50 },
           { key: 'reflow-keeps-edges', kind: 'switch', title: _('Keep outer edges when reflowing') },
         ],
       },
@@ -298,6 +313,9 @@ export const PREFERENCES_LAYOUT: readonly PageSpec[] = [
           { key: 'kb-nudge-right', kind: 'accelerator', title: _('Move the split right') },
           { key: 'kb-nudge-up', kind: 'accelerator', title: _('Move the split up') },
           { key: 'kb-nudge-down', kind: 'accelerator', title: _('Move the split down') },
+          { key: 'kb-increase-window', kind: 'accelerator', title: _('Increase window'), subtitle: _('Grow the focused window along the split axis.') },
+          { key: 'kb-decrease-window', kind: 'accelerator', title: _('Decrease window'), subtitle: _('Shrink the focused window along the split axis.') },
+          { key: 'nudge-step', kind: 'spin', title: _('Step size'), subtitle: _('Percentage moved per keyboard resize.'), lower: 1, upper: 50 },
         ],
       },
       {
@@ -387,7 +405,8 @@ function ruleTitle(raw: unknown): string {
 
 function ruleSummary(raw: unknown): string {
   if (!isRuleRecord(raw)) return _('Not a rule object');
-  const action = raw.tile === 'left-half' ? _('Left half') : raw.tile === 'right-half' ? _('Right half') : _('Full');
+  const tile = ruleString(raw.tile);
+  const action = tile === 'left-half' ? _('Left half') : tile === 'right-half' ? _('Right half') : tile === 'float' ? _('Float') : _('Full');
   const title = isRuleRecord(raw.match) ? ruleString(raw.match.title) : '';
   const titlePart = title.length > 0 ? `, ${_('title')} “${title}”` : '';
   const disabled = raw.enabled === false ? ` · ${_('disabled')}` : '';
@@ -399,6 +418,42 @@ function ruleErrors(raw: unknown, index: number): string[] {
   const errors: string[] = [];
   validateRule(raw, `rule[${index}]`, errors);
   return errors;
+}
+
+/** A human-readable message for a thrown value. */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Minimal shape guard for an imported registry file (`version` + `entries`). */
+function isRegistryData(value: unknown): value is AppRegistryData {
+  return isRuleRecord(value) && typeof value.version === 'number' && Array.isArray(value.entries);
+}
+
+/** Await a `Gtk.FileDialog` save, resolving with the chosen file. */
+function saveFileDialog(dialog: GtkFileDialog, parent: GtkWindow | null): Promise<GioFile> {
+  return new Promise<GioFile>((resolve, reject) => {
+    dialog.save(parent, null, (_source: GtkFileDialog, result: GioAsyncResult) => {
+      try {
+        resolve(dialog.save_finish(result));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
+/** Await a `Gtk.FileDialog` open, resolving with the chosen file. */
+function openFileDialog(dialog: GtkFileDialog, parent: GtkWindow | null): Promise<GioFile> {
+  return new Promise<GioFile>((resolve, reject) => {
+    dialog.open(parent, null, (_source: GtkFileDialog, result: GioAsyncResult) => {
+      try {
+        resolve(dialog.open_finish(result));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
 }
 
 export default class AdrtPreferences extends ExtensionPreferences {
@@ -413,7 +468,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
     }
     // The rule editor is not a settings row, but lives on the Rules page.
     pages.get(_('Rules'))?.add(this.rulesEditorGroup(settings));
-    window.add(this.appsPage());
+    window.add(this.appsPage(settings, window));
     window.add(this.aboutPage(settings));
   }
 
@@ -649,7 +704,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
     const group: AdwPreferencesGroup = new Adw.PreferencesGroup({
       title: _('Placement rules'),
       description: _(
-        'Force a placement when a window matches. The first enabled rule wins. To keep an app floating, use "Never tile these apps" on the Windows page.',
+        'Force a placement when a window matches, or leave it floating. The first enabled rule wins. For a durable per-app choice, use "Never tile these apps" on the Windows page.',
       ),
     });
     const list: GtkListBox = new Gtk.ListBox({ selection_mode: Gtk.SelectionMode.NONE });
@@ -773,6 +828,9 @@ export default class AdrtPreferences extends ExtensionPreferences {
       if (isRuleRecord(raw)) {
         row.add_row(appPickerRow(index, row));
         const titleRow: AdwEntryRow = new Adw.EntryRow({ title: _('Title glob') });
+        titleRow.tooltip_text = _(
+          'A glob matched case-insensitively against the window title: * matches any run of characters, ? exactly one. Every filled field must match (AND).',
+        );
         titleRow.text = isRuleRecord(raw.match) ? ruleString(raw.match.title) : '';
         titleRow.connect('changed', () => {
           setMatchString(index, 'title', titleRow.text.trim());
@@ -781,7 +839,10 @@ export default class AdrtPreferences extends ExtensionPreferences {
         row.add_row(titleRow);
 
         const modes = [...TILE_MODES];
-        const combo: AdwComboRow = new Adw.ComboRow({ title: _('Action'), model: Gtk.StringList.new([_('Full'), _('Left half'), _('Right half')]) });
+        const combo: AdwComboRow = new Adw.ComboRow({
+          title: _('Action'),
+          model: Gtk.StringList.new(modes.map((mode) => TILE_MODE_LABELS[mode])),
+        });
         const current = modes.indexOf(ruleString(raw.tile) as TileMode);
         combo.selected = current < 0 ? 0 : current;
         combo.connect('notify::selected', () => {
@@ -842,40 +903,156 @@ export default class AdrtPreferences extends ExtensionPreferences {
    * §12: the app registry page. It replaces the old problem-windows page: one
    * row per app adrt has seen, a durable `neverTile` switch, and a forget
    * button that drops the entry (and returns live windows to the tiling).
+   * Bulk actions below the list clear, export or import the whole registry.
+   * Every mutation bumps `registry-revision`, which reloads the running Shell.
    */
-  private appsPage(): AdwPreferencesPage {
+  private appsPage(settings: GioSettings, window: AdwPreferencesWindow): AdwPreferencesPage {
     const page: AdwPreferencesPage = new Adw.PreferencesPage({ title: _('Apps'), icon_name: 'view-app-grid-symbolic' });
     const group: AdwPreferencesGroup = new Adw.PreferencesGroup({
       title: _('App registry'),
-      description: _('Every app adrt has seen. Turn on "Never tile" to keep an app floating.'),
+      description: _(
+        'Every app adrt has seen. Turn on "Never tile" to keep an app floating. Changes reload the running Shell immediately.',
+      ),
     });
+    page.add(group);
+
     const store = new RegistryStore();
     store.load();
-    const entries = store.entries().sort((a, b) => b.lastSeen - a.lastSeen);
-    if (entries.length === 0) {
-      group.add(new Adw.ActionRow({ title: _('No apps recorded yet'), subtitle: _('Apps appear here as they are opened.') }));
-    }
     const known = new Map(appChoices().map((choice) => [choice.id, choice]));
-    for (const entry of entries) {
-      const choice = known.get(entry.appId);
-      const row: AdwSwitchRow = new Adw.SwitchRow({ title: choice?.name ?? entry.appId, subtitle: choice ? `${entry.appId} — ${entry.windowsSeen} window(s) seen` : `${entry.windowsSeen} window(s) seen` });
-      if (choice?.icon) row.add_prefix(new Gtk.Image({ gicon: choice.icon, pixel_size: 16 }));
-      row.active = entry.neverTile;
-      row.connect('notify::active', () => {
-        store.setNeverTile(entry.appId, row.active);
+    const bumpRegistry = (): void => {
+      settings.set_int('registry-revision', settings.get_int('registry-revision') + 1);
+    };
+
+    // The app rows are rebuilt whenever the registry changes, so they live in
+    // one removable list; the action rows below are static.
+    let rows: AdwPreferencesRow[] = [];
+    const rebuild = (): void => {
+      for (const row of rows) group.remove(row);
+      rows = [];
+      const entries = store.entries().sort((a, b) => b.lastSeen - a.lastSeen);
+      if (entries.length === 0) {
+        const empty: AdwActionRow = new Adw.ActionRow({ title: _('No apps recorded yet'), subtitle: _('Apps appear here as they are opened.') });
+        group.add(empty);
+        rows.push(empty);
+        return;
+      }
+      for (const entry of entries) {
+        const choice = known.get(entry.appId);
+        const row: AdwSwitchRow = new Adw.SwitchRow({ title: choice?.name ?? entry.appId, subtitle: choice ? `${entry.appId} — ${entry.windowsSeen} window(s) seen` : `${entry.windowsSeen} window(s) seen` });
+        if (choice?.icon) row.add_prefix(new Gtk.Image({ gicon: choice.icon, pixel_size: 16 }));
+        row.active = entry.neverTile;
+        row.connect('notify::active', () => {
+          store.setNeverTile(entry.appId, row.active);
+          store.flush();
+          bumpRegistry();
+        });
+        const button: GtkButton = new Gtk.Button({ icon_name: 'user-trash-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Forget this app') });
+        button.connect('clicked', () => {
+          store.forget(entry.appId);
+          store.flush();
+          bumpRegistry();
+          rebuild();
+        });
+        row.add_suffix(button);
+        group.add(row);
+        rows.push(row);
+      }
+    };
+
+    const actions: AdwPreferencesGroup = new Adw.PreferencesGroup({
+      title: _('Registry data'),
+      description: _('Back up, restore or reset the app registry.'),
+    });
+
+    const clearRow: AdwActionRow = new Adw.ActionRow({ title: _('Clear all'), subtitle: _('Forget every app adrt has recorded.') });
+    const clearButton: GtkButton = new Gtk.Button({ label: _('Clear all'), valign: Gtk.Align.CENTER });
+    clearButton.add_css_class('flat');
+    clearButton.connect('clicked', () => {
+      for (const entry of store.entries()) store.forget(entry.appId);
+      store.flush();
+      bumpRegistry();
+      rebuild();
+    });
+    clearRow.add_suffix(clearButton);
+    actions.add(clearRow);
+
+    const exportRow: AdwActionRow = new Adw.ActionRow({ title: _('Export…'), subtitle: _('Save the registry to a JSON file.') });
+    const exportButton: GtkButton = new Gtk.Button({ label: _('Export'), valign: Gtk.Align.CENTER });
+    exportButton.add_css_class('flat');
+    exportButton.connect('clicked', () => {
+      void this.exportRegistry(store, window, exportRow);
+    });
+    exportRow.add_suffix(exportButton);
+    actions.add(exportRow);
+
+    const importRow: AdwActionRow = new Adw.ActionRow({ title: _('Import…'), subtitle: _('Load a previously exported registry.') });
+    const importButton: GtkButton = new Gtk.Button({ label: _('Import'), valign: Gtk.Align.CENTER });
+    importButton.add_css_class('flat');
+    importButton.connect('clicked', () => {
+      void this.importRegistry(store, window, importRow, () => {
         store.flush();
+        bumpRegistry();
+        rebuild();
       });
-      const button: GtkButton = new Gtk.Button({ icon_name: 'user-trash-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Forget this app') });
-      button.connect('clicked', () => {
-        store.forget(entry.appId);
-        store.flush();
-        group.remove(row);
-      });
-      row.add_suffix(button);
-      group.add(row);
-    }
-    page.add(group);
+    });
+    importRow.add_suffix(importButton);
+    actions.add(importRow);
+
+    page.add(actions);
+    rebuild();
     return page;
+  }
+
+  /** Save the registry to a user-chosen file; any failure lands on the row. */
+  private async exportRegistry(store: RegistryStore, window: AdwPreferencesWindow, row: AdwActionRow): Promise<void> {
+    const dialog: GtkFileDialog = new Gtk.FileDialog();
+    dialog.set_title(_('Export the app registry'));
+    dialog.set_initial_name('adrt-registry.json');
+    let file: GioFile;
+    try {
+      file = await saveFileDialog(dialog, window);
+    } catch {
+      // A dismissed dialog rejects too; there is nothing to report.
+      return;
+    }
+    try {
+      const bytes: Uint8Array = new TextEncoder().encode(JSON.stringify(store.toJSON(), null, 2));
+      const [ok] = file.replace_contents(bytes, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+      if (!ok) throw new Error(_('Could not write the registry file.'));
+      row.subtitle = _('Registry exported.');
+    } catch (error) {
+      row.subtitle = errorMessage(error);
+    }
+  }
+
+  /** Adopt a user-chosen registry file; any failure lands on the row. */
+  private async importRegistry(
+    store: RegistryStore,
+    window: AdwPreferencesWindow,
+    row: AdwActionRow,
+    onImported: () => void,
+  ): Promise<void> {
+    const dialog: GtkFileDialog = new Gtk.FileDialog();
+    dialog.set_title(_('Import an app registry'));
+    let file: GioFile;
+    try {
+      file = await openFileDialog(dialog, window);
+    } catch {
+      return;
+    }
+    try {
+      const [ok, contents] = file.load_contents(null);
+      if (!ok) throw new Error(_('Could not read the registry file.'));
+      const parsed: unknown = JSON.parse(new TextDecoder().decode(contents));
+      if (!isRegistryData(parsed)) throw new Error(_('That file is not an adrt app-registry export.'));
+      const validated: AppRegistry = AppRegistry.fromJSON(parsed, { ttlMs: DEFAULT_TTL_MS });
+      if (validated.size === 0 && parsed.entries.length > 0) throw new Error(_('That file has no usable app entries.'));
+      store.adopt(parsed);
+      row.subtitle = '';
+      onImported();
+    } catch (error) {
+      row.subtitle = errorMessage(error);
+    }
   }
 
   private aboutPage(settings: GioSettings): AdwPreferencesPage {

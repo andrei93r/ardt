@@ -211,6 +211,8 @@ declare module 'gi://Gio' {
     /** Create flags (`Gio.FileCreateFlags`). */
     readonly FileCreateFlags: {
       readonly NONE: number;
+      /** Overwrite an existing destination file. */
+      readonly REPLACE_DESTINATION: number;
     };
     /** Monitor flags (`Gio.FileMonitorFlags`). */
     readonly FileMonitorFlags: {
@@ -306,7 +308,21 @@ declare module 'gi://Gio' {
     enumerate_children(attributes: string, flags: number, cancellable: unknown): FileEnumerator;
     append_to(flags: number, cancellable: unknown): FileOutputStream;
     get_path(): string;
+    load_contents(cancellable: Cancellable | null): [boolean, Uint8Array, string];
+    replace_contents(
+      contents: Uint8Array,
+      etag: string | null,
+      makeBackup: boolean,
+      flags: number,
+      cancellable: Cancellable | null,
+    ): [boolean, string];
   }
+
+  /** A `Gio.Cancellable`; the preference file dialogs pass `null`. */
+  export interface Cancellable {}
+
+  /** A `Gio.AsyncResult`, handed to a `*_finish` call. */
+  export interface AsyncResult {}
 
   /** A directory enumerator (`Gio.FileEnumerator`). */
   export interface FileEnumerator {
@@ -868,6 +884,10 @@ declare module 'gi://Gtk' {
     readonly MenuButton: {
       new (properties?: Record<string, unknown>): GtkMenuButton;
     };
+    /** `Gtk.FileDialog`, the GTK4 native file chooser used by `prefs.ts`. */
+    readonly FileDialog: {
+      new (properties?: Record<string, unknown>): GtkFileDialog;
+    };
     readonly ListBoxRow: {
       new (properties?: Record<string, unknown>): GtkListBoxRow;
     };
@@ -945,6 +965,27 @@ declare module 'gi://Gtk' {
   /** A popover (`Gtk.Popover`). */
   export interface GtkPopover extends GtkWidget {
     set_child(child: GtkWidget): void;
+  }
+
+  /** A top-level window (`Gtk.Window`); the preferences window is one. */
+  export interface GtkWindow {}
+
+  /** A `Gtk.FileDialog`, used for the registry import/export choosers. */
+  export interface GtkFileDialog {
+    set_title(title: string): void;
+    set_initial_name(name: string): void;
+    save(
+      parent: GtkWindow | null,
+      cancellable: import('gi://Gio').Cancellable | null,
+      callback: (source: GtkFileDialog, result: import('gi://Gio').AsyncResult) => void,
+    ): void;
+    save_finish(result: import('gi://Gio').AsyncResult): import('gi://Gio').File;
+    open(
+      parent: GtkWindow | null,
+      cancellable: import('gi://Gio').Cancellable | null,
+      callback: (source: GtkFileDialog, result: import('gi://Gio').AsyncResult) => void,
+    ): void;
+    open_finish(result: import('gi://Gio').AsyncResult): import('gi://Gio').File;
   }
 
   /** A menu button (`Gtk.MenuButton`), whose `popover` is assigned directly. */
@@ -1040,6 +1081,7 @@ declare module 'gi://Adw' {
   /** An entry row (`Adw.EntryRow`). */
   export interface AdwEntryRow extends AdwPreferencesRow {
     text: string;
+    tooltip_text: string;
   }
 
   /** An expander row (`Adw.ExpanderRow`), the app-picker container. */
