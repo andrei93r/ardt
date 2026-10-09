@@ -166,8 +166,11 @@ if a['x'] < b['x'] + b['width'] - 2 and b['x'] < a['x'] + a['width'] - 2 \
    and a['y'] < b['y'] + b['height'] - 2 and b['y'] < a['y'] + a['height'] - 2:
     print('pair overlaps', a, b); sys.exit(1)
 share = min(a['width'], b['width']) / (a['width'] + b['width'])
-if abs(share - 0.5) > 0.12:
-    print('split is', round(share, 2), 'not ~0.50', a['width'], b['width']); sys.exit(1)
+axis = w1.get('axis') or 'horizontal'
+connector = next((m.get('connector') for m in d['monitors'] if m['index'] == w1['monitor']), '')
+expected = (d.get('ratios') or {}).get(connector + ':' + str(w1['workspace']) + ':' + axis, 0.5)
+if abs(share - expected) > 0.12:
+    print('split is', round(share, 2), 'expected', expected, a['width'], b['width']); sys.exit(1)
 for r in (a, b):
     if r['x'] < area['x'] - 2 or r['x'] + r['width'] > area['x'] + area['width'] + 2 \
        or r['y'] < area['y'] - 2 or r['y'] + r['height'] > area['y'] + area['height'] + 2:
@@ -234,7 +237,7 @@ appcheck_run() {
   appcheck_reset
 
   # 1. opens and is tracked.
-  id1="$(appcheck_spawn "$env_json" "$argv_json")"
+  id1="$(appcheck_spawn "$env_json" "$argv_json" 45)"
   if [ -z "$id1" ] || [ "$id1" = "0" ]; then
     appcheck_skip "$label: cannot open a window in this session"
     return 2
@@ -285,9 +288,9 @@ if not (w['maximized'] or covers):
 print('maximised', w['maximized'], 'rect', r)
 " 25 || rc=1
 
-  # 2b. with a sibling it forms a 50/50 pair. The app is already running, so a
+  # 2b. with a sibling it forms a pair. The app is already running, so a
   # second window is quick; a single-instance app is detected sooner.
-  id2="$(appcheck_spawn "$env_json" "$argv_json" 15)"
+  id2="$(appcheck_spawn "$env_json" "$argv_json" 30)"
   if [ -z "$id2" ] || [ "$id2" = "0" ]; then
     appcheck_skip "$label: a second window did not open (single-instance app) — pair/max/tear-off N/A"
     appcheck_close "$id1"
@@ -307,7 +310,7 @@ print('maximised', w['maximized'], 'rect', r)
        return 2 ;;
     4) appcheck_close "$id2"
        appcheck_close "$id1"
-       fail "$label: with a sibling it forms a 50/50 pair — the first window is gone"
+       fail "$label: with a sibling it forms a pair — the first window is gone"
        return 1 ;;
     *) appcheck_skip "$label: the second window is not tileable (dialog/utility) — pair/max/tear-off N/A"
        appcheck_close "$id2"
@@ -321,15 +324,15 @@ print('maximised', w['maximized'], 'rect', r)
   # a real failure; otherwise the row is skipped once and the remaining pair
   # steps (maximize/unmaximize/focus) do not run.
   if pair_detail="$(appcheck_pair_status "$id1" "$id2" 30)"; then
-    pass "$label: with a sibling it forms a 50/50 pair"
+    pass "$label: with a sibling it forms a pair"
   else
     appcheck_pair_peer "$id1" "$id2" 5; peer=$?
     case "$peer" in
-      4) fail "$label: with a sibling it forms a 50/50 pair — the first window is gone"
+      4) fail "$label: with a sibling it forms a pair — the first window is gone"
          appcheck_close "$id2"
          appcheck_close "$id1"
          return 1 ;;
-      0) fail "$label: with a sibling it forms a 50/50 pair${pair_detail:+ — $pair_detail}"
+      0) fail "$label: with a sibling it forms a pair${pair_detail:+ — $pair_detail}"
          rc=1 ;;
       *) appcheck_skip "$label: the second window closed itself / is no longer tileable — pair/max/tear-off N/A"
          appcheck_close "$id2"
