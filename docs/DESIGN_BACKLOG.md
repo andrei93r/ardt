@@ -200,7 +200,9 @@ recorder/hot-config.
 - **Nested worker tuning**: 8 workers is the sweet spot here (12 flaked under load); always
   `flock /tmp/opencode/adrt-test.lock`, own `ADRT_BASE_STATE`, `timeout`.
 - **AppImageLauncher** registers `binfmt` handlers → launching an AppImage opens a dialog;
-  tests must skip it (already done).
+  the app matrix passes its own bypass (`APPIMAGELAUNCHER_DISABLE=1`, plus
+  `APPIMAGE_EXTRACT_AND_RUN=1` for FUSE-less runs) and skips a row only when the app still
+  cannot open a window.
 - **Triggers must be honest** (`Inject*` / real API / `Simulate*`) and event-confirmed.
 - **Determinism**: no wall-clock/randomness in `core/`; the drain re-derives raceable state.
 - **A wait is not a fix** — no policy inside Mutter signal handlers.

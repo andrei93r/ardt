@@ -22,6 +22,22 @@ if len({w["workspace"] for w in ws}) < 2:
 print("ok")
 ' 15
 
+# The reap-on-minimize/close behaviour is only defined while the test
+# workspaces hold nothing but the test windows: a float pins its workspace (§6)
+# and the view/reap expectations assume the sandbox is alone. When the desktop
+# is dirty, record the reason instead of a false failure.
+foreign="$(dump | TEST_IDS="$(test_ids)" python3 -c '
+import json, os, sys
+d = json.load(sys.stdin)
+ids = set(int(x) for x in os.environ["TEST_IDS"].split())
+test_ws = {w["workspace"] for w in d["windows"] if w["id"] in ids}
+others = [w for w in d["windows"]
+          if w["workspace"] in test_ws and w["id"] not in ids and not w["minimized"]]
+print(len(others))')"
+if [ "$foreign" != "0" ]; then
+  skip "S05: the test workspaces also hold $foreign non-test window(s) — reap-on-minimize/close N/A"
+else
+
 # --- minimize: the window follows left and its workspace is reaped ----------
 third="$(test_id_on_highest_ws)"
 third_ws="$(window_workspace "$third")"
@@ -55,9 +71,11 @@ sleep 1
 # --- close the last window on a workspace: view left, workspace removed -----
 spawn "$FILES"
 wait_tests 3 15 || true
-read -r last last_ws <<<"$(dump | python3 -c '
-import json,sys
-ws = [w for w in json.load(sys.stdin)["windows"] if w["tileable"]]
+read -r last last_ws <<<"$(dump | TEST_IDS="$(test_ids)" python3 -c '
+import json, os, sys
+d = json.load(sys.stdin)
+ids = set(int(x) for x in os.environ["TEST_IDS"].split())
+ws = [w for w in d["windows"] if w["id"] in ids and w["tileable"]]
 top = max(w["workspace"] for w in ws)
 w = [x for x in ws if x["workspace"] == top][0]
 print(w["id"], top)')"
@@ -72,6 +90,8 @@ while [ "$SECONDS" -lt "$deadline" ]; do
   sleep 0.5
 done
 if [ "$switched" = "1" ]; then pass "closing switched the view to the left"; else fail "view did not move left (active $(state_expr 'd["activeWorkspace"]'))"; fi
+
+fi # foreign windows absent
 
 poll_no_stray_empty_workspaces
 

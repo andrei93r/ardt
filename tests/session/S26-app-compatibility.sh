@@ -71,7 +71,9 @@ fi
 while IFS= read -r appimage; do
   [ -n "$appimage" ] || continue
   [ -x "$appimage" ] || { appcheck_skip "S26: $appimage is not executable"; continue; }
-  row "AppImage · $(basename "$appimage")" -- "$appimage"
+  row "AppImage · $(basename "$appimage")" \
+    --env APPIMAGELAUNCHER_DISABLE=1 \
+    -- "$appimage"
 done <<<"$appimages"
 
 summary

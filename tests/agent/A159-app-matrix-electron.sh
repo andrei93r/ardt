@@ -76,6 +76,7 @@ elif [ ! -x "$lm_studio" ]; then
   appcheck_skip "A159: LM Studio AppImage is not executable: $(basename "$lm_studio")"
 else
   row "Electron · LM Studio (AppImage)" "${electron_env[@]}" \
+    --env APPIMAGELAUNCHER_DISABLE=1 \
     --env APPIMAGE_EXTRACT_AND_RUN=1 \
     -- "$lm_studio" --no-sandbox --ozone-platform=wayland \
        --user-data-dir="$(ua lmstudio)"
