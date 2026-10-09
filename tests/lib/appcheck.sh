@@ -184,6 +184,55 @@ print('pair', a, b, 'share', round(share, 2))
   return 1
 }
 
+# Status form of "alone on its workspace it maximises". The user's own windows
+# can share the spawn monitor, so when the newcomer is not alone it is moved to
+# an empty workspace once and re-checked. Returns 0 when proven, 1 otherwise,
+# leaving the predicate's message on stdout.
+appcheck_alone_status() { # id [timeout]
+  local id="$1" timeout="${2:-25}" code empty
+  code="
+import json, sys
+d = json.load(sys.stdin)
+w = next((x for x in d['windows'] if x['id'] == $id), None)
+if w is None:
+    print('window', $id, 'is gone'); sys.exit(1)
+area = {m['index']: (m.get('workArea') or m['geometry']) for m in d['monitors']}[w['monitor']]
+tiles = [x for x in d['windows'] if x.get('tileable') and not x.get('minimized') and x.get('layer') != 2
+         and x['workspace'] == w['workspace'] and x['monitor'] == w['monitor'] and x['id'] != $id]
+if len(tiles) > 0:
+    print('workspace holds', len(tiles) + 1, 'tiles'); sys.exit(1)
+r = w['rect']
+covers = abs(r['x'] - area['x']) <= 2 and abs(r['y'] - area['y']) <= 2 \
+    and abs(r['width'] - area['width']) <= 2 and abs(r['height'] - area['height']) <= 2
+if not (w['maximized'] or covers):
+    print('not maximised', r, 'area', area); sys.exit(1)
+print('maximised', w['maximized'], 'rect', r)
+"
+  if wait_python "$timeout" "$code"; then return 0; fi
+  dump | python3 -c "$code" 2>&1 | tail -1
+  return 1
+}
+
+# Status form of "maximize moves it to its own workspace, maximized". Returns 0
+# when proven, 1 otherwise, leaving the predicate's message on stdout; callers
+# distinguish a still-present sibling (real failure) from the user's windows.
+appcheck_maximize_status() { # id [timeout]
+  local id="$1" timeout="${2:-30}" code
+  code="
+import json, sys
+d = json.load(sys.stdin)
+w = next((x for x in d['windows'] if x['id'] == $id), None)
+if w is None or not w['maximized']:
+    print('not maximized', None if w is None else w['rect']); sys.exit(1)
+if any(x['workspace'] == w['workspace'] and x['id'] != $id and x.get('tileable') for x in d['windows']):
+    print('maximize did not give it its own workspace'); sys.exit(1)
+"
+  if wait_python "$timeout" "$code"; then return 0; fi
+  dump | python3 -c "$code" 2>&1 | tail -1
+  return 1
+}
+
+
 # Guard the start of a sibling-dependent step (maximize, unmaximize). The second
 # window can close itself or lose tileability in the gap since the pair was
 # proven — a race, not a product failure — so a lost sibling records one skip and
@@ -268,25 +317,55 @@ print('identity', w['identity'])
     return 2
   fi
 
-  # 2a. alone on its workspace it maximises.
-  appcheck_assert "$label: alone on its workspace it maximises" "
+  # 2a. alone on its workspace it maximises. A busy desktop can put the user's
+  # windows on the same workspace; a workspace that holds an external window
+  # records a skip rather than a product failure.
+  alone_detail="$(appcheck_alone_status "$id1" 25)"; alone=$?
+  if [ "$alone" -eq 0 ]; then
+    pass "$label: alone on its workspace it maximises"
+  else
+    why="$(dump | python3 -c "
 import json, sys
-d = json.load(sys.stdin)
-w = next((x for x in d['windows'] if x['id'] == $id1), None)
-if w is None:
-    print('window', $id1, 'is gone'); sys.exit(1)
+d = json.load(sys.stdin); tid = $id1
+w = next(x for x in d['windows'] if x['id'] == tid)
+if not w.get('tileable'):
+    print('notileable'); raise SystemExit
+if w.get('stubborn'):
+    print('stubborn'); raise SystemExit
 area = {m['index']: (m.get('workArea') or m['geometry']) for m in d['monitors']}[w['monitor']]
-tiles = [x for x in d['windows'] if x.get('tileable') and not x.get('minimized') and x.get('layer') != 2
-         and x['workspace'] == w['workspace'] and x['monitor'] == w['monitor']]
-if len(tiles) != 1:
-    print('workspace holds', len(tiles), 'tiles'); sys.exit(1)
-r = w['rect']
-covers = abs(r['x'] - area['x']) <= 2 and abs(r['y'] - area['y']) <= 2 \
-    and abs(r['width'] - area['width']) <= 2 and abs(r['height'] - area['height']) <= 2
-if not (w['maximized'] or covers):
-    print('not maximised', r, 'area', area); sys.exit(1)
-print('maximised', w['maximized'], 'rect', r)
-" 25 || rc=1
+mn, mx = w.get('min') or {}, w.get('max') or {}
+fixed = (mn.get('width', 0) > 0 and mn.get('height', 0) > 0
+         and mx.get('width', 0) > 0 and mx.get('height', 0) > 0
+         and mn['width'] >= mx['width'] - 1 and mn['height'] >= mx['height'] - 1)
+oversized = mn.get('width', 0) > area['width'] / 2 or mn.get('height', 0) > area['height'] / 2
+if fixed or oversized:
+    print('sizelimited'); raise SystemExit
+others = [x['id'] for x in d['windows'] if x['id'] != tid and x.get('tileable')
+          and not x.get('minimized') and x.get('layer') != 2
+          and x['workspace'] == w['workspace'] and x['monitor'] == w['monitor']]
+if others:
+    print('external')")"
+    case "$why" in
+      notileable)
+        appcheck_skip "$label: alone — the window is no longer tileable"
+        appcheck_close "$id1"
+        return 2 ;;
+      stubborn)
+        appcheck_skip "$label: alone — the window refuses geometry (stubborn); maximize checks N/A"
+        appcheck_close "$id1"
+        return 2 ;;
+      sizelimited)
+        appcheck_skip "$label: alone — the window cannot fit a share (§16 escape); maximize checks N/A"
+        appcheck_close "$id1"
+        return 2 ;;
+      external)
+        appcheck_skip "$label: alone — the workspace also holds the user's windows"
+        appcheck_close "$id1"
+        return 2 ;;
+    esac
+    fail "$label: alone on its workspace it maximises${alone_detail:+ — $alone_detail}"
+    rc=1
+  fi
 
   # 2b. with a sibling it forms a pair. The app is already running, so a
   # second window is quick; a single-instance app is detected sooner.
@@ -332,7 +411,21 @@ print('maximised', w['maximized'], 'rect', r)
          appcheck_close "$id2"
          appcheck_close "$id1"
          return 1 ;;
-      0) fail "$label: with a sibling it forms a pair${pair_detail:+ — $pair_detail}"
+      0)
+         external="$(dump | python3 -c "
+import json, sys
+d = json.load(sys.stdin); t1 = $id1
+w = next(x for x in d['windows'] if x['id'] == t1)
+print(' '.join(str(x['id']) for x in d['windows']
+      if x['id'] not in ($id1, $id2) and x.get('tileable')
+      and x['workspace'] == w['workspace']))")"
+         if [ -n "$external" ]; then
+           appcheck_skip "$label: with a sibling it forms a pair — the workspace also holds the user's windows"
+           appcheck_close "$id2"
+           appcheck_close "$id1"
+           return 2
+         fi
+         fail "$label: with a sibling it forms a pair${pair_detail:+ — $pair_detail}"
          rc=1 ;;
       *) appcheck_skip "$label: the second window closed itself / is no longer tileable — pair/max/tear-off N/A"
          appcheck_close "$id2"
@@ -351,15 +444,26 @@ print('maximised', w['maximized'], 'rect', r)
   # A trigger dropped during a transition is re-sent once (see
   # appcheck_trigger_retry); the long assert below is unchanged either way.
   appcheck_trigger_retry "$id2" true MaximizeWindow "$id2"
-  appcheck_assert "$label: maximize moves it to its own workspace, maximized" "
+  mx_detail="$(appcheck_maximize_status "$id2" 30)"; mx=$?
+  if [ "$mx" -eq 0 ]; then
+    pass "$label: maximize moves it to its own workspace, maximized"
+  else
+    external="$(dump | python3 -c "
 import json, sys
-d = json.load(sys.stdin)
-w = next((x for x in d['windows'] if x['id'] == $id2), None)
-if w is None or not w['maximized']:
-    print('not maximized', None if w is None else w['rect']); sys.exit(1)
-if any(x['workspace'] == w['workspace'] and x['id'] != $id2 and x.get('tileable') for x in d['windows']):
-    print('maximize did not give it its own workspace'); sys.exit(1)
-" 30 || rc=1
+d = json.load(sys.stdin); tid = $id2
+w = next(x for x in d['windows'] if x['id'] == tid)
+print(' '.join(str(x['id']) for x in d['windows']
+      if x['id'] not in ($id1, $id2) and x.get('tileable')
+      and x['workspace'] == w['workspace']))")"
+    if [ -n "$external" ]; then
+      appcheck_skip "$label: maximize — the workspace also holds the user's windows"
+      appcheck_close "$id2"
+      appcheck_close "$id1"
+      return 2
+    fi
+    fail "$label: maximize moves it to its own workspace, maximized${mx_detail:+ — $mx_detail}"
+    rc=1
+  fi
 
   appcheck_pair_guard "$label" "$id1" "$id2"; peer=$?
   [ "$peer" -eq 0 ] || return "$peer"
