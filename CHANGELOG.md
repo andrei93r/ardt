@@ -42,6 +42,12 @@ code changes, MINOR for features, PATCH for fixes.
 - **Tooling**: `check:types` type-checks `src` + `tests`, CI runs the
   scenario-coverage guard and shellcheck, and `docs/ARCHITECTURE.md`
   records the layer rules and invariants.
+- **Live-verified fixes** (found by the full nested + live suites): the
+  maximize handler masks only our own maximizes, so a user maximize right
+  after a tile apply is no longer swallowed; a new Rules-tab row starts
+  disabled, so one click cannot install a catch-all `full` rule that silently
+  defeats pairing; the app matrix skips a vanishing or dialog second window
+  and retries a compositor-dropped maximize instead of failing.
 - **Build**: `npm run build` cleans `dist/` first and pack/install always
   rebuild; the core-purity gate no longer false-positives on prose.
 

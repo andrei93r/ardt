@@ -801,7 +801,10 @@ export default class AdrtPreferences extends ExtensionPreferences {
       const button: GtkButton = new Gtk.Button({ icon_name: 'list-add-symbolic', valign: Gtk.Align.CENTER, tooltip_text: _('Add rule') });
       button.add_css_class('flat');
       button.connect('clicked', () => {
-        entries.push({ match: { appId: '*' }, tile: 'full' });
+        // A new row starts disabled: one click must not install a catch-all
+        // `full` rule that silently turns every pair into a stacked window.
+        // The user picks an app/title and flips the switch when it is ready.
+        entries.push({ match: { appId: '*' }, tile: 'full', enabled: false });
         write();
         rebuild();
       });
