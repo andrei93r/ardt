@@ -433,17 +433,34 @@ function findRuleOverride(windows: readonly TilerWindow[], rules: readonly Rule[
   return null;
 }
 
-function applyRuleOverride(override: RuleOverride, w0: TilerWindow, w1: TilerWindow, avail: Rect, gap: number, screen: Screen): TilePlan {
+/**
+ * §23 decision 91: a rule forces a tile placement for the matched window. `full`
+ * fills the monitor; `left-half`/`right-half` place the window in slot 0/1 along
+ * the screen's `axis` — the same `defaultAxis` the normal pair uses (decision 43),
+ * so an explicit `workspaceAxis` is honoured and a portrait screen stacks. The
+ * half-names are historical and axis-relative: on a vertical axis `left-half` is
+ * the **top** half and `right-half` the bottom. The sibling takes the other half
+ * at a 50/50 split.
+ */
+function applyRuleOverride(
+  override: RuleOverride,
+  w0: TilerWindow,
+  w1: TilerWindow,
+  avail: Rect,
+  gap: number,
+  axis: SplitAxis,
+  screen: Screen,
+): TilePlan {
   const win = override.window;
   if (override.mode === 'full') {
     return { placements: [place(win.id, fillRect(avail, win.min, screenArea(screen)), screen, 0, win.max)] };
   }
   const other = win.id === w0.id ? w1 : w0;
-  const left = override.mode === 'left-half' ? win : other;
-  const right = override.mode === 'left-half' ? other : win;
-  const split = splitAt(avail, gap, 'horizontal', 0.5, screen.scale);
+  const first = override.mode === 'left-half' ? win : other;
+  const second = override.mode === 'left-half' ? other : win;
+  const split = splitAt(avail, gap, axis, 0.5, screen.scale);
   return {
-    placements: [place(left.id, split.rect0, screen, 0, left.max), place(right.id, split.rect1, screen, 1, right.max)],
+    placements: [place(first.id, split.rect0, screen, 0, first.max), place(second.id, split.rect1, screen, 1, second.max)],
   };
 }
 
@@ -508,7 +525,7 @@ export function computePlans(windows: readonly TilerWindow[], screen: Screen, co
   const defaultAxis: SplitAxis = config.workspaceAxis ?? (isPortrait(screen) ? 'vertical' : 'horizontal');
 
   const override = findRuleOverride([w0, w1], config.rules);
-  if (override !== null) return applyRuleOverride(override, w0, w1, avail, gap, screen);
+  if (override !== null) return applyRuleOverride(override, w0, w1, avail, gap, defaultAxis, screen);
 
   const ratio = resolveRatio(w0, w1, defaultAxis, screen.connector, config);
 

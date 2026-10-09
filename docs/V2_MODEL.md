@@ -340,6 +340,14 @@ split between two windows (`gaps-base` is 8 px today, and `-1` in the orientatio
 means "use the base"). A gap is part of the surface the windows are fitted to, so
 changing one **re-fits the pair by ratio** like any other work-area change.
 
+**"Portrait" is defined by geometry**: a screen is portrait when
+`geometry.height > geometry.width` (the monitor's unaffected geometry, not its work
+area or a strut). It is the same predicate the tiler's `isPortrait` uses, and it drives
+two things only: the default split axis — portrait screens stack top/bottom, landscape
+screens side by side (decision 43) — and the base gap override, `gaps-portrait` vs
+`gaps-landscape` (decision 15). An explicit `workspaceAxis` overrides the axis the
+geometry infers, but never the gap orientation.
+
 **The work area** is the available surface, and it is never assumed:
 - read `Main.layoutManager.getWorkAreaForMonitor(index)` — workspace-independent
   (workspace 0), and the only authority (`Meta.Display` exposes no work-area method in
@@ -747,7 +755,8 @@ never debug-gated (the deduplication and rate limits still apply).
     workspaces stack side by side (slot 0 left, slot 1 right); vertical workspaces
     stack top/bottom (slot 0 top, slot 1 bottom) and so do portrait screens. The
     arrival rule puts the newcomer in slot 1 (the bottom, with vertical workspaces);
-    directions act on the pair's own axis first; gaps follow the axis.
+    directions act on the pair's own axis first. Gaps stay per orientation (15, 74);
+    the axis does not change them.
 
 44. **A window opening on a workspace that is not being viewed is routed there**
     (test scenario S16): tiled into a free slot, or maximized on a workspace created
@@ -1000,6 +1009,17 @@ never debug-gated (the deduplication and rate limits still apply).
     rule** control, an **empty state**, and **inline validation** that names every
     problem on the offending row. There is **no JSON textarea and no global switch**;
     `rules-json` stays the storage key.
+
+94. **A pair that does not fit the screen's axis is tried on the perpendicular axis
+    before any stack fallback** (the undocumented `computePlans` behaviour, backlog
+    §4.2): under `min-size-policy: respect`, when neither window fits its half on the
+    screen's axis (`fitsAt` is false), the tiler tries the other axis first and splits
+    there at the ratio clamped to the two minimums — for example a landscape pair
+    whose minimum widths do not sum to the width stacks top/bottom instead. Only when
+    neither axis fits does it fall back to `stackLayout`: the two windows at their
+    minimums, pinned to the opposite edges when that fits, else an even split. This is
+    a fitting fallback, not the escape/refusal path of §10/§16 — no window gets its own
+    workspace, none floats, and no view move or toast follows.
 
 ## Deliberate non-goals
 

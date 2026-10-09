@@ -145,3 +145,9 @@ S27-tab-tear-off
 # P2.9 dev-gated section profiler: needs trace-enabled and a real resize;
 # full suite only (not in the smoke subset).
 A165-probe-sections
+
+# reason: full-suite regression coverage — the curated smoke keeps one
+#   representative per feature area for speed; this scenario stays in the
+#   release gate.
+A168-refusal-ladder-bounded
+A169-focus-after-visible

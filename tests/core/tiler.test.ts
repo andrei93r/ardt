@@ -372,6 +372,48 @@ describe('computePlans — rule override', () => {
   });
 });
 
+describe('computePlans — rule override axis (§4.3)', () => {
+  const leftHalf = [{ match: { appId: 'special' }, tile: 'left-half' as const }];
+  const rightHalf = [{ match: { appId: 'special' }, tile: 'right-half' as const }];
+  const pair = [window({ id: 1 }), window({ id: 2, appId: 'special' })];
+  const rectOf = (plan: ReturnType<typeof computePlans>, id: number) =>
+    plan.placements.find((p) => p.surfaceId === id)!.rect;
+
+  it('puts a left-half match on top of a portrait screen', () => {
+    // Portrait: defaultAxis is vertical, so slot 0 ("left-half") is the top half.
+    const plan = computePlans(pair, portrait, config({ rules: leftHalf }));
+    expect(rectOf(plan, 2)).toEqual(rect(0, 0, 1080, 960));
+    expect(rectOf(plan, 1)).toEqual(rect(0, 960, 1080, 960));
+  });
+
+  it('puts a right-half match at the bottom of a portrait screen', () => {
+    const plan = computePlans(pair, portrait, config({ rules: rightHalf }));
+    expect(rectOf(plan, 2)).toEqual(rect(0, 960, 1080, 960));
+    expect(rectOf(plan, 1)).toEqual(rect(0, 0, 1080, 960));
+  });
+
+  it('follows an explicit vertical workspace axis on a landscape screen', () => {
+    const plan = computePlans(pair, landscape, config({ rules: leftHalf, workspaceAxis: 'vertical' }));
+    // slot 0 is the top half on a vertical axis.
+    expect(rectOf(plan, 2)).toEqual(rect(0, 0, 1920, 540));
+    expect(rectOf(plan, 1)).toEqual(rect(0, 540, 1920, 540));
+  });
+
+  it('lets an explicit horizontal workspace axis win over a portrait-shaped screen', () => {
+    // defaultAxis = workspaceAxis ?? (isPortrait ? vertical : horizontal).
+    const plan = computePlans(pair, portrait, config({ rules: leftHalf, workspaceAxis: 'horizontal' }));
+    expect(rectOf(plan, 2)).toEqual(rect(0, 0, 540, 1920));
+    expect(rectOf(plan, 1)).toEqual(rect(540, 0, 540, 1920));
+  });
+
+  it('keeps left/right halves on a landscape screen (no behaviour change)', () => {
+    const left = computePlans(pair, landscape, config({ rules: leftHalf }));
+    expect(rectOf(left, 2)).toEqual(rect(0, 0, 960, 1080));
+    const right = computePlans(pair, landscape, config({ rules: rightHalf }));
+    expect(rectOf(right, 2)).toEqual(rect(960, 0, 960, 1080));
+  });
+});
+
 describe('computePlans — scale snapping', () => {
   it('snaps rects to the monitor scale grid', () => {
     const scaled = screen({ geometry: rect(0, 0, 1920, 1080), scale: 2 });

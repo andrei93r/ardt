@@ -43,6 +43,7 @@ export const NOTICE_ALWAYS: Notice[] = [
   { key: 'cannot-move-workspace', title: 'Cannot move: this screen has only one workspace', always: true },
   { key: 'un-float-full', title: 'Cannot un-float: both slots are taken', always: true },
   { key: 'nothing-to-nudge', title: 'Nothing to nudge', always: true },
+  { key: 'resize-limit', title: 'Already at the limit', always: true },
   { key: 'undo-impossible', title: 'Cannot undo: the window is gone', always: true },
 ];
 

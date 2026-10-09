@@ -28,6 +28,9 @@ describe('notice catalogue', () => {
     expect(NOTICE_ALWAYS.every((n) => n.always === true)).toBe(true);
     expect(NOTICE_CATALOGUE.every((n) => n.always !== true)).toBe(true);
     expect(noticeTitle('un-float-full')).toContain('un-float');
+    // A resize at the 5–95% limit changed nothing, so it is always announced.
+    expect(NOTICE_ALWAYS.map((n) => n.key)).toContain('resize-limit');
+    expect(noticeTitle('resize-limit')).toContain('limit');
   });
 
   it('returns null for an unknown key so a typo is visible in tests', () => {

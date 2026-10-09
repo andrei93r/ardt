@@ -1047,6 +1047,16 @@ declare module 'gi://Adw' {
     readonly ExpanderRow: {
       new (properties?: Record<string, unknown>): AdwExpanderRow;
     };
+    /** `Adw.AlertDialog`, the confirmation and mode dialogs in `prefs.ts`. */
+    readonly AlertDialog: {
+      new (properties?: Record<string, unknown>): AdwAlertDialog;
+    };
+    /** Appearance of an alert-dialog response (`Adw.ResponseAppearance`). */
+    readonly ResponseAppearance: {
+      readonly DEFAULT: number;
+      readonly SUGGESTED: number;
+      readonly DESTRUCTIVE: number;
+    };
   }
 
   /** The common row surface (`Adw.PreferencesRow` and subclasses). */
@@ -1090,6 +1100,22 @@ declare module 'gi://Adw' {
     remove(child: unknown): void;
     /** Test hook: `A140` asserts a picker is used for the app-list keys. */
     adrtPicker?: boolean;
+  }
+
+  /** An alert dialog (`Adw.AlertDialog`), shown and awaited through `choose`. */
+  export interface AdwAlertDialog {
+    set_heading(heading: string): void;
+    set_body(body: string): void;
+    add_response(id: string, label: string): void;
+    set_response_appearance(id: string, appearance: number): void;
+    set_default_response(id: string): void;
+    set_close_response(id: string): void;
+    choose(
+      parent: import('gi://Gtk').GtkWindow | null,
+      cancellable: import('gi://Gio').Cancellable | null,
+      callback: (source: AdwAlertDialog, result: import('gi://Gio').AsyncResult) => void,
+    ): void;
+    choose_finish(result: import('gi://Gio').AsyncResult): string;
   }
 
   /** A preferences group (`Adw.PreferencesGroup`). */

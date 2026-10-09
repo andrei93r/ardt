@@ -47,3 +47,7 @@ A124-screen-side-rule
 A81-four-monitors
 # --- shell stability: a real unplug must not assert on a stale monitor index ---
 A162-monitor-removal
+
+# --- shell stability: a topology change leaves a window in exactly one stable
+#     plan (the §3.1 clamp/tiler bounce) ---
+A167-screens-change-one-plan

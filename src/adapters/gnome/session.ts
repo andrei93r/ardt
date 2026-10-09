@@ -1449,7 +1449,9 @@ export class WindowSession {
     if (focused === null) return false;
     const sibling = this.pairSibling(focused);
     if (!this.deps.tiling.nudgeSplit(focused.id, direction, step)) {
-      this.deps.onNotice?.('nothing-to-nudge', String(focused.id));
+      // §17/§21: differentiate the two refusals — no shared edge at all versus
+      // a pair that is already at the 5–95% limit.
+      this.deps.onNotice?.(sibling === null ? 'nothing-to-nudge' : 'resize-limit', String(focused.id));
       return false;
     }
     if (sibling !== null) this.captureChange([focused.id, sibling.id]);
@@ -1464,7 +1466,8 @@ export class WindowSession {
     if (focused === null) return false;
     const sibling = this.pairSibling(focused);
     if (!this.deps.tiling.resizeSplit(focused.id, grow, step)) {
-      this.deps.onNotice?.('nothing-to-nudge', String(focused.id));
+      // §17/§21: distinguish no pair from a pair that cannot move further.
+      this.deps.onNotice?.(sibling === null ? 'nothing-to-nudge' : 'resize-limit', String(focused.id));
       return false;
     }
     if (sibling !== null) this.captureChange([focused.id, sibling.id]);

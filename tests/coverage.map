@@ -65,7 +65,7 @@ registry-identity-placement | A63-client-text-bounded A98-registry-lists-every-a
 
 # ------------------------------------------- displays: plan / rescue / replay
 displays-plan-rescue-replay | A14-monitor-change A106-no-cross-monitor-exile A109-disconnect-routes A110-reconnect-replays-state A111-primary-change-keeps-slots-and-the-extra-window-floats A112-workarea-change-replans-one-monitor A122-rescue-side-and-order A143-reconnect-restores-float
-display-failures | A109-disconnect-routes A111-primary-change-keeps-slots-and-the-extra-window-floats A122-rescue-side-and-order A112-workarea-change-replans-one-monitor
+display-failures | A109-disconnect-routes A111-primary-change-keeps-slots-and-the-extra-window-floats A122-rescue-side-and-order A112-workarea-change-replans-one-monitor A167-screens-change-one-plan
 panel-strut | A81-four-monitors A112-workarea-change-replans-one-monitor
 fractional-scaling | A137-screen-topology A142-topology-cases A144-fractional-scaling
 gnome51-compat | A80-platform-probe A138-os-timing

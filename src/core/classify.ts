@@ -146,4 +146,15 @@ export function classify(
   return { tileable: true, layer: Layer.TILED, reason: null, modal: false };
 }
 
+/**
+ * §23: whether a classification is a candidate for the active-window highlight.
+ * A tiled window and a **modal** (a transient dialog is not tileable, but it is
+ * the active window and still gets the border) both are; nothing else is. The
+ * Shell adapter asks this before re-deriving occlusion, so an occluded modal is
+ * suppressed exactly like an occluded tile instead of keeping a border drawn
+ * over the window that covered it.
+ */
+export function getsActiveHighlight(classification: Classification): boolean {
+  return classification.tileable || classification.modal;
+}
 

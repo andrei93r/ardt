@@ -227,7 +227,17 @@ export interface BundleMergeResult {
   behavior: MergeReport;
 }
 
-export function mergeBundles(base: Bundle, incoming: Bundle, mode: ImportMode): BundleMergeResult {
+/**
+ * Merge two bundles. The merged bundle's `exportedAt` is an *input* (P6d): the
+ * pure core never reads the wall clock. It defaults to the epoch sentinel,
+ * which is deterministic; callers that care about the timestamp pass one.
+ */
+export function mergeBundles(
+  base: Bundle,
+  incoming: Bundle,
+  mode: ImportMode,
+  exportedAt: string = new Date(0).toISOString(),
+): BundleMergeResult {
   let settings: Record<string, ConfigValue>;
   let settingsReport: MergeReport;
   if (mode === 'replace') {
@@ -254,7 +264,7 @@ export function mergeBundles(base: Bundle, incoming: Bundle, mode: ImportMode): 
     bundle: {
       format: BUNDLE_FORMAT,
       version: BUNDLE_VERSION,
-      exportedAt: new Date().toISOString(),
+      exportedAt,
       settings,
       tracked: {
         adaptations: adaptations.record,

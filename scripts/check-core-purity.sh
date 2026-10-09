@@ -33,6 +33,40 @@ if grep -RInE 'KWin|KPlugin|kwin' src | grep -v 'platform/host.ts'; then
   status=1
 fi
 
+# §36.4 / P6d: core is deterministic. Time, randomness and IO are inputs, never
+# something `src/core/` reads for itself. Each check greps `src/core` only.
+
+if grep -RInE 'Math\.random' src/core; then
+  echo "check-core-purity: Math.random found in core (non-deterministic)" >&2
+  status=1
+fi
+
+if grep -RInE 'readFileSync|writeFileSync|fetch\(|XMLHttpRequest' src/core; then
+  echo "check-core-purity: IO call found in core (read/write/fetch/XMLHttpRequest)" >&2
+  status=1
+fi
+
+# `new Date(0)` is the deterministic epoch literal. Strip it, then any `new
+# Date(` left is a wall-clock read.
+if grep -RInE 'new Date\(' src/core | sed -E 's/new Date\(0\)/<epoch>/g' | grep -E 'new Date\('; then
+  echo "check-core-purity: new Date(...) clock read found in core (only new Date(0) is allowed)" >&2
+  status=1
+fi
+
+# `Date.now` is allowed only at an injection seam: a parameter default
+# (`= Date.now()`, optionally typed), an injected thunk (`=> Date.now()`) or the
+# fallback of an injected value (`?? Date.now()`). Strip those seams; any
+# `Date.now` left is a non-injected clock read.
+if grep -RInE 'Date\.now' src/core \
+     | sed -E \
+       -e 's/(\(|,)[[:space:]]*(public +|private +|protected +|readonly +)*[A-Za-z_$][A-Za-z0-9_$]*(\??:[^=]*)?=[[:space:]]*Date\.now\(\)/<seam>/g' \
+       -e 's/=>[[:space:]]*Date\.now\(\)/<seam>/g' \
+       -e 's/\?\?[[:space:]]*Date\.now\(\)/<seam>/g' \
+     | grep -E 'Date\.now'; then
+  echo "check-core-purity: Date.now() clock read found in core (inject it as a parameter default or thunk)" >&2
+  status=1
+fi
+
 if [ "$status" -eq 0 ]; then
   echo "check-core-purity: OK"
 fi

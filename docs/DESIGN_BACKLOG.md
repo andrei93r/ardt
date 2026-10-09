@@ -150,32 +150,87 @@ Measured: **204** `: any`/`<any>`/`as any` in `src/` (`compat.ts` 38, `gi.d.ts` 
 
 ## 3. Open GNOME bugs (from the recorder)
 
-- **3.1 `screens-changed` bounce — planned (next after §1).** On a monitor change the window
-  bounces between two screen plans (`resize_retry reason=clamp-to-screen` targeting
-  `{1440,711,…}` and `{0,0,1440,2560}`, `self-unmaximize`, `stubborn`). Fix: **one owner per
-  window** across a replan; no clamp/tiler fight. User-visible: "closing a screen → reaction
-  on the other screen".
-- **3.2 Coherence/stubborn storm + top flip — planned (re-measure after §1.2).**
-  `resize_retry reason=coherence` on a refused rect, and the tiler's top flipping between
-  `y=32` and `y=711` for the same window.
-- **3.3 Modal highlight — candidate.** A modal (`{2508,647,424,179}`) gets `border focus`
-  while `occluded`, i.e. highlighted behind another window. Needs a fresh capture.
-- **3.4 Early focus / window not visible — candidate.** `focus` recorded before the window
-  is mapped/visible. Needs a fresh capture.
+Closed against the nested harness on the current build. Each item names the
+scenario that carries the evidence and what it asserts; the two "candidate"
+items were one-off captures, and the two "planned" items are now measured rather
+than assumed.
+
+- **3.1 `screens-changed` bounce — verified, no longer reproducible.**
+  `A167-screens-change-one-plan` (multi-monitor, `ADRT_MONITORS='1280x800:1280x800'`,
+  listed in `smoke-multi.list`) floats a window hard against the seam (the clamp's
+  own edge case), replans the topology with the honest `screens-changed` signal and
+  with a real screen removal, and asserts what the capture lacked: the window is
+  inside exactly **one** monitor's work area, its geometry is identical across two
+  settles, it is not `stubborn`, and no `resize_retry` / `stubborn` /
+  `self-unmaximize` / `clamp_to_screen` decision arrives for it in a settle window
+  (the clamp counter is frozen). The two-plan bounce (`resize_retry
+  reason=clamp-to-screen` on `{1440,711,…}` and `{0,0,1440,2560}`) does not
+  reproduce: the clamp and the tiler agree on the owner after the §1.2 live-screen
+  re-read. **Keep the recorder watch** — the exact repro needs a mixed
+  portrait+landscape topology and a real hotplug, which the nested harness only
+  models with a fixture.
+- **3.2 Coherence/stubborn storm + top flip — verified, no longer reproducible.**
+  `A168-refusal-ladder-bounded` injects a finite batch of refused verifies
+  (`InjectVerifyFailure`), forces a replan, and asserts the ladder is bounded: the
+  retry count since the mark stays `<= 12` for an injected batch of 6 (a storm
+  would blow straight past it), a settle window adds no `resize_retry`/`stubborn`,
+  and the refused window's top is a single value across ten polls — the
+  `y=32`↔`y=711` alternation does not occur. The `reason=coherence` storm was a
+  burst of this same bounded ladder; the harness has no unbounded refusal source, so
+  a targeted attempt cannot reproduce the capture-era framing. **Keep the recorder
+  watch** — a live client that genuinely refuses forever is what would show an
+  unbounded sweep.
+- **3.3 Modal highlight — fixed.** The occlusion re-derivation only ran for a
+  `tileable` focus, so a focused **modal** (a transient dialog is not tileable but
+  is the active window) that another window covered kept its `border focus` drawn
+  over the cover. The gate is now the pure `getsActiveHighlight` classification
+  (`src/core/classify.ts`): a tile and a modal get the active-window highlight
+  (and therefore the occlusion check), a skip/background or an always-on-top float
+  does not; `extension.ts` `refreshOcclusion` calls it. `A130-occlusion-hides-highlight`
+  gained a modal phase (spawn the cover client's modal, focus it, stack an
+  always-on-top window over its centre) that asserts the highlight is hidden with the
+  `occluded` reason and returns when uncovered; the rule itself is unit-tested in
+  `tests/core/classify.test.ts`.
+- **3.4 Early focus / window not visible — verified, no longer reproducible.**
+  `A169-focus-after-visible` reads the journal around a fresh spawn and asserts the
+  newcomer's first `border focus` comes after its `surface-created` and carries a
+  real frame — never the pre-map `0×0` rect. (`surface-created` is Mutter's
+  `window-created`, which can arrive degenerate; the journal has no explicit
+  "mapped" line, so the frame on the highlight record is the visibility evidence.)
+  Focus is therefore recorded only once the window is visible. **Keep the recorder
+  watch** — the model's own `window-opened` adoption event still lags the actual map
+  by the ready delay, so a reader must compare against the frame, not the adoption
+  event.
 - **Not ours** (ruled out from the same captures): Dash-to-Dock's own *"widget not in the
   stage"* errors; the AMD **DMCUB** GPU failure that made the session unusable (524
   `amdgpu`/`drm` errors, `Error queueing DMUB command`).
 
-## 4. Model defects to fix regardless — **planned**
+## 4. Model defects — **shipped**
 
-1. **Gap rule contradiction**: decision 43 ("gaps follow the axis") vs decisions 15/74
-   ("per orientation"); the code follows orientation, so a forced axis is unspecified.
-2. **Undocumented other-axis fallback**: the tiler already tries the other axis under
-   min-size pressure (`tiler.ts` `chosen`-axis fallback, `min-size-policy stack`) with no
-   decision covering it.
-3. **`left-half`/`right-half` rule override hardcodes a horizontal split**
-   (`applyRuleOverride`), contradicting decision 43 on portrait screens — a real bug.
-4. **"Portrait" is undefined in the rules**; the code uses `geometry.height > geometry.width`.
+All four are resolved in `docs/V2_MODEL.md` (decisions amended/added) and, for the one
+real bug, in code with tests. Kept as the record of what was wrong and how it closed.
+
+1. **Gap rule contradiction** — resolved **in favour of orientation**: decision 43's
+   trailing "gaps follow the axis" is gone and now points at decisions 15/74, which
+   already say gaps are per side and per **orientation**. No code change: `effectiveGap`
+   keys off `isPortrait`, matching decisions 15/74.
+2. **Undocumented other-axis fallback** — now **decision 94**: under
+   `min-size-policy: respect`, a pair that cannot fit the screen's axis is tried on the
+   perpendicular axis (`computePlans`'s `order.find(axis => fitsAt(...))`), and only if
+   that fails does it fall back to `stackLayout`. The decision documents the existing
+   code exactly; no behaviour change.
+3. **`left-half`/`right-half` hardcoded a horizontal split** (`applyRuleOverride`) —
+   **fixed**: the override now splits on the pair's axis and the split is axis-relative
+   (`left-half` = slot 0, i.e. **top** on a vertical axis; `right-half` = slot 1, i.e.
+   **bottom**). Covered by `tests/core/tiler.test.ts`, `describe('computePlans — rule
+   override axis (§4.3)')`: portrait `left-half`/`right-half`, an explicit
+   `workspaceAxis: 'vertical'` on a landscape screen, an explicit `horizontal` axis
+   winning on a portrait screen, and the unchanged landscape left/right halves.
+4. **"Portrait" was undefined** — **defined in §10**: a screen is portrait when
+   `geometry.height > geometry.width` (the tiler's `isPortrait`), which drives the
+   default split axis (decision 43) and the base gap override `gaps-portrait` /
+   `gaps-landscape` (decision 15). An explicit `workspaceAxis` overrides the axis but
+   not the gap orientation.
 
 ---
 

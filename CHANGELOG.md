@@ -6,6 +6,31 @@ code changes, MINOR for features, PATCH for fixes.
 
 ## [Unreleased]
 
+### Backlog §3–§4 and gap-list hardening
+
+- **Model decisions:** a `left-half`/`right-half` rule now splits along the
+  screen's own axis (top/bottom on a vertical axis; decision 43 amended, portrait
+  defined as `height > width`), gaps stay per orientation (15/74), and decision
+  94 documents the existing min-size fallback: perpendicular axis, then stack.
+- **Resize limit:** `Increase/Decrease window` (and the directional nudges) at
+  the 5–95% bound now toast “Already at the limit” instead of silently writing
+  the same ratio, logging `split_resize` and re-reconciling (A166/A10).
+- **Apps → Registry data:** Clear all asks for confirmation; Import offers
+  Replace or Merge (existing data kept, Never-tile OR-ed, new apps added);
+  newer-version files are refused with a clear message; export and merge re-read
+  the registry first so recent Shell observations survive.
+- **Tooling:** typed `DumpState` schema (`dump-schema.ts`), a bounded
+  `recentErrors` ring in the dump, and a core determinism gate
+  (`check-core-purity.sh` now rejects `Math.random`, IO and wall-clock reads
+  outside the injection seams).
+- **Bug:** a focused **modal** occluded by another window kept its focus border —
+  the occlusion pass now treats modals like tiles (`getsActiveHighlight`), with
+  the modal case added to A130.
+- **Backlog §3:** A167 (screen-change single-plan stability), A168 (bounded
+  refusal ladder, no top flip) and A169 (focus only after a real frame) verify
+  the capture-era symptoms no longer reproduce on this build; §3.3 is fixed and
+  covered.
+
 ### Rules float action, resize shortcuts and registry tools
 
 - **Rules → Action → Float**: a rule can now leave a matching window floating

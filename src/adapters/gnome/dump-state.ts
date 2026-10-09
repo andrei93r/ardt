@@ -17,6 +17,8 @@ import Gio from 'gi://Gio';
 import Meta from 'gi://Meta';
 import { overview } from 'resource:///org/gnome/shell/ui/main.js';
 
+import type { AdrtDumpState, AdrtRecentError } from '../../core/dump-schema.js';
+import { DUMP_SCHEMA_VERSION } from '../../core/dump-schema.js';
 import type { TraceEntry, TraceInitial, TraceWorkspace } from '../../core/replay.js';
 import type { SessionMachine } from '../../core/session.js';
 import type { Rect, Screen } from '../../core/types.js';
@@ -96,7 +98,6 @@ export interface DiagnosticsDeps {
   readonly sessionMachine: SessionMachine;
 
   readonly releaseVersion: string;
-  readonly extensionVersion: number;
   readonly normalizeOnEnableMs: number;
   readonly coherenceSweepMs: number;
   readonly switchWatchdogMs: number;
@@ -114,6 +115,8 @@ export interface DiagnosticsDeps {
   restarts(): number;
   selfDisables(): number;
   lastErrorAt(): number;
+  /** P6h: the last boundary errors, newest last, bounded to ten. */
+  recentErrors(): readonly AdrtRecentError[];
   buildDirMtimeMs(): number;
   animationsBaseline(): { enableAnimations: boolean | null; slowDownFactor: number | null };
   animationsMutated(): boolean;
@@ -313,7 +316,12 @@ export class Diagnostics {
     };
   }
 
-  dumpState(): string {
+  /**
+   * P6c: the typed builder for the `DumpState` JSON. Returns the raw object;
+   * `dumpState()` serialises it. The return type is `AdrtDumpState` (§40.4),
+   * which is add-only and lives in `core/` so Shell and harness share it.
+   */
+  buildDumpState(): AdrtDumpState {
     const { deps } = this;
     const monitors = deps.host.screens().map((screen) => ({ ...screen }));
     // §23: the rules the tiler would use, with the parse errors surface — the
@@ -355,9 +363,9 @@ export class Diagnostics {
         max: tracked.maxSize,
       };
     });
-    return JSON.stringify({
+    return {
       format: 'adrt.state',
-      version: deps.extensionVersion,
+      version: DUMP_SCHEMA_VERSION,
       platform: 'gnome',
       paused: deps.isPaused(),
       mode: deps.sessionMachine.state.mode,
@@ -391,6 +399,8 @@ export class Diagnostics {
       restarts: deps.restarts(),
       selfDisables: deps.selfDisables(),
       lastErrorAt: deps.lastErrorAt(),
+      // P6h (add-only): the last boundary errors, newest last, bounded to ten.
+      recentErrors: deps.recentErrors(),
       flags: {
         debug: {
           enabled: deps.settings.boolean('debug-enabled', false),
@@ -489,6 +499,11 @@ export class Diagnostics {
       },
       bounds: deps.session.memoryBounds(),
       animRecords: deps.animator.recordsSnapshot(),
-    });
+    };
+  }
+
+  /** The `DumpState` JSON string the D-Bus trigger returns. */
+  dumpState(): string {
+    return JSON.stringify(this.buildDumpState());
   }
 }

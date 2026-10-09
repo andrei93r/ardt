@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ClassifyConfig } from '../../src/core/classify.js';
-import { classify, heuristicModal, layerFor } from '../../src/core/classify.js';
+import { classify, getsActiveHighlight, heuristicModal, layerFor } from '../../src/core/classify.js';
 import { Layer, SurfaceKind } from '../../src/core/types.js';
 import { rect, size, surface } from './helpers.js';
 
@@ -122,6 +122,18 @@ describe('classify', () => {
     expect(classify(surface({ flags: { modal: true } }), config()).modal).toBe(true);
     expect(classify(surface({ flags: { attachedDialog: true } }), config()).modal).toBe(true);
     expect(classify(surface({ flags: { skipTaskbar: true } }), config()).modal).toBe(false);
+  });
+
+  it('gives the active-window highlight to a tile and to a modal only (§23)', () => {
+    // The highlight follows the active window. A tile gets it; so does a modal
+    // (a transient dialog is not tileable but is the active window), which is
+    // why its occlusion must be re-derived too. A skip/background or an
+    // always-on-top float is not an active-window subject.
+    expect(getsActiveHighlight(classify(surface(), config()))).toBe(true);
+    expect(getsActiveHighlight(classify(surface({ flags: { transient: true } }), config()))).toBe(true);
+    expect(getsActiveHighlight(classify(surface({ flags: { skipTaskbar: true } }), config()))).toBe(false);
+    expect(getsActiveHighlight(classify(surface({ flags: { above: true } }), config()))).toBe(false);
+    expect(getsActiveHighlight(classify(surface({ flags: { floating: true } }), config()))).toBe(false);
   });
 
   it('acts on a matching float rule but leaves a non-matching one alone (§23 decision 91)', () => {

@@ -29,6 +29,10 @@ assert_true "the first fault is caught" "$(adrt InjectFault drain | python3 "$PA
 sleep 1
 assert_num "the boundary counted the fault" ">" "$(state_expr 'd.get("errors", 0)')" "$errors_before"
 assert_eq "one fault is below the restart threshold" "$restarts" "$(state_expr 'd.get("restarts", 0)')"
+# P6h: the caught fault is mirrored into the bounded recent-errors ring with
+# its context and a non-empty message.
+recent_fault="$(state_expr 'str(any(e.get("context") == "fault-test:drain" and bool(e.get("message")) for e in d.get("recentErrors", []))).lower()')"
+assert_true "the caught fault appears in recentErrors (context + message)" "$recent_fault"
 assert_true "the Shell still answers after the fault" "$(adrt DumpState | python3 "$PARSE" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("format") == "adrt.state" else 1)' && echo true || echo false)"
 
 # 2. The threshold is crossed while a drag is live: the restart is deferred
@@ -84,6 +88,11 @@ if expect_restarts "$((restarts + 3))"; then
 else
   fail "the third burst did not restart (restarts=$(state_expr 'd.get("restarts", 0)'))"
 fi
+# P6h: after repeated faults the ring holds exactly the last ten — it never
+# grows past its bound. (`errors` counts every caught fault; the ring is the
+# last min(errors, 10) of them.)
+recent_bounded="$(state_expr 'str(len(d.get("recentErrors", [])) == min(d.get("errors", 0), 10)).lower()')"
+assert_true "recentErrors is bounded to the last min(errors, 10)" "$recent_bounded"
 inject_three
 # The self-disable tears the D-Bus down synchronously; detect it by the stable
 # disappearance of the name (a restart only flaps it for a moment, so a single

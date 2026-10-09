@@ -18,6 +18,7 @@ import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
 import type {
   AdwActionRow,
+  AdwAlertDialog,
   AdwComboRow,
   AdwEntryRow,
   AdwExpanderRow,
@@ -51,8 +52,8 @@ import { _, loadTranslations } from './i18n.js';
 import { RegistryStore } from './registry.js';
 import { TILE_MODES, validateRule } from '../../core/rules.js';
 import type { TileMode } from '../../core/rules.js';
-import { AppRegistry, DEFAULT_TTL_MS } from '../../core/appregistry.js';
-import type { AppRegistryData } from '../../core/appregistry.js';
+import { AppRegistry, DEFAULT_TTL_MS, REGISTRY_VERSION } from '../../core/appregistry.js';
+import type { AppEntry, AppRegistryData } from '../../core/appregistry.js';
 import type { SettingKey } from '../../core/settings-descriptor.js';
 
 /** The widget a settings row is rendered with. */
@@ -428,6 +429,26 @@ function errorMessage(error: unknown): string {
 /** Minimal shape guard for an imported registry file (`version` + `entries`). */
 function isRegistryData(value: unknown): value is AppRegistryData {
   return isRuleRecord(value) && typeof value.version === 'number' && Array.isArray(value.entries);
+}
+
+/** The result of folding an imported registry into the current one. */
+interface MergeResult {
+  data: AppRegistryData;
+  /** App ids not present locally, i.e. the entries adopted from the file. */
+  added: number;
+}
+
+/** Await an `Adw.AlertDialog`, resolving with the chosen response id. */
+function chooseDialog(dialog: AdwAlertDialog, parent: GtkWindow | null): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    dialog.choose(parent, null, (_source: AdwAlertDialog, result: GioAsyncResult) => {
+      try {
+        resolve(dialog.choose_finish(result));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
 }
 
 /** Await a `Gtk.FileDialog` save, resolving with the chosen file. */
@@ -968,10 +989,10 @@ export default class AdrtPreferences extends ExtensionPreferences {
     const clearButton: GtkButton = new Gtk.Button({ label: _('Clear all'), valign: Gtk.Align.CENTER });
     clearButton.add_css_class('flat');
     clearButton.connect('clicked', () => {
-      for (const entry of store.entries()) store.forget(entry.appId);
-      store.flush();
-      bumpRegistry();
-      rebuild();
+      void this.clearRegistry(store, window, () => {
+        bumpRegistry();
+        rebuild();
+      });
     });
     clearRow.add_suffix(clearButton);
     actions.add(clearRow);
@@ -1003,8 +1024,36 @@ export default class AdrtPreferences extends ExtensionPreferences {
     return page;
   }
 
+  /**
+   * §12: Clear all forgets every app, so confirm it first. The dialog is built
+   * on demand — constructing widgets at page-build time would run while the
+   * prefs module is built headlessly. Cancel is the default and the close
+   * response, so Escape or dismissing never clears; only `clear` does.
+   */
+  private async clearRegistry(store: RegistryStore, window: AdwPreferencesWindow, onCleared: () => void): Promise<void> {
+    const dialog: AdwAlertDialog = new Adw.AlertDialog();
+    dialog.set_heading(_('Clear the app registry?'));
+    dialog.set_body(_("Clearing forgets every app's Never-tile choice, learned placements and timing adaptation."));
+    dialog.add_response('cancel', _('Cancel'));
+    dialog.add_response('clear', _('Clear all'));
+    dialog.set_response_appearance('clear', Adw.ResponseAppearance.DESTRUCTIVE);
+    dialog.set_default_response('cancel');
+    dialog.set_close_response('cancel');
+    let response: string;
+    try {
+      response = await chooseDialog(dialog, window);
+    } catch {
+      return;
+    }
+    if (response !== 'clear') return;
+    for (const entry of store.entries()) store.forget(entry.appId);
+    store.flush();
+    onCleared();
+  }
+
   /** Save the registry to a user-chosen file; any failure lands on the row. */
   private async exportRegistry(store: RegistryStore, window: AdwPreferencesWindow, row: AdwActionRow): Promise<void> {
+    row.subtitle = '';
     const dialog: GtkFileDialog = new Gtk.FileDialog();
     dialog.set_title(_('Export the app registry'));
     dialog.set_initial_name('adrt-registry.json');
@@ -1016,6 +1065,10 @@ export default class AdrtPreferences extends ExtensionPreferences {
       return;
     }
     try {
+      // The Shell may have saved entries since this page was built; reload so
+      // the export is fresh. `load()` keeps a newer-format file untouched, so
+      // this can never downgrade what is on disk.
+      store.load();
       const bytes: Uint8Array = new TextEncoder().encode(JSON.stringify(store.toJSON(), null, 2));
       const [ok] = file.replace_contents(bytes, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
       if (!ok) throw new Error(_('Could not write the registry file.'));
@@ -1025,13 +1078,19 @@ export default class AdrtPreferences extends ExtensionPreferences {
     }
   }
 
-  /** Adopt a user-chosen registry file; any failure lands on the row. */
+  /**
+   * Adopt a user-chosen registry file; any failure lands on the row. A file
+   * from a newer schema is refused outright — it is never adopted or flushed.
+   * A valid file is imported either by replacing the registry or by merging it
+   * in, after the user chooses.
+   */
   private async importRegistry(
     store: RegistryStore,
     window: AdwPreferencesWindow,
     row: AdwActionRow,
     onImported: () => void,
   ): Promise<void> {
+    row.subtitle = '';
     const dialog: GtkFileDialog = new Gtk.FileDialog();
     dialog.set_title(_('Import an app registry'));
     let file: GioFile;
@@ -1045,14 +1104,88 @@ export default class AdrtPreferences extends ExtensionPreferences {
       if (!ok) throw new Error(_('Could not read the registry file.'));
       const parsed: unknown = JSON.parse(new TextDecoder().decode(contents));
       if (!isRegistryData(parsed)) throw new Error(_('That file is not an adrt app-registry export.'));
+      // `fromJSON` silently returns an empty registry for a newer version; name
+      // the real cause instead, and never adopt or flush the file.
+      if (parsed.version > REGISTRY_VERSION) throw new Error(_('That file was written by a newer version of adrt.'));
       const validated: AppRegistry = AppRegistry.fromJSON(parsed, { ttlMs: DEFAULT_TTL_MS });
       if (validated.size === 0 && parsed.entries.length > 0) throw new Error(_('That file has no usable app entries.'));
-      store.adopt(parsed);
-      row.subtitle = '';
+      const mode = await this.chooseImportMode(window);
+      if (mode === null) return;
+      let adopted: number;
+      if (mode === 'replace') {
+        store.adopt(parsed);
+        adopted = validated.size;
+      } else {
+        // Reload so entries the Shell saved since this page was built are not
+        // overwritten by the flush after `adopt`; `load()` keeps a
+        // newer-format file untouched, same as the export path.
+        store.load();
+        const merged = this.mergedRegistry(store.toJSON(), validated);
+        store.adopt(merged.data);
+        adopted = merged.added;
+      }
+      row.subtitle = _('Imported %d apps.').replace('%d', String(adopted));
       onImported();
     } catch (error) {
       row.subtitle = errorMessage(error);
     }
+  }
+
+  /**
+   * Ask how to import: replace the whole registry or merge into it. Built on
+   * demand, like the clear confirmation. Cancel, Escape or dismissing aborts.
+   * Merge is the default so a stray Enter cannot discard the current registry.
+   */
+  private async chooseImportMode(window: AdwPreferencesWindow): Promise<'replace' | 'merge' | null> {
+    const dialog: AdwAlertDialog = new Adw.AlertDialog();
+    dialog.set_heading(_('Import the app registry'));
+    dialog.set_body(
+      _(
+        'Existing apps keep their data; Never-tile is kept if either side has it; new apps are added. Replace discards the current registry instead.',
+      ),
+    );
+    dialog.add_response('cancel', _('Cancel'));
+    dialog.add_response('replace', _('Replace'));
+    dialog.add_response('merge', _('Merge'));
+    dialog.set_response_appearance('replace', Adw.ResponseAppearance.DESTRUCTIVE);
+    dialog.set_default_response('merge');
+    dialog.set_close_response('cancel');
+    let response: string;
+    try {
+      response = await chooseDialog(dialog, window);
+    } catch {
+      return null;
+    }
+    if (response === 'replace') return 'replace';
+    if (response === 'merge') return 'merge';
+    return null;
+  }
+
+  /**
+   * §12 merge rule: union by `appId`. An app already in the local registry
+   * keeps its entry — never silently un-float it — and only its `neverTile` is
+   * ORed with the imported one. An app that is new locally adopts the imported
+   * entry. The result is one `AppRegistryData`, handed to `adopt` so the write
+   * is a single flush.
+   */
+  private mergedRegistry(current: AppRegistryData, imported: AppRegistry): MergeResult {
+    const importedEntries = imported.entries();
+    const incoming = new Map<string, AppEntry>();
+    for (const entry of importedEntries) incoming.set(entry.appId, entry);
+    const local = new Set<string>();
+    const entries: AppEntry[] = [];
+    for (const entry of current.entries) {
+      local.add(entry.appId);
+      const source = incoming.get(entry.appId);
+      entries.push(source === undefined ? entry : { ...entry, neverTile: entry.neverTile || source.neverTile });
+    }
+    let added = 0;
+    for (const entry of importedEntries) {
+      if (local.has(entry.appId)) continue;
+      entries.push(entry);
+      added += 1;
+    }
+    return { data: { version: REGISTRY_VERSION, entries }, added };
   }
 
   private aboutPage(settings: GioSettings): AdwPreferencesPage {

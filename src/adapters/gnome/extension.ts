@@ -19,6 +19,8 @@ import { notify, overview, wm } from 'resource:///org/gnome/shell/ui/main.js';
 
 import { BorderState } from '../../core/border.js';
 import type { SuppressionReason } from '../../core/border.js';
+import { getsActiveHighlight } from '../../core/classify.js';
+import type { AdrtRecentError } from '../../core/dump-schema.js';
 import { SessionMachine } from '../../core/session.js';
 import { ChangeLog } from '../../core/undo.js';
 import { NoticeGate, isAlwaysNotice, noticeTitle } from '../../core/notify.js';
@@ -65,6 +67,8 @@ import { Tiling } from './tiling.js';
 const RELEASE_VERSION = '0.2.0';
 /** The settings/state format version (the migration gate). */
 const EXTENSION_VERSION = 1;
+/** P6h: how many boundary errors the recent-errors ring keeps. */
+const RECENT_ERROR_LIMIT = 10;
 /** §23.2: how many compositor frames between focused-actor position samples.
  * The wall-clock interval is derived from the screen's refresh rate (or the
  * measured interval under adaptive sync), never a fixed 50 ms. */
@@ -173,6 +177,12 @@ export default class AdrtExtension extends Extension {
   /** §Self-heal: the caught-error restart policy (created on first `enable`). */
   private recovery: Recovery | undefined;
   private lastErrorAt = 0;
+  /**
+   * P6h: the last boundary errors, newest last, bounded to `RECENT_ERROR_LIMIT`
+   * so a bug report carries its own evidence without unbounded growth. It
+   * survives an in-place restart (the same extension instance re-enables).
+   */
+  private readonly recentErrors: AdrtRecentError[] = [];
   /** Owns every compositor/shell signal connection, per teardown group (§36). */
   private signals!: SignalRegistry;
   /** Owns every GLib timer, per teardown name (§36). */
@@ -406,7 +416,6 @@ export default class AdrtExtension extends Extension {
       journal: this.journal,
       sessionMachine: this.sessionMachine,
       releaseVersion: RELEASE_VERSION,
-      extensionVersion: EXTENSION_VERSION,
       normalizeOnEnableMs: NORMALIZE_ON_ENABLE_MS,
       coherenceSweepMs: COHERENCE_SWEEP_MS,
       switchWatchdogMs: SWITCH_WATCHDOG_MS,
@@ -423,6 +432,7 @@ export default class AdrtExtension extends Extension {
       restarts: () => this.recovery?.restartCount ?? 0,
       selfDisables: () => this.recovery?.selfDisableCount ?? 0,
       lastErrorAt: () => this.lastErrorAt,
+      recentErrors: () => this.recentErrors,
       buildDirMtimeMs: () => this.buildDirMtimeMs,
       animationsBaseline: () => this.animationsBaseline,
       animationsMutated: () => this.animationsMutated,
@@ -723,6 +733,11 @@ export default class AdrtExtension extends Extension {
     const message = error instanceof Error ? error.message : String(error);
     this.errorCount += 1;
     this.lastErrorAt = Date.now();
+    // P6h: mirror the fault into the bounded recent-errors ring (newest last),
+    // so `DumpState.recentErrors` carries the context and message of the last
+    // ten boundary errors.
+    this.recentErrors.push({ at: this.lastErrorAt, context, message });
+    if (this.recentErrors.length > RECENT_ERROR_LIMIT) this.recentErrors.shift();
     console.error(`${marker} ${context}: ${message}`);
     try {
       this.journal?.record('error', 'guarded', { context, error: message });
@@ -1099,8 +1114,15 @@ export default class AdrtExtension extends Extension {
   private refreshOcclusion(): void {
     const focused = this.session.focused();
     let occluded = false;
-    if (focused !== null && this.session.classify(focused).tileable && !focused.surface.flags.floating) {
-      occluded = this.isOccluded(focused);
+    if (focused !== null && !focused.surface.flags.floating) {
+      // The highlight is shown for a tiled window and also for a focused modal
+      // (a transient dialog is not tileable, but it is the active window, so it
+      // gets the §23 border). Both must be suppressed when a window is stacked
+      // over their centre: the old `tileable`-only test let an occluded modal
+      // keep a border drawn over the very window that covered it. The float
+      // exemption is unchanged from before.
+      const classification = this.session.classify(focused);
+      if (getsActiveHighlight(classification)) occluded = this.isOccluded(focused);
     }
     if (occluded === this.occluded) return;
     this.occluded = occluded;

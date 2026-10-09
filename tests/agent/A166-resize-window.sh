@@ -55,6 +55,41 @@ if not (0.45 < r < 0.55):
 print("ratio", round(r, 3))
 '
 
+# Past the 5–95% limit the keystroke changes nothing and must say so, not
+# silently rewrite the same ratio, re-log split_resize and re-reconcile.
+adrt ResizeFocused increase 50 >/dev/null
+wait_settled 12
+limited="$(adrt ResizeFocused increase 50 | python3 "$PARSE")"
+assert_eq "ResizeFocused at the 95% limit reports no change" "false" "$limited"
+wait_settled 8
+check_python "ResizeFocused never exceeds the 95% limit" '
+import json, sys
+ratios = list(json.load(sys.stdin)["ratios"].values())
+if not ratios:
+    print("no ratio saved"); sys.exit(1)
+r = max(ratios)
+if r > 0.9501:
+    print("ratio exceeded the limit:", r); sys.exit(1)
+if r < 0.94:
+    print("ratio did not reach the limit:", r); sys.exit(1)
+print("ratio", round(r, 3))
+'
+
+# The at-the-limit refusal is the new resize-limit notice, not nothing-to-nudge
+# (a pair exists; its edge simply cannot move further).
+decisions_has() {
+  local key="$1"
+  adrt DumpDecisions 400 2>/dev/null | python3 "$PARSE" 2>/dev/null | python3 -c "
+import json, sys
+entries = json.load(sys.stdin)
+sys.exit(0 if any(e.get('event') == 'notice' and e.get('key') == '$key' for e in entries) else 1)" 2>/dev/null
+}
+if wait_for 8 decisions_has resize-limit; then
+  pass "a resize already at the limit is announced"
+else
+  fail "no resize-limit notice was raised"
+fi
+
 # No pair: a lone window has no shared edge, so the trigger reports no change.
 ensure_clean
 spawn_window >/dev/null

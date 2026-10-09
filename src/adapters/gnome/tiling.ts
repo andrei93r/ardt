@@ -432,9 +432,13 @@ export class Tiling {
   }
 
   private setRatioForPair(first: TrackedWindow, _second: TrackedWindow, axis: SplitAxis, connector: string, ratio: number): boolean {
-    this.rememberRatiosBeforeChange();
     const key = ratioKey(connector, first.surface.workspaceId, axis);
     const clamped = clamp(ratio, 0.05, 0.95);
+    // §17: a request that lands on the ratio already stored is a no-op, not a
+    // silent rewrite. Returning false here lets the caller say why (already at
+    // the limit) and keeps the change out of undo, persistence and the journal.
+    if (clamped === this.getRatio(key)) return false;
+    this.rememberRatiosBeforeChange();
     this.ratios.set(key, clamped);
     this.deps.onRatiosChanged();
     this.deps.history.log('split_resize', { axis, ratio: clamped, pair: key });
