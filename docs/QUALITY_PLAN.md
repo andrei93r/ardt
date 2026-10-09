@@ -34,6 +34,15 @@
 | P4 | Decomposition & deletion | **done** — session split and extension extraction (`session.ts` 4,083 → 1,891; `extension.ts` 3,102 → 1,827), trigger table, JSONL unification, helper dedupe, settings descriptor with drift gate, dead files/exports cleared under knip. Kept deliberately: test-only core exports, `topology.ts` |
 | P5 | Guardrails (CI/tests/docs) | **done** — check:types, coverage guard, shellcheck, knip, ARCHITECTURE.md, docs hygiene; the generated fuzz cases are prose expectations (the generator documents them as a design catalogue); a new nested A165 verifies the section profiler |
 
+**Targeted regression runs (2026-10-08, after the full suites).** The suite
+skips that were hardware/configuration gates, not retirements, were re-run as
+scoped regressions: A106–A111, A122, A124, A143, A145, A157, A162 with two
+virtual monitors; A105 with landscape+portrait; A81 with four monitors; A125 as
+a 120 s churn run (`ADRT_LONG_RUN=1`). All pass, no `[adrt] ERROR`. The only
+remaining skips are deliberate retirements (A40/A44/A50/A53/A59/A137 and
+S11/S12/S14), physical/manual checks (S15/S17/S27), and live keybinding input
+(S08 needs `ydotoold`, i.e. root or the `input` group).
+
 ---
 
 ## 1. Ground truth (measured 2026-10-08, `master`)
