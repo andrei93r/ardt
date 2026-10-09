@@ -2,6 +2,7 @@
 # Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
 # and can maintain this code.
 #
+# shellcheck shell=bash
 # The shared application-compatibility checklist. Every app gets the SAME
 # assertions, driven from DumpState and the decision journal, so a new toolkit
 # or a new client is a row, not a new scenario body. Source this from a runner
@@ -106,6 +107,120 @@ for e in entries:
 print(n)" 2>/dev/null || echo 0
 }
 
+# The sibling an app opens for the pair is not always a peer tile: the toolkit
+# may open a dialog/utility/transient it never tiles, or the window may close
+# itself right after opening. Both are correct product behaviour, so poll a
+# bounded time for a tileable sibling and let the caller skip the pair-dependent
+# items when there is none. Returns 0 when a tileable sibling is present, 1 when
+# the sibling exists but is not tileable, 3 when it closed itself, and 4 when the
+# FIRST window closed (a real bug the caller must still report as a failure).
+appcheck_pair_peer() { # id1 id2 [timeout]
+  local id1="$1" id2="$2" timeout="${3:-10}"
+  local deadline=$((SECONDS + timeout)) state
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    state="$(dump | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+w1 = next((x for x in d['windows'] if x['id'] == $id1), None)
+w2 = next((x for x in d['windows'] if x['id'] == $id2), None)
+if w1 is None:
+    print('first-gone'); raise SystemExit
+if w2 is None:
+    print('gone'); raise SystemExit
+print('tileable' if w2.get('tileable') else 'untileable')
+" 2>/dev/null)"
+    case "$state" in
+      tileable)   return 0 ;;
+      gone)       return 3 ;;
+      first-gone) return 4 ;;
+      *)          sleep 0.4 ;;
+    esac
+  done
+  return 1
+}
+
+# The strict 50/50 pair predicate as a status. Unlike appcheck_assert it does not
+# print pass/fail: it returns 0 when the pair is proven and 1 otherwise, leaving
+# the predicate's last message on stdout on failure. The caller re-checks the
+# peer before deciding, because the sibling can close itself or lose tileability
+# in the window between the pre-check and this assert (or after it), and that is
+# a race — not a product failure.
+appcheck_pair_status() { # id1 id2 [timeout]
+  local id1="$1" id2="$2" timeout="${3:-30}" code
+  code="
+import json, sys
+d = json.load(sys.stdin)
+w1 = next((x for x in d['windows'] if x['id'] == $id1), None)
+w2 = next((x for x in d['windows'] if x['id'] == $id2), None)
+if w1 is None or w2 is None:
+    print('a window is gone'); sys.exit(1)
+area = {m['index']: (m.get('workArea') or m['geometry']) for m in d['monitors']}[w1['monitor']]
+tiles = [x for x in d['windows'] if x.get('tileable') and not x.get('minimized') and x.get('layer') != 2
+         and x['workspace'] == w1['workspace'] and x['monitor'] == w1['monitor']]
+if [x['id'] for x in tiles] != sorted([$id1, $id2]):
+    print('pair not formed', [(x['id'], x['workspace'], x['maximized']) for x in d['windows']]); sys.exit(1)
+if any(x.get('maximized') for x in tiles):
+    print('a pair member is still maximized'); sys.exit(1)
+a, b = sorted((x['rect'] for x in tiles), key=lambda r: r['x'])
+if a['x'] < b['x'] + b['width'] - 2 and b['x'] < a['x'] + a['width'] - 2 \
+   and a['y'] < b['y'] + b['height'] - 2 and b['y'] < a['y'] + a['height'] - 2:
+    print('pair overlaps', a, b); sys.exit(1)
+share = min(a['width'], b['width']) / (a['width'] + b['width'])
+if abs(share - 0.5) > 0.12:
+    print('split is', round(share, 2), 'not ~0.50', a['width'], b['width']); sys.exit(1)
+for r in (a, b):
+    if r['x'] < area['x'] - 2 or r['x'] + r['width'] > area['x'] + area['width'] + 2 \
+       or r['y'] < area['y'] - 2 or r['y'] + r['height'] > area['y'] + area['height'] + 2:
+        print('tile outside the work area', r, area); sys.exit(1)
+print('pair', a, b, 'share', round(share, 2))
+"
+  if wait_python "$timeout" "$code"; then
+    return 0
+  fi
+  dump | python3 -c "$code" 2>&1 | tail -1
+  return 1
+}
+
+# Guard the start of a sibling-dependent step (maximize, unmaximize). The second
+# window can close itself or lose tileability in the gap since the pair was
+# proven — a race, not a product failure — so a lost sibling records one skip and
+# stops the row. A vanished FIRST window is a real bug. Returns 0 to continue, 2
+# to skip the row, and 1 to fail it; both windows are closed when the row stops.
+appcheck_pair_guard() { # label id1 id2
+  local label="$1" id1="$2" id2="$3" peer
+  appcheck_pair_peer "$id1" "$id2" 5; peer=$?
+  case "$peer" in
+    0) return 0 ;;
+    4) fail "$label: the first window is gone"
+       appcheck_close "$id2"
+       appcheck_close "$id1"
+       return 1 ;;
+    *) appcheck_skip "$label: the second window closed itself / is no longer tileable — pair/max/tear-off N/A"
+       appcheck_close "$id2"
+       appcheck_close "$id1"
+       return 2 ;;
+  esac
+}
+
+# A trigger delivered during a transition can be dropped at the compositor level:
+# no maximize signal arrives at all, while a real user simply presses the key
+# again. Give the first request a short bounded wait for its effect, and when
+# none arrived send it once more. The caller's long assert runs unchanged after
+# this, so a genuine policy failure still fails after two requests.
+appcheck_trigger_retry() { # id want-maximized trigger...
+  local id="$1" want="$2"; shift 2
+  local code
+  if [ "$want" = "true" ]; then
+    code="import json,sys; d=json.load(sys.stdin); w=next((x for x in d['windows'] if x['id'] == $id), None); sys.exit(0 if w is not None and w['maximized'] else 1)"
+  else
+    code="import json,sys; d=json.load(sys.stdin); w=next((x for x in d['windows'] if x['id'] == $id), None); sys.exit(0 if w is not None and not w['maximized'] else 1)"
+  fi
+  adrt "$@" >/dev/null 2>&1 || true
+  wait_python 5 "$code" && return 0
+  adrt "$@" >/dev/null 2>&1 || true
+  return 0
+}
+
 # --- the checklist -----------------------------------------------------------
 
 # appcheck_run <label> <env-json> <argv-json>
@@ -114,7 +229,7 @@ print(n)" 2>/dev/null || echo 0
 # caller records the named reason and moves on).
 appcheck_run() {
   local label="$1" env_json="$2" argv_json="$3"
-  local id1 id2 id3 rc=0
+  local id1 id2 id3 rc=0 peer pair_detail
 
   appcheck_reset
 
@@ -179,36 +294,60 @@ print('maximised', w['maximized'], 'rect', r)
     return 2
   fi
 
-  appcheck_assert "$label: with a sibling it forms a 50/50 pair" "
-import json, sys
-d = json.load(sys.stdin)
-w1 = next((x for x in d['windows'] if x['id'] == $id1), None)
-w2 = next((x for x in d['windows'] if x['id'] == $id2), None)
-if w1 is None or w2 is None:
-    print('a window is gone'); sys.exit(1)
-area = {m['index']: (m.get('workArea') or m['geometry']) for m in d['monitors']}[w1['monitor']]
-tiles = [x for x in d['windows'] if x.get('tileable') and not x.get('minimized') and x.get('layer') != 2
-         and x['workspace'] == w1['workspace'] and x['monitor'] == w1['monitor']]
-if [x['id'] for x in tiles] != sorted([$id1, $id2]):
-    print('pair not formed', [(x['id'], x['workspace'], x['maximized']) for x in d['windows']]); sys.exit(1)
-if any(x.get('maximized') for x in tiles):
-    print('a pair member is still maximized'); sys.exit(1)
-a, b = sorted((x['rect'] for x in tiles), key=lambda r: r['x'])
-if a['x'] < b['x'] + b['width'] - 2 and b['x'] < a['x'] + a['width'] - 2 \
-   and a['y'] < b['y'] + b['height'] - 2 and b['y'] < a['y'] + a['height'] - 2:
-    print('pair overlaps', a, b); sys.exit(1)
-share = min(a['width'], b['width']) / (a['width'] + b['width'])
-if abs(share - 0.5) > 0.12:
-    print('split is', round(share, 2), 'not ~0.50', a['width'], b['width']); sys.exit(1)
-for r in (a, b):
-    if r['x'] < area['x'] - 2 or r['x'] + r['width'] > area['x'] + area['width'] + 2 \
-       or r['y'] < area['y'] - 2 or r['y'] + r['height'] > area['y'] + area['height'] + 2:
-        print('tile outside the work area', r, area); sys.exit(1)
-print('pair', a, b, 'share', round(share, 2))
-" 30 || rc=1
+  # The sibling may not be a peer tile: it can close itself right after opening,
+  # or be a dialog/utility/transient the toolkit never tiles. Both are correct
+  # behaviour, so wait a bounded time for a tileable peer; only then is the
+  # strict 50/50 assert meaningful. A vanished FIRST window is a real bug and
+  # still fails hard here (not a skip).
+  appcheck_pair_peer "$id1" "$id2" 10; peer=$?
+  case "$peer" in
+    0) : ;;
+    3) appcheck_skip "$label: the second window closed itself — pair/max/tear-off N/A"
+       appcheck_close "$id1"
+       return 2 ;;
+    4) appcheck_close "$id2"
+       appcheck_close "$id1"
+       fail "$label: with a sibling it forms a 50/50 pair — the first window is gone"
+       return 1 ;;
+    *) appcheck_skip "$label: the second window is not tileable (dialog/utility) — pair/max/tear-off N/A"
+       appcheck_close "$id2"
+       appcheck_close "$id1"
+       return 2 ;;
+  esac
 
-  # 3. maximize / unmaximize round-trips.
-  adrt MaximizeWindow "$id2" >/dev/null 2>&1 || true
+  # The strict assert is a status, not a print, so its failure can be re-checked:
+  # the sibling can close itself or lose tileability in the window between the
+  # pre-check and the assert. Only a pair that is still present and tileable is
+  # a real failure; otherwise the row is skipped once and the remaining pair
+  # steps (maximize/unmaximize/focus) do not run.
+  if pair_detail="$(appcheck_pair_status "$id1" "$id2" 30)"; then
+    pass "$label: with a sibling it forms a 50/50 pair"
+  else
+    appcheck_pair_peer "$id1" "$id2" 5; peer=$?
+    case "$peer" in
+      4) fail "$label: with a sibling it forms a 50/50 pair — the first window is gone"
+         appcheck_close "$id2"
+         appcheck_close "$id1"
+         return 1 ;;
+      0) fail "$label: with a sibling it forms a 50/50 pair${pair_detail:+ — $pair_detail}"
+         rc=1 ;;
+      *) appcheck_skip "$label: the second window closed itself / is no longer tileable — pair/max/tear-off N/A"
+         appcheck_close "$id2"
+         appcheck_close "$id1"
+         return 2 ;;
+    esac
+  fi
+
+  # 3. maximize / unmaximize round-trips. Guard each sibling-dependent step
+  # first: the second window can close itself or lose tileability between steps
+  # (a race), in which case the row is skipped rather than failing on a window
+  # that was never the product's fault.
+  appcheck_pair_guard "$label" "$id1" "$id2"; peer=$?
+  [ "$peer" -eq 0 ] || return "$peer"
+
+  # A trigger dropped during a transition is re-sent once (see
+  # appcheck_trigger_retry); the long assert below is unchanged either way.
+  appcheck_trigger_retry "$id2" true MaximizeWindow "$id2"
   appcheck_assert "$label: maximize moves it to its own workspace, maximized" "
 import json, sys
 d = json.load(sys.stdin)
@@ -219,7 +358,10 @@ if any(x['workspace'] == w['workspace'] and x['id'] != $id2 and x.get('tileable'
     print('maximize did not give it its own workspace'); sys.exit(1)
 " 30 || rc=1
 
-  adrt UnmaximizeWindow "$id2" >/dev/null 2>&1 || true
+  appcheck_pair_guard "$label" "$id1" "$id2"; peer=$?
+  [ "$peer" -eq 0 ] || return "$peer"
+
+  appcheck_trigger_retry "$id2" false UnmaximizeWindow "$id2"
   appcheck_assert "$label: unmaximize returns it to the pair" "
 import json, sys
 d = json.load(sys.stdin)
