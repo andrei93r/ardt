@@ -45,9 +45,24 @@ fi
 switch_to="$((START_WS + 1))"
 [ "$switch_to" -ge "$(state_expr 'd["workspaces"]')" ] && switch_to="$((START_WS - 1))"
 [ "$switch_to" -lt 0 ] && switch_to=0
+# A fast API switch can set and clear the suppression between DumpState samples,
+# so accept either the live state or the border-suppress record the drain wrote
+# to the journal (source=border, reason=workspace-switch, at >= the trigger).
+trigger_ms="$(date +%s%3N)"
 adrt ActivateWorkspace "$switch_to" >/dev/null 2>&1 || true
 if wait_python 8 'import json,sys
-sys.exit(0 if "workspace-switch" in json.load(sys.stdin)["indicator"]["suppressed"] else 1)'; then
+sys.exit(0 if "workspace-switch" in json.load(sys.stdin)["indicator"]["suppressed"] else 1)' \
+   || adrt DumpEvents 600 '' 2>/dev/null | python3 "$PARSE" 2>/dev/null | TRIGGER_MS="$trigger_ms" python3 -c '
+import os, json, sys
+entries = json.load(sys.stdin)
+t = int(os.environ["TRIGGER_MS"])
+ok = any(
+    e.get("source") == "border" and e.get("event") == "suppress"
+    and e.get("reason") == "workspace-switch" and e.get("at", 0) >= t
+    for e in entries
+)
+sys.exit(0 if ok else 1)
+'; then
   pass "border suppressed during a workspace switch"
 else
   fail "border not suppressed during a workspace switch"
