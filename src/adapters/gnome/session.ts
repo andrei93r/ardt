@@ -1158,7 +1158,12 @@ export class WindowSession {
     const current = this.focused();
     if (current === null) return;
     const peers = this.tileablesOnScreen(current.surface.workspaceId, current.surface.screenId);
-    if (peers.length === 2) {
+    // The swap branch belongs to a window that is itself one of the two tiles.
+    // A float (or a third window) on a screen that already holds a pair must
+    // move to the adjacent monitor instead of toggling a swap with a window it
+    // is not paired with.
+    const paired = peers.length === 2 && peers.some((t) => t.id === current.id);
+    if (paired) {
       const sibling = peers.find((t) => t.id !== current.id);
       if (sibling === undefined) return;
       const horizontal = direction === 'left' || direction === 'right';
