@@ -45,6 +45,19 @@ ignores a close). If every workspace holds a window, the scenarios exit with a
 message asking you to free one. Results are written to
 `TEST_RESULTS_SESSION.md`.
 
+If a **flatpak** app fails to open with `bwrap: Can't find source path
+/run/user/<uid>/doc/by-app/<app-id>`, the desktop portal's document FUSE mount
+is stale (an ordinary empty directory sits where the mount should be). Repair
+it without root and re-run:
+
+```bash
+rmdir /run/user/$(id -u)/doc
+systemctl --user restart xdg-desktop-portal
+```
+
+`ls -la /run/user/$(id -u)/doc` should then show a `fuse.portal` mount with a
+`by-app` directory.
+
 ### Keybindings need the interactive session
 
 A22–A24 inject real key events with `ydotool`. A nested **headless** Shell does
