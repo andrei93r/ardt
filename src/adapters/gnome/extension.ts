@@ -12,6 +12,7 @@ import Gio from 'gi://Gio';
 import type { Variant } from 'gi://Gio';
 import Clutter from 'gi://Clutter';
 import Meta from 'gi://Meta';
+import type { MetaWindow } from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -214,6 +215,14 @@ export default class AdrtExtension extends Extension {
   /** Set only if adrt ever writes GNOME's animation state (never today). */
   private animationsMutated = false;
   private occluded = false;
+  /**
+   * Mapped popup-family windows, keyed by their own id and valued by the
+   * window they belong to. App menus, popovers and tooltips are window actors
+   * below the chrome layer the highlight is drawn in, so a highlight would
+   * otherwise be painted straight over an open menu (§23).
+   */
+  private readonly popups = new Map<number, number>();
+  private popupSuppressed = false;
   /** Last `(visible,id,rect)` the border was drawn at, so `border focus` logs only on change (§22). */
   private lastBorderDraw = '';
   /** Last drop-assist overlay, so `preview_show`/`preview_hide` log only on change (§22). */
@@ -615,6 +624,10 @@ export default class AdrtExtension extends Extension {
       for (const unsubscribe of this.hostUnsubscribers) unsubscribe();
       this.hostUnsubscribers = [];
     });
+    this.teardown('popups', () => {
+      this.popups.clear();
+      this.popupSuppressed = false;
+    });
     this.teardown('dbus', () => {
       if (this.dbus !== undefined) this.dbus.unexpose();
     });
@@ -797,8 +810,11 @@ export default class AdrtExtension extends Extension {
     this.hostUnsubscribers.push(
       this.host.on('surface-created', (payload) => this.guard('host:surface-created', () => {
         const win = this.host.windowFor(payload.surface.id);
-        if (win !== null) this.session.register(win);
+        if (win === null) return;
+        this.trackPopup(payload.surface.id, payload.surface.parentId, win);
+        this.session.register(win);
       })()),
+      this.host.on('surface-closed', (payload) => this.guard('host:surface-closed', () => this.forgetPopup(payload.id))()),
       this.host.on('focus-changed', (payload) => this.guard('host:focus-changed', () => this.onFocusChanged(payload.id))()),
       this.host.on('workspace-switched', (payload) => this.guard('host:workspace-switched', () => this.onWorkspaceSwitched(payload))()),
       this.host.on('screens-changed', () => this.guard('host:screens-changed', () => {
@@ -825,6 +841,7 @@ export default class AdrtExtension extends Extension {
   private onFocusChanged(id: number | null): void {
     if (id === null) {
       this.border.clearFocus();
+      this.refreshPopupSuppression();
       this.stopMotionWatch();
       this.syncIndicator();
       return;
@@ -832,11 +849,13 @@ export default class AdrtExtension extends Extension {
     const tracked = this.session.windows.get(id);
     if (tracked === undefined || !this.session.classify(tracked).tileable) {
       this.border.clearFocus();
+      this.refreshPopupSuppression();
       this.stopMotionWatch();
       this.syncIndicator();
       return;
     }
     this.border.setFocus(id, tracked.surface.frame);
+    this.refreshPopupSuppression();
     this.startMotionWatch();
     this.syncIndicator();
   }
@@ -1102,6 +1121,58 @@ export default class AdrtExtension extends Extension {
     this.refreshOcclusion();
     this.refreshFullscreen();
     return GLib.SOURCE_CONTINUE;
+  }
+
+  /**
+   * §23: app popups (menus, popovers, tooltips) are window actors stacked below
+   * the chrome layer the highlight lives in, so an open menu would be painted
+   * through by the highlight. Only popups with a transient parent can be
+   * attributed to a window; Shell-owned menus have no parent and are already
+   * created above the highlight.
+   */
+  private trackPopup(id: number, parentId: number | null, win: MetaWindow): void {
+    if (parentId === null || !compat.isPopupWindow(win)) return;
+    this.popups.set(id, parentId);
+    this.refreshPopupSuppression();
+    this.syncIndicator();
+  }
+
+  private forgetPopup(id: number): void {
+    let changed = this.popups.delete(id);
+    // The parent can be unmapped before its popup is; drop orphaned popups so
+    // a stale suppression can never outlive the window it belonged to.
+    for (const [popupId, parentId] of this.popups) {
+      if (parentId === id) {
+        this.popups.delete(popupId);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    this.refreshPopupSuppression();
+    this.syncIndicator();
+  }
+
+  /**
+   * §23: hide the highlight while a popup of the focused window is mapped. A
+   * menu belongs to its window but is drawn below the chrome layer, so the
+   * highlight would otherwise sit on top of it. The border returns when the
+   * last popup closes.
+   */
+  private refreshPopupSuppression(): void {
+    const focused = this.session.focused();
+    let open = false;
+    if (focused !== null) {
+      for (const parentId of this.popups.values()) {
+        if (parentId === focused.id) {
+          open = true;
+          break;
+        }
+      }
+    }
+    if (open === this.popupSuppressed) return;
+    this.popupSuppressed = open;
+    if (open) this.suppressBorder('popup');
+    else this.unsuppressBorder('popup');
   }
 
   /**

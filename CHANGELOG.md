@@ -26,6 +26,11 @@ code changes, MINOR for features, PATCH for fixes.
 - **Bug:** a focused **modal** occluded by another window kept its focus border —
   the occlusion pass now treats modals like tiles (`getsActiveHighlight`), with
   the modal case added to A130.
+- **Bug:** the active-window highlight was drawn **over app menus, popovers and
+  tooltips**. They are window actors below the chrome layer, so the border
+  painted through an open menu. The highlight now hides while a popup belonging
+  to the focused window is mapped (`popup` suppression) and returns when the
+  last one closes; A170 covers both transitions.
 - **Backlog §3:** A167 (screen-change single-plan stability), A168 (bounded
   refusal ladder, no top flip) and A169 (focus only after a real frame) verify
   the capture-era symptoms no longer reproduce on this build; §3.3 is fixed and

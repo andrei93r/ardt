@@ -77,7 +77,7 @@ session-modes | A13-lock-screen A27-session-unlock A28-screen-sharing A123-sessi
 pause-during-sharing | A123-session-modes A140-prefs-options
 
 # --------------------------------------------------------------- highlight
-highlight | A36-close-ghost A37-overview-border A38-indicator-style A47-border-hides-during-workspace-switch A128-switch-suppression-clears A130-occlusion-hides-highlight A131-fullscreen-hides-highlight A135-highlight-below-notifications
+highlight | A36-close-ghost A37-overview-border A38-indicator-style A47-border-hides-during-workspace-switch A128-switch-suppression-clears A130-occlusion-hides-highlight A131-fullscreen-hides-highlight A135-highlight-below-notifications A170-popup-hides-highlight
 
 # --------------------------------------------------- cursor / clamp / timing
 cursor-centre | A132-cursor-centre A133-cursor-follows-focus

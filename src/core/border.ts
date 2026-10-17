@@ -5,7 +5,15 @@
 import type { Rect } from './types.js';
 
 /** Reasons the border is suppressed (§23.1). */
-export type SuppressionReason = 'workspace-switch' | 'drag' | 'fullscreen' | 'pause' | 'sharing' | 'overview' | 'occluded';
+export type SuppressionReason =
+  | 'workspace-switch'
+  | 'drag'
+  | 'fullscreen'
+  | 'pause'
+  | 'sharing'
+  | 'overview'
+  | 'occluded'
+  | 'popup';
 
 export interface BorderSnapshot {
   visible: boolean;

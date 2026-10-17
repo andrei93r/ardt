@@ -394,13 +394,16 @@ geometry infers, but never the gap orientation.
   (stuck on a workspace that is gone, drawn at a stale rect, flicker, a suppression
   that never lifts): every highlight change is journalled with its **reason** — focus
   changed, suppression added or removed (`drag`, `switch`, `fullscreen`, `pause`, `sharing`,
-  `overview`, `occluded`), rect update, close ghost, animation tick — together with its
+  `overview`, `occluded`, `popup`), rect update, close ghost, animation tick — together with its
   rect and the active suppression set, under `debug.indicator`. `DumpState` reports the
   same values, so "why is the border there / not there" is answerable from one
   snapshot. The highlight is also **stacked below Shell chrome** (the notification
   tray), because `addChrome` inserts each new actor above the previous one and a
   highlight added after the tray would otherwise be painted through a notification
-  banner.
+  banner. **App popups are a different layer**: menus, popovers and tooltips are
+  window actors below that chrome, so a highlight would be painted through an
+  open menu; the `popup` suppression hides it while one belonging to the focused
+  window is mapped.
 
 ## 12. App registry (profiles, exceptions and adaptation in one entry)
 
