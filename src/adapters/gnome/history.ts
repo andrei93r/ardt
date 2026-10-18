@@ -182,7 +182,8 @@ export class History {
   }
 
   prune(now: Date = new Date()): number {
-    if (!this.enabled) return 0;
+    // Retention is applied even while logging is disabled: old files must not
+    // outlive the window just because the user stopped writing new ones.
     const cutoffDay = retentionCutoffDay(
       now,
       this.retentionDays > 0 ? this.retentionDays : LOG_RETENTION_DAYS,
