@@ -12,8 +12,8 @@ import Gio from 'gi://Gio';
 
 import { JsonlBuffer, dayString, encodeText, jsonLine } from '../../core/jsonl.js';
 import { clipPayload } from '../../core/text.js';
-import { partPath, partsToPrune, shouldRotate } from '../../core/rotation.js';
-import { dataDir, readText, writeAtomic } from './adapt.js';
+import { LOG_RETENTION_DAYS, partPath, retentionCutoffDay, shouldRotate } from '../../core/rotation.js';
+import { dataDir, readLines } from './adapt.js';
 
 /** Rotated parts kept per day before the oldest is deleted. */
 const MAX_HISTORY_PARTS = 5;
@@ -52,6 +52,9 @@ export class History {
   private retentionDays: number;
   private dailyFolders: boolean;
   private tailMonitor: FileMonitorLike | null = null;
+  /** Byte offset of the last complete line the tail emitted. */
+  private tailOffset = 0;
+  private tailPath = '';
 
   /** Size at which the live part rotates (bytes). */
   private maxBytes = DEFAULT_MAX_BYTES;
@@ -113,69 +116,89 @@ export class History {
     let info: FileInfoLike | null;
     while ((info = enumerator.next_file(null)) !== null) {
       const name: string = info.get_name();
-      if (name.endsWith('.jsonl')) days.push(name.slice(0, -'.jsonl'.length));
+      // Only day files, never their rotated parts (`day.2.jsonl`).
+      if (/^\d{4}-\d{2}-\d{2}\.jsonl$/.test(name)) days.push(name.slice(0, 10));
     }
     days.sort();
     return days;
   }
 
+  /**
+   * Every event mentioning `windowId` in the newest `maxDays` day files.
+   * Streams each file line by line: a lookup never materializes an 8 MB log
+   * (let alone a whole day directory) as one string and one split array.
+   */
   lookup(windowId: number, maxDays = 7): HistoryEvent[] {
-    const all = this.days().slice(-maxDays);
+    const all = this.days().slice(-Math.max(1, Math.trunc(maxDays)));
     const results: HistoryEvent[] = [];
     for (let i = all.length - 1; i >= 0; i--) {
-      const text = readText(this.pathFor(all[i]));
-      if (text === null) continue;
-      for (const line of text.split('\n')) {
-        if (line.length === 0) continue;
+      readLines(this.pathFor(all[i]), (line) => {
+        if (line.length === 0) return;
         let event: HistoryEvent;
         try {
           event = JSON.parse(line) as HistoryEvent;
         } catch {
-          continue;
+          return;
         }
         if (event.id === windowId || event.surfaceId === windowId) results.push(event);
-      }
+      });
     }
     return results;
   }
 
-  /** Watch today's file and emit appended events (§21). */
+  /**
+   * Watch today's file and emit appended events (§21). The monitor only says
+   * "something changed"; `readLines` streams from the last emitted byte, so an
+   * append costs one line of parsing and a partial write is retried intact.
+   */
   tail(cb: (event: HistoryEvent) => void): () => void {
     const file = Gio.File.new_for_path(this.pathFor(dayString(new Date())));
     if (!file.query_exists(null)) file.create(Gio.FileCreateFlags.NONE, null);
     const monitor: FileMonitorLike = file.monitor_file(Gio.FileMonitorFlags.NONE, null);
     this.tailMonitor = monitor;
+    this.tailPath = file.get_path();
+    // Start at the current end: the tail reports new events, not a replay of
+    // everything already written today.
+    this.tailOffset = this.sizeOf(this.tailPath);
     monitor.connect('changed', () => {
-      // Rotation keeps a part bounded, so reading it whole is safe here.
-      const text = readText(file.get_path());
-      if (text === null) return;
-      for (const line of text.trimEnd().split('\n')) {
-        if (line.length === 0) continue;
-        try {
-          cb(JSON.parse(line) as HistoryEvent);
-        } catch {
-          continue;
-        }
-      }
+      if (this.tailPath.length === 0) return;
+      // Rotation/truncation resets the stream to the start of the new file.
+      if (this.sizeOf(this.tailPath) < this.tailOffset) this.tailOffset = 0;
+      const result = readLines(
+        this.tailPath,
+        (line) => {
+          if (line.length === 0) return;
+          try {
+            cb(JSON.parse(line) as HistoryEvent);
+          } catch {
+            /* a malformed line is skipped, not fatal */
+          }
+        },
+        { offset: this.tailOffset },
+      );
+      this.tailOffset = result.bytes;
     });
     return () => this.stopTail();
   }
 
   prune(now: Date = new Date()): number {
     if (!this.enabled) return 0;
-    const cutoff = new Date(now.getTime() - this.retentionDays * 24 * 60 * 60 * 1000);
-    const cutoffDay = dayString(cutoff);
+    const cutoffDay = retentionCutoffDay(
+      now,
+      this.retentionDays > 0 ? this.retentionDays : LOG_RETENTION_DAYS,
+    );
     let removed = 0;
     for (const day of this.days()) {
       if (day >= cutoffDay) continue;
-      const file = Gio.File.new_for_path(this.pathFor(day));
+      const base = this.pathFor(day);
       try {
-        file.delete(null);
+        Gio.File.new_for_path(base).delete(null);
+        removed += 1;
       } catch {
         /* already gone */
       }
-      for (const part of partsToPrune(MAX_HISTORY_PARTS, 1)) {
-        const extra = Gio.File.new_for_path(partPath(this.pathFor(day), part));
+      for (let part = 2; part <= MAX_HISTORY_PARTS; part++) {
+        const extra = Gio.File.new_for_path(partPath(base, part));
         try {
           if (extra.query_exists(null)) {
             extra.delete(null);
@@ -185,7 +208,6 @@ export class History {
           /* already gone */
         }
       }
-      removed += 1;
     }
     return removed;
   }
@@ -200,6 +222,8 @@ export class History {
       this.tailMonitor.cancel();
       this.tailMonitor = null;
     }
+    this.tailPath = '';
+    this.tailOffset = 0;
   }
 
   private pathFor(day: string): string {
@@ -245,13 +269,8 @@ export class History {
       stream.write_all(encodeText(batch.text), null);
       stream.close(null);
     } catch {
-      // Last resort (unusual filesystem or no TextEncoder): the part is bounded
-      // by rotation, so a read-modify-write here is acceptable.
-      try {
-        writeAtomic(base, `${readText(base) ?? ''}${batch.text}`);
-      } catch {
-        /* never let logging break the shell */
-      }
+      // Logging must never break the Shell. Dropping one bounded batch is
+      // preferable to a read-modify-write that buffers a whole file.
     }
   }
 
@@ -266,11 +285,7 @@ export class History {
         stream.write_all(encodeText(`${line}\n`), null);
         stream.close(null);
       } catch {
-        try {
-          writeAtomic(path, `${readText(path) ?? ''}${line}\n`);
-        } catch {
-          /* never let logging break the shell */
-        }
+        /* never let logging break the shell */
       }
     }
   }

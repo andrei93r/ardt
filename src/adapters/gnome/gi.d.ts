@@ -124,6 +124,10 @@ declare module 'gi://GLib' {
     readonly FileTest: {
       readonly IS_DIR: number;
     };
+    /** `GLib.SeekType`, for resuming a stream at a byte offset. */
+    readonly SeekType: {
+      readonly SET: number;
+    };
     /** `GLib.Variant` constructor and static parser. */
     readonly Variant: {
       new (signature: string, value: unknown): Variant;
@@ -231,6 +235,18 @@ declare module 'gi://Gio' {
     readonly SubprocessLauncher: {
       'new'(flags: number): SubprocessLauncher;
     };
+    /** `Gio.ZlibCompressor` constructor, used for registry backups. */
+    readonly ZlibCompressor: {
+      new (properties: { format: number; level: number }): ZlibCompressor;
+    };
+    /** Compression formats (`Gio.ZlibCompressorFormat`). */
+    readonly ZlibCompressorFormat: {
+      readonly GZIP: number;
+    };
+    /** `Gio.ConverterOutputStream`: a stream through a converter (gzip). */
+    readonly ConverterOutputStream: {
+      'new'(base: FileOutputStream, converter: unknown): ConverterOutputStream;
+    };
   }
 
   /**
@@ -307,6 +323,13 @@ declare module 'gi://Gio' {
     monitor_file(flags: number, cancellable: unknown): FileMonitor;
     enumerate_children(attributes: string, flags: number, cancellable: unknown): FileEnumerator;
     append_to(flags: number, cancellable: unknown): FileOutputStream;
+    replace(
+      etag: string | null,
+      makeBackup: boolean,
+      flags: number,
+      cancellable: unknown,
+    ): FileOutputStream;
+    read(cancellable: unknown): FileInputStream;
     get_path(): string;
     load_contents(cancellable: Cancellable | null): [boolean, Uint8Array, string];
     replace_contents(
@@ -334,6 +357,28 @@ declare module 'gi://Gio' {
     write_all(bytes: Uint8Array, cancellable: unknown): boolean;
     close(cancellable: unknown): boolean;
   }
+
+  /** A read stream (`Gio.FileInputStream`), read in bounded chunks. */
+  export interface FileInputStream {
+    read_bytes(count: number, cancellable: unknown): Bytes;
+    seek(offset: number, type: number, cancellable: unknown): boolean;
+    close(cancellable: unknown): boolean;
+  }
+
+  /** A buffer of bytes (`GLib.Bytes`), as returned by `read_bytes`. */
+  export interface Bytes {
+    get_size(): number;
+    toArray(): Uint8Array;
+  }
+
+  /** A gzip filter stream (`Gio.ConverterOutputStream`). */
+  export interface ConverterOutputStream {
+    write_all(bytes: Uint8Array, cancellable: unknown): boolean;
+    close(cancellable: unknown): boolean;
+  }
+
+  /** A gzip converter (`Gio.ZlibCompressor`), passed to the output filter. */
+  export interface ZlibCompressor {}
 
   /** A file monitor (`Gio.FileMonitor`), read and cancelled by the tail. */
   export interface FileMonitor {

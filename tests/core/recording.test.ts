@@ -19,7 +19,10 @@ import {
   NOTE_MAX_LENGTH,
   normalizeNote,
   noteRecord,
+  RECORDING_RETENTION_DAYS,
   recordingFileName,
+  recordingTimestamp,
+  recordingsExpired,
   recordingsToDelete,
   sampleDue,
   SNAPSHOT_INTERVAL_MS,
@@ -103,6 +106,28 @@ describe('recordingsToDelete', () => {
   it('keeps the newest ten by default', () => {
     const many = Array.from({ length: 13 }, (_, index) => `rec-202601${`${index + 1}`.padStart(2, '0')}-000000.jsonl`);
     expect(recordingsToDelete(many)).toHaveLength(13 - MAX_RECORDING_FILES);
+  });
+});
+
+describe('recording expiry', () => {
+  it('reads the local timestamp back from a recording name', () => {
+    const date = new Date(2026, 9, 2, 21, 31, 2);
+    expect(recordingTimestamp('rec-20261002-213102.jsonl')).toBe(date.getTime());
+    expect(recordingTimestamp('rec-20261002-213102-3.jsonl')).toBe(date.getTime());
+    expect(recordingTimestamp('other.jsonl')).toBeNull();
+    expect(recordingTimestamp('rec-20261301-000000.jsonl')).toBeNull();
+  });
+
+  it('expires recordings older than 31 days', () => {
+    const now = new Date(2026, 9, 18, 12, 0, 0);
+    const names = [
+      'rec-20260917-120000.jsonl', // exactly 31 days: keep
+      'rec-20260916-115959.jsonl', // one second beyond: delete
+      'rec-20261018-120000.jsonl', // today: keep
+      'foreign.jsonl',
+    ];
+    expect(RECORDING_RETENTION_DAYS).toBe(31);
+    expect(recordingsExpired(names, now)).toEqual(['rec-20260916-115959.jsonl']);
   });
 });
 

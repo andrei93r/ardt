@@ -87,7 +87,7 @@ export const SETTINGS = [
   { key: 'perf-enabled', type: 'bool', default: true },
   { key: 'trace-enabled', type: 'bool', default: false },
   { key: 'history-enabled', type: 'bool', default: true },
-  { key: 'history-retention-days', type: 'int', default: 30 },
+  { key: 'history-retention-days', type: 'int', default: 31 },
   { key: 'history-daily-folders', type: 'bool', default: false },
   { key: 'dbus-enabled', type: 'bool', default: true },
   { key: 'dry-run-mode', type: 'bool', default: false },

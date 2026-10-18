@@ -24,10 +24,15 @@
 
 import type { AdaptationRecord } from './config.js';
 import { normalizeIdentity } from './identity.js';
+import { clipText, utf8ByteLength } from './text.js';
 import type { Rect } from './types.js';
 
 export const DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const REGISTRY_VERSION = 1;
+/** Most placements kept per app; window recreation only needs a handful. */
+export const MAX_PLACEMENTS_PER_APP = 64;
+/** Hard cap on the serialized registry file (bytes). */
+export const MAX_REGISTRY_BYTES = 4 * 1024 * 1024;
 
 /** Timing/behaviour hints. Never geometry (§12). */
 export interface AppProfile {
@@ -128,26 +133,62 @@ function createEntry(appId: string, now: number): AppEntry {
   };
 }
 
+/** One placement's in-memory key. Bounded so a client id cannot bloat the file. */
+function placementKey(instanceId: string): string {
+  return clipText(instanceId);
+}
+
 function clonePlacement(placement: AppPlacement): AppPlacement {
-  return { ...placement, rect: { ...placement.rect } };
+  return {
+    ordinal: Number.isFinite(placement.ordinal) ? placement.ordinal : 0,
+    connector: clipText(placement.connector),
+    slot: Number.isFinite(placement.slot) ? placement.slot : 0,
+    maximized: placement.maximized === true,
+    fullscreen: placement.fullscreen === true,
+    rect: {
+      x: Number.isFinite(placement.rect?.x) ? placement.rect.x : 0,
+      y: Number.isFinite(placement.rect?.y) ? placement.rect.y : 0,
+      width: Number.isFinite(placement.rect?.width) ? placement.rect.width : 0,
+      height: Number.isFinite(placement.rect?.height) ? placement.rect.height : 0,
+    },
+  };
+}
+
+/**
+ * Keep only the newest `MAX_PLACEMENTS_PER_APP` placements, by ordinal. Applied
+ * on load as well as on `place()`, so a hand-edited or corrupted file cannot
+ * force an unbounded object into memory on the next save.
+ */
+function boundPlacements(placements: Record<string, AppPlacement>): Record<string, AppPlacement> {
+  const all = Object.entries(placements ?? {});
+  const sorted = all
+    .filter(([, placement]) => placement !== null && typeof placement === 'object')
+    .sort((a, b) => a[1].ordinal - b[1].ordinal);
+  const kept = sorted.slice(-MAX_PLACEMENTS_PER_APP);
+  const out: Record<string, AppPlacement> = {};
+  for (const [instanceId, placement] of kept) {
+    // The instance id is persisted as a JSON key, so it is client text too.
+    out[clipText(instanceId)] = clonePlacement(placement);
+  }
+  return out;
 }
 
 function cloneEntry(entry: AppEntry): AppEntry {
-  const placements: Record<string, AppPlacement> = {};
-  for (const [instanceId, placement] of Object.entries(entry.placements ?? {})) {
-    placements[instanceId] = clonePlacement(placement);
-  }
+  const placements = boundPlacements(entry.placements ?? {});
   // The counter is re-derived: a persisted value below the highest placement
   // ordinal would hand out a duplicate, so the derived floor always wins.
   const persisted = entry.nextOrdinal;
   return {
-    appId: entry.appId,
-    firstSeen: entry.firstSeen,
-    lastSeen: entry.lastSeen,
-    windowsSeen: entry.windowsSeen,
-    lastTitle: entry.lastTitle ?? '',
+    appId: clipText(entry.appId),
+    firstSeen: Number.isFinite(entry.firstSeen) ? entry.firstSeen : 0,
+    lastSeen: Number.isFinite(entry.lastSeen) ? entry.lastSeen : 0,
+    windowsSeen: Number.isFinite(entry.windowsSeen) ? entry.windowsSeen : 0,
+    lastTitle: clipText(entry.lastTitle ?? ''),
     neverTile: entry.neverTile === true,
-    profile: { ...(entry.profile ?? {}) },
+    profile: {
+      ...(entry.profile ?? {}),
+      ...(entry.profile?.family === undefined ? {} : { family: clipText(entry.profile.family) }),
+    },
     adapt: { ...(entry.adapt ?? {}) },
     placements,
     nextOrdinal: Math.max(
@@ -234,7 +275,9 @@ export class AppRegistry {
     const entry = this.ensure(observation.appId, now);
     entry.lastSeen = now;
     entry.windowsSeen += 1;
-    if (observation.title !== undefined) entry.lastTitle = observation.title;
+    // A title is client text. Clipping here (not only at serialization) keeps
+    // a pathological title out of memory, the journal and DumpState too.
+    if (observation.title !== undefined) entry.lastTitle = clipText(observation.title);
     return entry;
   }
 
@@ -284,24 +327,31 @@ export class AppRegistry {
    */
   place(appId: string, instanceId: string, input: PlacementInput, now: number = Date.now()): AppPlacement {
     const entry = this.ensure(appId, now);
-    const existing = entry.placements[instanceId];
+    const existing = entry.placements[placementKey(instanceId)];
     const ordinal = existing?.ordinal ?? entry.nextOrdinal;
     if (existing === undefined) entry.nextOrdinal += 1;
     const placement: AppPlacement = {
       ordinal,
-      connector: input.connector,
+      connector: clipText(input.connector),
       slot: input.slot,
       maximized: input.maximized === true,
       fullscreen: input.fullscreen === true,
       rect: { ...input.rect },
     };
-    entry.placements[instanceId] = placement;
+    entry.placements[placementKey(instanceId)] = placement;
     entry.lastSeen = now;
+    const count = Object.keys(entry.placements).length;
+    if (count > MAX_PLACEMENTS_PER_APP) {
+      const oldest = Object.entries(entry.placements)
+        .sort((a, b) => a[1].ordinal - b[1].ordinal)
+        .slice(0, count - MAX_PLACEMENTS_PER_APP);
+      for (const [key] of oldest) delete entry.placements[key];
+    }
     return placement;
   }
 
   placement(appId: string, instanceId: string): AppPlacement | undefined {
-    return this.table.get(appId)?.placements[instanceId];
+    return this.table.get(appId)?.placements[placementKey(instanceId)];
   }
 
   /** Placements in ordinal order, the order recreated windows match in. */
@@ -312,7 +362,7 @@ export class AppRegistry {
   }
 
   ordinalFor(appId: string, instanceId: string): number | undefined {
-    return this.table.get(appId)?.placements[instanceId]?.ordinal;
+    return this.table.get(appId)?.placements[placementKey(instanceId)]?.ordinal;
   }
 
   placementByOrdinal(appId: string, ordinal: number): { instanceId: string; placement: AppPlacement } | undefined {
@@ -328,8 +378,9 @@ export class AppRegistry {
   forgetPlacement(appId: string, instanceId: string): boolean {
     const entry = this.table.get(appId);
     if (entry === undefined) return false;
-    if (entry.placements[instanceId] === undefined) return false;
-    delete entry.placements[instanceId];
+    const key = placementKey(instanceId);
+    if (entry.placements[key] === undefined) return false;
+    delete entry.placements[key];
     return true;
   }
 
@@ -477,8 +528,37 @@ export class AppRegistry {
     return this.table.delete(appId);
   }
 
-  toJSON(): AppRegistryData {
-    return { version: REGISTRY_VERSION, entries: this.entries().map(cloneEntry) };
+  /**
+   * Serialize a bounded copy of the registry. Every entry is already clipped
+   * and placement-capped, so an ordinary registry is far below the cap. If the
+   * whole file would still exceed `maxBytes`, keep durable `neverTile` entries
+   * first and then the newest entries; the discarded ones stay in memory for
+   * this session but are never written to a file that startup would have to
+   * parse in one piece.
+   */
+  toJSON(maxBytes: number = MAX_REGISTRY_BYTES): AppRegistryData {
+    const entries = this.entries().map(cloneEntry);
+    const wrap = (list: AppEntry[]): AppRegistryData => ({ version: REGISTRY_VERSION, entries: list });
+    if (!Number.isFinite(maxBytes) || maxBytes <= 0) return wrap(entries);
+
+    const text = JSON.stringify(wrap(entries));
+    if (utf8ByteLength(text) <= maxBytes) return wrap(entries);
+
+    const ranked = [...entries].sort(
+      (a, b) =>
+        Number(b.neverTile) - Number(a.neverTile) ||
+        b.lastSeen - a.lastSeen,
+    );
+    const kept = new Set<AppEntry>();
+    let used = utf8ByteLength(JSON.stringify(wrap([])));
+    for (const entry of ranked) {
+      const size = utf8ByteLength(JSON.stringify(entry)) + 1; // + the comma
+      if (used + size > maxBytes) continue;
+      kept.add(entry);
+      used += size;
+    }
+    const bounded = entries.filter((entry) => kept.has(entry));
+    return wrap(bounded);
   }
 
   static fromJSON(data: AppRegistryData, options: AppRegistryOptions = {}): AppRegistry {

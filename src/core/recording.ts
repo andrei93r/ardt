@@ -35,6 +35,11 @@ export const NOTE_MAX_LENGTH = 2000;
 /** Why a recording stopped. `user` and `disable` are explicit; `cap` is a bound. */
 export type StopReason = 'user' | 'cap' | 'disable';
 
+/** Recordings are pruned after the same 31-day window as the logs. */
+export const RECORDING_RETENTION_DAYS = 31;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const RECORDING_NAME = /^rec-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})(?:-\d+)?\.jsonl$/;
+
 /**
  * Clean a user note: normalise line endings, drop other control characters
  * (keeping tab and newline), trim the edges and cap the length. The note is
@@ -127,6 +132,45 @@ export function recordingsToDelete(names: readonly string[], keep = MAX_RECORDIN
   const bounded = Number.isFinite(keep) && keep >= 1 ? Math.floor(keep) : 1;
   const excess = sorted.length - bounded;
   return excess > 0 ? sorted.slice(0, excess) : [];
+}
+
+/** Local timestamp encoded in a recording name, or null for a foreign name. */
+export function recordingTimestamp(name: string): number | null {
+  const match = RECORDING_NAME.exec(name);
+  if (match === null) return null;
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+  const date = new Date(year, month - 1, day, hour, minute, second);
+  // Reject an impossible date (`20261301` would otherwise roll into 2027).
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day ||
+    date.getHours() !== hour ||
+    date.getMinutes() !== minute ||
+    date.getSeconds() !== second
+  ) {
+    return null;
+  }
+  return date.getTime();
+}
+
+/**
+ * Recording names older than the retention window. Recordings are a bounded
+ * diagnostic aid, not a permanent log, so the same 31-day prune applies.
+ */
+export function recordingsExpired(
+  names: readonly string[],
+  now: Date = new Date(),
+  retentionDays = RECORDING_RETENTION_DAYS,
+): string[] {
+  const days = Number.isFinite(retentionDays) && retentionDays > 0 ? Math.floor(retentionDays) : RECORDING_RETENTION_DAYS;
+  const cutoff = now.getTime() - days * MS_PER_DAY;
+  const out: string[] = [];
+  for (const name of names) {
+    const timestamp = recordingTimestamp(name);
+    if (timestamp !== null && timestamp < cutoff) out.push(name);
+  }
+  return out;
 }
 
 /** Whether a new state sample is due at the ~20 Hz cadence. */

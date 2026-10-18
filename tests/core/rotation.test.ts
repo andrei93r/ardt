@@ -4,7 +4,14 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { partPath, partsToPrune, shouldRotate } from '../../src/core/rotation.js';
+import {
+  LOG_RETENTION_DAYS,
+  isDayExpired,
+  partPath,
+  partsToPrune,
+  retentionCutoffDay,
+  shouldRotate,
+} from '../../src/core/rotation.js';
 
 describe('shouldRotate', () => {
   it('rotates at or above the threshold', () => {
@@ -38,5 +45,32 @@ describe('partsToPrune', () => {
   it('always keeps at least the live part', () => {
     expect(partsToPrune(4, 0)).toEqual([4, 3, 2]);
     expect(partsToPrune(4, 1)).toEqual([4, 3, 2]);
+  });
+});
+
+describe('31-day retention', () => {
+  it('defaults to exactly 31 days', () => {
+    expect(LOG_RETENTION_DAYS).toBe(31);
+  });
+
+  it('computes a day-based cutoff 31 days back', () => {
+    const now = new Date(2026, 9, 18, 12, 0, 0);
+    expect(retentionCutoffDay(now)).toBe('2026-09-17');
+    expect(retentionCutoffDay(now, 1)).toBe('2026-10-17');
+    expect(retentionCutoffDay(now, 31)).toBe('2026-09-17');
+  });
+
+  it('keeps the cutoff day and expires the day before it', () => {
+    const now = new Date(2026, 9, 18, 12, 0, 0);
+    expect(isDayExpired('2026-09-18', now)).toBe(false);
+    expect(isDayExpired('2026-09-17', now)).toBe(false);
+    expect(isDayExpired('2026-09-16', now)).toBe(true);
+    expect(isDayExpired('2025-01-01', now)).toBe(true);
+  });
+
+  it('falls back to 31 days for a nonsensical setting', () => {
+    const now = new Date(2026, 9, 18, 12, 0, 0);
+    expect(retentionCutoffDay(now, 0)).toBe('2026-09-17');
+    expect(retentionCutoffDay(now, Number.NaN)).toBe('2026-09-17');
   });
 });

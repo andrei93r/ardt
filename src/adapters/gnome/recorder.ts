@@ -38,6 +38,7 @@ import {
   normalizeNote,
   noteRecord,
   recordingFileName,
+  recordingsExpired,
   recordingsToDelete,
   sampleDue,
   snapshotKey,
@@ -45,7 +46,7 @@ import {
 } from '../../core/recording.js';
 import type { StopReason } from '../../core/recording.js';
 import { encodeText, jsonLine } from '../../core/jsonl.js';
-import { dataDir, readText, writeAtomic } from './adapt.js';
+import { dataDir } from './adapt.js';
 
 /** A journal entry, as much of it as the sink needs to identify and timestamp. */
 interface JournalLike {
@@ -363,6 +364,33 @@ export class Recorder {
     }
   }
 
+  /** Delete recordings older than the retention window (31 days). */
+  prune(now: Date = new Date()): number {
+    let removed = 0;
+    try {
+      const dir = recordingDir();
+      const enumerator = Gio.File.new_for_path(dir).enumerate_children(
+        'standard::name',
+        Gio.FileQueryInfoFlags.NONE,
+        null,
+      );
+      const names: string[] = [];
+      let info: FileInfoLike | null;
+      while ((info = enumerator.next_file(null)) !== null) names.push(info.get_name());
+      for (const name of recordingsExpired(names, now)) {
+        try {
+          Gio.File.new_for_path(`${dir}/${name}`).delete(null);
+          removed += 1;
+        } catch {
+          /* already gone */
+        }
+      }
+    } catch {
+      /* a directory that cannot be listed must not stop logging */
+    }
+    return removed;
+  }
+
   /** Append one JSON line and account its size. */
   private writeLine(record: Record<string, unknown>): void {
     if (this.path === null) return;
@@ -379,12 +407,8 @@ export class Recorder {
       stream.close(null);
       this.bytes += size;
     } catch {
-      try {
-        writeAtomic(this.path, `${readText(this.path) ?? ''}${line}`);
-        this.bytes += size;
-      } catch {
-        /* never let recording break the shell */
-      }
+      // Recording is diagnostic: never let it break the Shell, and never read
+      // the whole file back to append one line.
     }
   }
 }

@@ -360,7 +360,7 @@ export const PREFERENCES_LAYOUT: readonly PageSpec[] = [
         description: _('An append-only log of what adrt did, written as JSONL files.'),
         rows: [
           { key: 'history-enabled', kind: 'switch', title: _('Record event history') },
-          { key: 'history-retention-days', kind: 'spin', title: _('Keep history for'), subtitle: _('Days.'), lower: 1, upper: 3650 },
+          { key: 'history-retention-days', kind: 'spin', title: _('Keep history for'), subtitle: _('Days (31 by default).'), lower: 1, upper: 3650 },
           { key: 'history-daily-folders', kind: 'switch', title: _('Store each day in its own folder') },
           { key: 'history-max-bytes', kind: 'spin', title: _('Rotate each file at'), subtitle: _('Megabytes.'), lower: 1, upper: 256, scale: 1048576 },
           { key: 'log-workspace-reorder', kind: 'switch', title: _('Log workspace reorders') },

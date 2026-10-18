@@ -29,6 +29,81 @@ export function encodeText(text: string): Uint8Array {
   return new Encoder().encode(text);
 }
 
+/**
+ * Decode raw file bytes as UTF-8. The old Latin-1 loop
+ * (`String.fromCharCode(byte)`) turned every non-ASCII byte into a code point
+ * of its own; writing that string back as UTF-8 then doubled the mojibake on
+ * every read/write round-trip and grew the registry exponentially.
+ */
+export function decodeText(bytes: Uint8Array): string {
+  const Decoder = (globalThis as { TextDecoder?: new (label?: string) => { decode(input?: Uint8Array): string } }).TextDecoder;
+  if (typeof Decoder !== 'function') throw new Error('TextDecoder unavailable');
+  return new Decoder('utf-8').decode(bytes);
+}
+
+/** One complete line is never allowed to buffer more than this while streaming. */
+const MAX_LINE_BYTES = 1024 * 1024;
+
+/** One framing pass: the complete lines and how many raw bytes they used. */
+export interface FramedLines {
+  lines: string[];
+  /** Bytes up to and including the last newline; safe to add to a read offset. */
+  consumed: number;
+}
+
+/**
+ * Incremental UTF-8 JSONL framing for streamed reads. Chunks may split a line
+ * anywhere (including inside a multi-byte UTF-8 sequence); only complete,
+ * newline-terminated lines are decoded and emitted. A partial trailing line
+ * stays buffered for the next chunk, and a line longer than `maxLineBytes` is
+ * dropped instead of buffering an unbounded string.
+ *
+ * Pure: the adapter owns the stream, this owns the boundaries. `consumed` is
+ * byte-accurate, so a tail can resume where the previous pass stopped and a
+ * partial write is re-read once its newline arrives.
+ */
+export class LineFramer {
+  private carry = new Uint8Array(0);
+  private skipping = false;
+
+  constructor(private readonly maxLineBytes = MAX_LINE_BYTES) {}
+
+  /** Bytes held for a line whose newline has not arrived yet. */
+  get bufferedBytes(): number {
+    return this.carry.length;
+  }
+
+  push(chunk: Uint8Array): FramedLines {
+    if (chunk.length === 0) return { lines: [], consumed: 0 };
+    const data = new Uint8Array(this.carry.length + chunk.length);
+    data.set(this.carry, 0);
+    data.set(chunk, this.carry.length);
+
+    const lines: string[] = [];
+    let start = 0;
+    for (let index = 0; index < data.length; index += 1) {
+      if (data[index] !== 0x0a) continue;
+      let end = index;
+      if (end > start && data[end - 1] === 0x0d) end -= 1;
+      const bytes = data.subarray(start, end);
+      if (this.skipping) {
+        this.skipping = false;
+      } else if (bytes.length <= this.maxLineBytes) {
+        lines.push(decodeText(bytes));
+      }
+      start = index + 1;
+    }
+
+    this.carry = data.slice(start);
+    if (this.carry.length > this.maxLineBytes) {
+      // No newline in sight: discard the oversized line and keep scanning.
+      this.carry = new Uint8Array(0);
+      this.skipping = true;
+    }
+    return { lines, consumed: start };
+  }
+}
+
 /** One JSON line: `JSON.stringify` plus the newline the JSONL format needs. */
 export function jsonLine(value: unknown): string {
   return `${JSON.stringify(value)}\n`;

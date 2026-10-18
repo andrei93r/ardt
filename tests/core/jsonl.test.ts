@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { JsonlBuffer, dayString, encodeText, jsonLine } from '../../src/core/jsonl.js';
+import { JsonlBuffer, LineFramer, dayString, decodeText, encodeText, jsonLine } from '../../src/core/jsonl.js';
 
 describe('dayString', () => {
   it('formats a local date with zero padding', () => {
@@ -49,6 +49,72 @@ describe('jsonLine', () => {
     const line = jsonLine({ text: 'a\nb' });
     expect(line.endsWith('\n')).toBe(true);
     expect(line.slice(0, -1)).not.toContain('\n');
+  });
+});
+
+describe('decodeText', () => {
+  it('decodes UTF-8 exactly, including characters the Latin-1 loop mangled', () => {
+    const text = 'café — 日本語 🚀 “quoted”';
+    expect(decodeText(encodeText(text))).toBe(text);
+    // A Latin-1 decode would have produced 'Ã©' for these two bytes.
+    expect(decodeText(new Uint8Array([0xc3, 0xa9]))).toBe('é');
+  });
+
+  it('round-trips a title across a read/write cycle without doubling', () => {
+    const original = 'Büro – naïve façade';
+    const once = decodeText(encodeText(original));
+    const twice = decodeText(encodeText(once));
+    expect(once).toBe(original);
+    expect(twice).toBe(original);
+  });
+});
+
+describe('LineFramer', () => {
+  it('emits only complete newline-terminated lines', () => {
+    const framer = new LineFramer();
+    expect(framer.push(encodeText('{"a":1}\n{"b":2}\n'))).toEqual({
+      lines: ['{"a":1}', '{"b":2}'],
+      consumed: 16,
+    });
+    expect(framer.bufferedBytes).toBe(0);
+  });
+
+  it('carries a partial line to the next chunk', () => {
+    const framer = new LineFramer();
+    const first = framer.push(encodeText('{"a":'));
+    expect(first.lines).toEqual([]);
+    expect(first.consumed).toBe(0);
+    expect(framer.bufferedBytes).toBe(5);
+
+    const second = framer.push(encodeText('1}\nnext'));
+    expect(second.lines).toEqual(['{"a":1}']);
+    expect(second.consumed).toBe(8);
+    expect(framer.bufferedBytes).toBe(4);
+  });
+
+  it('decodes a multi-byte sequence split across chunks', () => {
+    const bytes = encodeText('é\n');
+    const framer = new LineFramer();
+    expect(framer.push(bytes.subarray(0, 1)).lines).toEqual([]);
+    expect(framer.push(bytes.subarray(1)).lines).toEqual(['é']);
+  });
+
+  it('does not advance the offset past a partial line', () => {
+    const framer = new LineFramer();
+    const result = framer.push(encodeText('one\ntwo'));
+    expect(result.lines).toEqual(['one']);
+    expect(result.consumed).toBe(4);
+  });
+
+  it('drops a line longer than the cap without buffering it', () => {
+    const framer = new LineFramer(8);
+    framer.push(encodeText('123456789'));
+    expect(framer.bufferedBytes).toBe(0);
+    expect(framer.push(encodeText('still long\nok\n'))).toEqual({ lines: ['ok'], consumed: 14 });
+  });
+
+  it('accepts CRLF line endings', () => {
+    expect(new LineFramer().push(encodeText('a\r\nb\r\n')).lines).toEqual(['a', 'b']);
   });
 });
 

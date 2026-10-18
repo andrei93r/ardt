@@ -25,6 +25,7 @@ import type { AdrtRecentError } from '../../core/dump-schema.js';
 import { SessionMachine } from '../../core/session.js';
 import { ChangeLog } from '../../core/undo.js';
 import { NoticeGate, isAlwaysNotice, noticeTitle } from '../../core/notify.js';
+import { LOG_RETENTION_DAYS } from '../../core/rotation.js';
 import { TRIGGERS, buildDispatch } from '../../core/triggers.js';
 import { clamp, Layer } from '../../core/types.js';
 import type { Rect } from '../../core/types.js';
@@ -271,7 +272,7 @@ export default class AdrtExtension extends Extension {
    * in-place restart and letting GNOME disable the half-built extension. */
   private enableWith(started: number): void {
     // The journal comes first: everything below it may log a decision.
-    this.journal = new EventJournal(30);
+    this.journal = new EventJournal(LOG_RETENTION_DAYS);
     this.journal.prune();
     this.injectionEnabled = GLib.getenv('ADRT_INJECT') === '1';
     // Record which build is loaded: on Wayland a logout is needed to reload, so
@@ -309,7 +310,7 @@ export default class AdrtExtension extends Extension {
 
     this.history = new History(
       this.settings.boolean('history-enabled', true),
-      this.settings.int('history-retention-days', 30),
+      this.settings.int('history-retention-days', LOG_RETENTION_DAYS),
       this.settings.boolean('history-daily-folders', false),
       this.settings.int('history-max-bytes', 8388608),
     );
@@ -464,6 +465,8 @@ export default class AdrtExtension extends Extension {
       snapshot: () => this.diagnostics.recordSnapshot(),
       onChanged: () => undefined,
     });
+    // Same 31-day window as the logs: recordings are diagnostics, not archives.
+    this.recorder.prune();
     // §22 extension: the observation prompt. Built empty; `show()` is lazy so
     // no Shell chrome exists until a user stop actually needs it.
     this.recordingPrompt = new RecordingPrompt();
