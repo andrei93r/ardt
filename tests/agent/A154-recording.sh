@@ -55,6 +55,7 @@ assert_eq "RecordingStatus carries the counters" "true" \
   "$(rec_status | python3 -c 'import json,sys; d=json.load(sys.stdin); print(str(all(k in d for k in ("path","elapsedMs","bytes","events","snapshots","promptOpen","note"))).lower())')"
 assert_eq "DumpState reflects the recording path" "$start_path" "$(state_expr 'd["recording"]["path"]')"
 assert_eq "DumpState reflects the recording flag" "true" "$(state_expr 'str(d["recording"]["recording"]).lower()')"
+assert_eq "RecordingStatus has no stop reason while recording" "None" "$(status_field stopReason)"
 
 # 2. A second start while recording is refused with a clear error string.
 second="$(adrt StartRecording 0 | python3 "$PARSE" | tr -d '"')"

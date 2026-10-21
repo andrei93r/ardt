@@ -77,11 +77,11 @@ session-modes | A13-lock-screen A27-session-unlock A28-screen-sharing A123-sessi
 pause-during-sharing | A123-session-modes A140-prefs-options
 
 # --------------------------------------------------------------- highlight
-highlight | A36-close-ghost A37-overview-border A38-indicator-style A47-border-hides-during-workspace-switch A128-switch-suppression-clears A130-occlusion-hides-highlight A131-fullscreen-hides-highlight A135-highlight-below-notifications A170-popup-hides-highlight
+highlight | A36-close-ghost A37-overview-border A38-indicator-style A47-border-hides-during-workspace-switch A128-switch-suppression-clears A130-occlusion-hides-highlight A131-fullscreen-hides-highlight A135-highlight-below-notifications A170-popup-hides-highlight A172-helper-window-no-highlight A173-focus-border-after-placement
 
 # --------------------------------------------------- cursor / clamp / timing
 cursor-centre | A132-cursor-centre A133-cursor-follows-focus
-clamp-to-screen | A136-clamp-to-screen
+clamp-to-screen | A136-clamp-to-screen A171-clamp-does-not-churn
 os-timing-refresh | A29-frame-timing A138-os-timing
 
 # ------------------------------------------------------------ drag preview
@@ -102,7 +102,7 @@ shell-lifecycle | A25-settings-change A26-shell-restart A80-platform-probe | ful
 
 # ------------------------------------------------- diagnostics / scheduling
 diagnostics-journal-perf | A29-frame-timing A30-memory-bounds A63-client-text-bounded A65-logging-and-rotation A66-performance-counters A82-event-journal A103-record-trace-shape A104-queue-depth-returns-to-zero
-recording | A154-recording
+recording | A147-panel A154-recording
 scheduling-burst | A84-burst-single-drain A104-queue-depth-returns-to-zero | full-only: burst coalescing is a correctness backstop asserted by the full suite.
 adaptation | A15-adaptation A52-adaptation-no-bogus-min | full-only: refusal/adaptation timing is exercised by the full suite.
 reconcile-coherence | A33-reconcile-all A48-periodic-retile A56-coherence-sweep A58-lone-window-maximized

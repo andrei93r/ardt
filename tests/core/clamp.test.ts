@@ -13,6 +13,7 @@ function candidate(overrides: Partial<ClampCandidate> = {}): ClampCandidate {
     routePending: false,
     fullscreen: false,
     minimized: false,
+    maximized: false,
     stubborn: false,
     settling: false,
     frame: { x: -200, y: -150, width: 400, height: 300 },
@@ -46,6 +47,17 @@ describe('shouldClampWindow', () => {
     expect(shouldClampWindow(candidate({ fullscreen: true }))).toBe(false);
     expect(shouldClampWindow(candidate({ minimized: true }))).toBe(false);
     expect(shouldClampWindow(candidate({ stubborn: true }))).toBe(false);
+  });
+
+  it('never clamps a maximized window', () => {
+    // Mutter reports a maximized frame including the invisible resize border,
+    // so it is a couple of pixels wider and taller than the monitor. Clamping
+    // it means resizing a maximized window, and the only way to resize one is
+    // to unmaximize it first: the window flashes to its restored size and the
+    // next pass maximizes it again (a lone maximized window flickering between
+    // full screen and half width).
+    const maximizedFrame = { x: 0, y: 34, width: 1922, height: 1167 };
+    expect(shouldClampWindow(candidate({ maximized: true, frame: maximizedFrame }))).toBe(false);
   });
 
   it('never clamps a window the tiler is mid-transition for', () => {

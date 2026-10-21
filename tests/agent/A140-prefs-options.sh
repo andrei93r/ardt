@@ -125,18 +125,54 @@ try {
   Gtk.init();
   Gio.resources_register(Gio.Resource.load(GLib.getenv('ADRT_PREFS_RES')));
 
-  // Capture every settings row the page builder actually adds.
+  // Capture every settings row the page builder actually adds, and the
+  // recordings group, so the page is proven to build and list what is on disk.
   const built = [];
+  let recordingsGroup = null;
+  const recordingTitles = [];
+  const recordingRemoves = [];
   const origGroupAdd = Adw.PreferencesGroup.prototype.add;
   Adw.PreferencesGroup.prototype.add = function (r) {
+    if (this.adrtRecordings) recordingsGroup = this;
+    if (this === recordingsGroup && r.title) recordingTitles.push(r.title);
     if (r.adrtKey) built.push({ key: r.adrtKey, picker: r.adrtPicker === true });
     return origGroupAdd.call(this, r);
+  };
+  // The per-row remove button is added as a suffix; keep the ones a recording
+  // row carries so a click can be driven below. A recording's remove button is
+  // the trash-icon suffix; the only other trash rows (the app registry) are
+  // empty in this isolated run, so this collects exactly the recording removes.
+  const origAddSuffix = Adw.ActionRow.prototype.add_suffix;
+  Adw.ActionRow.prototype.add_suffix = function (widget) {
+    try {
+      if (widget && widget.icon_name === 'user-trash-symbolic') recordingRemoves.push(widget);
+    } catch (e) {
+      /* not a button: ignore */
+    }
+    return origAddSuffix.call(this, widget);
   };
 
   const mod = await import('file://' + extDir + '/adapters/gnome/prefs.js');
   const settings = new Gio.Settings({ schema_id: 'org.gnome.shell.extensions.adrt' });
   // Exercise the rule-list editor's row builder, including an inline-invalid rule.
   settings.set_string('rules-json', '[{"match":{"appId":"org.gnome.*"},"tile":"left-half"},{"match":{"appId":"x"},"tile":"full","enabled":false},{"match":{}}]');
+
+  // Seed two recordings in the isolated data dir before the page is built, so
+  // the recordings list has something to show. XDG_DATA_HOME points at it.
+  const recDir = GLib.getenv('XDG_DATA_HOME') + '/adrt/recordings';
+  GLib.mkdir_with_parents(recDir, 0o755);
+  const seedRecording = (name, note) => {
+    const lines = [
+      JSON.stringify({ kind: 'header', format: 'adrt.recording', version: 1, at: 1 }),
+      JSON.stringify({ kind: 'state', t: 2, focused: null }),
+      JSON.stringify({ kind: 'note', t: 3, text: note }),
+      JSON.stringify({ kind: 'footer', at: 4, reason: 'user', durationMs: 4573, note }),
+    ];
+    GLib.file_set_contents(recDir + '/' + name, lines.join('\n') + '\n');
+  };
+  seedRecording('rec-20261021-080540.jsonl', 'focus drawn too early');
+  seedRecording('rec-20261021-082059.jsonl', 'ignored');
+
   const prefs = new mod.default({ settings, metadata: { 'version-name': '0.2.0' } });
   prefs.fillPreferencesWindow({ add: () => {} });
 
@@ -192,7 +228,38 @@ try {
   if (!allKeys.includes('pause-during-sharing')) errors.push('the pause-during-sharing key is missing from the schema');
   if (!rowKeys.has('pause-during-sharing')) errors.push('the pause-during-sharing row is missing from the prefs');
 
-  emit({ setup: false, ok: errors.length === 0, rows: built.length, expected: expected.length, errors }, errors.length ? 1 : 0);
+  // The recordings page must have built and listed the two seeded recordings by
+  // their start time, newest first — and not the "No recordings" placeholder.
+  const recordingsListed = recordingTitles.length;
+  if (recordingsGroup === null) {
+    errors.push('the recordings page was not built (no adrtRecordings group)');
+  } else if (recordingTitles.length !== 2) {
+    errors.push('the recordings list showed ' + recordingTitles.length + ' rows, expected 2; got ' + JSON.stringify(recordingTitles));
+  } else {
+    if (recordingTitles[0].indexOf('2026-10-21 08:20:59') !== 0) errors.push('the newest recording is not first: ' + recordingTitles[0]);
+    if (recordingTitles[1].indexOf('2026-10-21 08:05:40') !== 0) errors.push('the oldest recording is not second: ' + recordingTitles[1]);
+  }
+
+  // Drive the per-row remove button: the file must go and the list must rebuild
+  // down to the remaining recording. This exercises the real delete path.
+  if (recordingRemoves.length !== 2) {
+    errors.push('expected a remove button on each recording row, got ' + recordingRemoves.length);
+  } else {
+    const target = recDir + '/rec-20261021-082059.jsonl';
+    // The rebuild re-adds the surviving rows, so reset the accumulator first.
+    recordingTitles.length = 0;
+    recordingRemoves[0].emit('clicked');
+    if (Gio.File.new_for_path(target).query_exists(null)) {
+      errors.push('the removed recording is still on disk: ' + target);
+    }
+    if (recordingTitles.length !== 1) {
+      errors.push('after removing one of two, the list shows ' + recordingTitles.length + ' rows: ' + JSON.stringify(recordingTitles));
+    } else if (recordingTitles[0].indexOf('2026-10-21 08:05:40') !== 0) {
+      errors.push('the wrong recording survived the remove: ' + recordingTitles[0]);
+    }
+  }
+
+  emit({ setup: false, ok: errors.length === 0, rows: built.length, expected: expected.length, recordings: recordingsListed, errors }, errors.length ? 1 : 0);
 } catch (e) {
   emit({ setup: true, ok: false, error: String(e) }, 3);
 }
@@ -223,7 +290,7 @@ fi
 
 rows_json="/tmp/adrt-a138-rows.$$"
 if check_constructed_rows > "$rows_json" 2>/dev/null; then
-  summary_line="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("%d rows, %d user-facing keys, pickers for the app lists" % (d.get("rows", 0), d.get("expected", 0)))' "$rows_json" 2>/dev/null)"
+  summary_line="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("%d rows, %d user-facing keys, %d recordings listed, pickers for the app lists" % (d.get("rows", 0), d.get("expected", 0), d.get("recordings", 0)))' "$rows_json" 2>/dev/null)"
   pass "prefs constructs and exposes exactly the expected rows ($summary_line)"
 else
   rc=$?

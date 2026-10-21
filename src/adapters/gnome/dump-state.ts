@@ -391,6 +391,7 @@ export class Diagnostics {
         stopReason: null,
         promptOpen: false,
         note: '',
+        awaitingNote: false,
       },
       workspaceMode: this.readWorkspaceModeSettings(),
       errors: deps.errorCount(),

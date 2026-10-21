@@ -393,3 +393,42 @@ Automate the watch with the recorder or `ADRT_TEAROFF_TEST=1 bash
 scripts/session-test.sh S27`, which watches the decision journal for 30 s while
 you drive the detach. A row that cannot be driven by hand on this machine stays
 an unticked manual item, not a flaky automated test.
+
+## 14. The clamp's residual pixel and the maximized frame (manual)
+
+The self-heal clamp rescues a window that ended up off-screen. Its failure mode
+is a *loop*: Mutter reports a window's frame **including the toplevel's
+invisible client-side-decoration border**, so a window adrt placed exactly in
+its slot reads back a pixel or two larger than the work area, the clamp treats
+that as an off-screen float, and resizes it again on the next pass — forever.
+
+Two halves of that are modelled and unit-tested in the core
+(`tests/core/clamp.ts`, `tests/core/types.ts`): a frame that overhangs the area
+is not clamped while it is within `CLAMP_TOLERANCE_PX`, and a maximized window
+is never a clamp candidate at all. `A171` covers the reachable half (the clamp
+fires once for a genuinely off-screen float and is then left alone; a settled
+pair is not touched).
+
+The two cases the headless backend **cannot** produce: it adds no CSD border
+(so nothing overhangs), and a maximized window is owned and re-snapped by Mutter
+before the clamp ever sees it. Verify them by hand on a real session:
+
+- [ ] **A maximized window does not flicker.** Start a single window and let
+      the lone law maximize it. It stays maximized and full-screen; it does not
+      blink to half width and back.
+- [ ] **A tiled pair is pixel-stable.** Tile two windows (Super+Shift+arrow or
+      drag one to the edge). Watch for ~10 s: the seam does not creep, the right
+      window does not grow one pixel per second, and neither window keeps
+      repainting.
+- [ ] **The rescue still works.** Unplug a monitor a window is on (or restore a
+      position from a display that is gone). The window comes back inside the
+      remaining work area.
+- [ ] **No `stubborn` verdict.** With history enabled, a settled layout shows no
+      `stubborn` for these clients and no repeating `clamp_to_screen` /
+      `resize_retry` stream for the same window in `DumpDecisions`.
+
+Automate the watch with
+`bash scripts/session-test.sh S24-clamp-to-screen` (the live-session clamp
+scenario, which already carries the same "not run in the nested harness" note)
+or with the recorder, while you drive the steps above.
+

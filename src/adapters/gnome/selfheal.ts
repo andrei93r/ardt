@@ -15,7 +15,7 @@
 import GLib from 'gi://GLib';
 import type { MetaWindow } from 'gi://Meta';
 
-import { shouldClampWindow } from '../../core/clamp.js';
+import { CLAMP_TOLERANCE_PX, shouldClampWindow } from '../../core/clamp.js';
 import { computePlans, screenArea } from '../../core/tiler.js';
 import type { TilerConfig, TilerWindow } from '../../core/tiler.js';
 import { clampRectToArea, rectEquals } from '../../core/types.js';
@@ -203,8 +203,15 @@ export class SelfHeal {
    * and dragging still feels free.
    *
    * Fullscreen windows (they own the screen) and minimized windows (Mutter
-   * manages their frame) are skipped. A tiled/maximized window is already inside
-   * the work area, so in practice the clamp only ever fires for a manual float.
+   * manages their frame) are skipped. A maximized window is skipped too: Mutter
+   * owns its frame and reports the maximized one *including* the invisible
+   * resize border, so it is a couple of pixels wider and taller than the
+   * work area. Clamping it means resizing a maximized window, and the only way
+   * to resize one is to unmaximize it first — the window then flashes to its
+   * restored size and the next pass maximizes it again, which read as a lone
+   * maximized window flickering between full screen and half width. A tiled
+   * window is already inside the work area, so in practice the clamp only ever
+   * fires for a manual float.
    * It is idempotent — a window already inside is untouched — and it reuses the
    * tiler's bounded retry/refusal path for a window that refuses the geometry,
    * so it can never loop or fight a stubborn client.
@@ -232,6 +239,7 @@ export class SelfHeal {
           routePending: tracked.routePending,
           fullscreen: flags.fullscreen,
           minimized: flags.minimized,
+          maximized: flags.maximized,
           stubborn: tracked.stubborn,
           settling,
           frame: tracked.surface.frame,
@@ -244,7 +252,7 @@ export class SelfHeal {
       if (screen === null) continue;
       tracked.refreshFrame();
       const current = tracked.surface.frame;
-      const clamped = clampRectToArea(current, screenArea(screen));
+      const clamped = clampRectToArea(current, screenArea(screen), CLAMP_TOLERANCE_PX);
       if (rectEquals(current, clamped)) {
         tracked.clamped = false;
         continue;

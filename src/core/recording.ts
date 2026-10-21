@@ -229,3 +229,98 @@ export function noteRecord(t: number, text: string): Record<string, unknown> {
 export function footerRecord(at: number, fields: Record<string, unknown>): Record<string, unknown> {
   return { ...fields, kind: 'footer', at };
 }
+
+/** A recording file's identity plus what the prefs window shows about it. */
+export interface RecordingSummary {
+  /** File name, e.g. `rec-20261021-080540.jsonl`. */
+  name: string;
+  /** Local timestamp encoded in the name, or 0 when the name is foreign. */
+  timestamp: number;
+  /** File size in bytes, as reported by the caller. */
+  bytes: number;
+  /** The reason the recording stopped (`user`, `cap`, `disable`), or null. */
+  stopReason: string | null;
+  /** The user's observation note, or ''. */
+  note: string;
+  /** How long the recording ran, in milliseconds, or 0 when unknown. */
+  durationMs: number;
+  /** True when the file has no footer (still recording, or truncated). */
+  open: boolean;
+}
+
+/**
+ * A recording's size, as a short human string. Binary units, because that is
+ * what the file's byte count actually measures: 1536 bytes is "1.5 KiB".
+ */
+export function formatBytes(bytes: number): string {
+  const n = Number.isFinite(bytes) && bytes > 0 ? Math.floor(bytes) : 0;
+  if (n < 1024) return `${n} B`;
+  const units = ['KiB', 'MiB', 'GiB'];
+  let value = n / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+/**
+ * Parse a recording file into the summary the prefs window shows. Only the
+ * header, the note and the footer are read line-by-line, and every line is
+ * tolerated on its own: a truncated or half-written file still yields a usable
+ * summary rather than throwing in the preferences process. Nothing here touches
+ * IO — the caller passes the file's text and byte size.
+ */
+export function summarizeRecording(name: string, bytes: number, text: string): RecordingSummary {
+  const summary: RecordingSummary = {
+    name,
+    timestamp: recordingTimestamp(name) ?? 0,
+    bytes: Number.isFinite(bytes) && bytes > 0 ? Math.floor(bytes) : 0,
+    stopReason: null,
+    note: '',
+    durationMs: 0,
+    open: true,
+  };
+  for (const line of text.split('\n')) {
+    if (line.length === 0) continue;
+    let record: unknown;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof record !== 'object' || record === null) continue;
+    const row = record as Record<string, unknown>;
+    const kind = row['kind'];
+    if (kind === 'note') {
+      summary.note = typeof row['text'] === 'string' ? row['text'] : summary.note;
+    } else if (kind === 'footer') {
+      summary.open = false;
+      summary.note = typeof row['note'] === 'string' ? row['note'] : summary.note;
+      summary.stopReason = typeof row['reason'] === 'string' ? row['reason'] : summary.stopReason;
+      const duration = row['durationMs'];
+      if (typeof duration === 'number' && Number.isFinite(duration)) summary.durationMs = Math.max(0, duration);
+    }
+  }
+  return summary;
+}
+
+/**
+ * Summaries newest first. The name's timestamp is the sort key, so a file whose
+ * name does not parse falls to the end; equal timestamps break on the name, so
+ * the order is stable and the same list is shown every open.
+ */
+export function sortRecordingsNewest(rows: readonly RecordingSummary[]): RecordingSummary[] {
+  return [...rows].sort((a, b) => (b.timestamp - a.timestamp) || b.name.localeCompare(a.name));
+}
+
+/**
+ * Which of `names` the user asked to remove, validated against what is on disk.
+ * Only names that are present are returned, and only ones that look like a
+ * recording, so a stale selection can never delete an unrelated file.
+ */
+export function recordingsToRemove(names: readonly string[], present: readonly string[]): string[] {
+  const available = new Set(present);
+  return names.filter((name) => available.has(name) && RECORDING_NAME.test(name));
+}

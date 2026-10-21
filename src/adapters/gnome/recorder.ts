@@ -74,8 +74,12 @@ export interface RecorderDeps {
   settings: () => Record<string, unknown>;
   /** The live model snapshot for a `state` line. */
   snapshot: () => Record<string, unknown>;
-  /** Called whenever recording starts or stops, so the panel can redraw. */
-  onChanged: () => void;
+  /**
+   * Called whenever recording starts or stops, so the user can see that the
+   * shortcut did something. The status says which: running, stopped with the
+   * observation prompt open, or stopped and closed.
+   */
+  onChanged: (status: RecordingStatus) => void;
   /** Overrides for the bound, used only by the unit tests. */
   platform?: string;
 }
@@ -95,6 +99,13 @@ export interface RecordingStatus {
   promptOpen: boolean;
   /** The note recorded so far (empty until a submit). */
   note: string;
+  /**
+   * True while a user stop is waiting for its note. `promptOpen` is the
+   * *observable* half of the same wait (the prompt is on screen, or would be);
+   * this is the recorder's own state, so the journal can tell a stop that is
+   * still awaiting a note from one whose note has already been saved.
+   */
+  awaitingNote: boolean;
 }
 
 function recordingDir(): string {
@@ -166,7 +177,7 @@ export class Recorder {
     // carries one; the motion tick adds the rest.
     this.lastSampleMs = now.getTime();
     this.writeSnapshot(now.getTime());
-    this.deps.onChanged();
+    this.deps.onChanged(this.describe());
     return this.path;
   }
 
@@ -190,7 +201,7 @@ export class Recorder {
     } else {
       this.writeFooter(reason, '');
     }
-    this.deps.onChanged();
+    this.deps.onChanged(this.describe());
     return path;
   }
 
@@ -207,7 +218,7 @@ export class Recorder {
     this.writeFooter(this.pendingReason ?? 'user', note);
     this.awaitingNote = false;
     this.pendingReason = null;
-    this.deps.onChanged();
+    this.deps.onChanged(this.describe());
     return this.path;
   }
 
@@ -253,6 +264,10 @@ export class Recorder {
       stopReason: this.stopReason,
       promptOpen: this.awaitingNote,
       note: this.lastNote,
+      // Whether a note is still awaited: a user stop defers the footer, so the
+      // lifecycle is `stopped` until the note (or a cancel) resolves it. The
+      // journal needs the distinction to say what the user did.
+      awaitingNote: this.awaitingNote,
     };
   }
 

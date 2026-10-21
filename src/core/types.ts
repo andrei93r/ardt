@@ -157,15 +157,23 @@ export function clamp(value: number, min: number, max: number): number {
  * is larger than it, then moved the smallest distance that puts it fully
  * inside. The moved result has integer coordinates and never a negative width
  * or height; an empty area yields an empty rectangle at the area origin.
+ *
+ * `tolerance` is slack, in pixels, on every side: a rectangle that pokes out
+ * by no more than that counts as inside and is returned unchanged. The
+ * compositor reports a window's *frame* — the toplevel plus its invisible
+ * client-side-decoration border — so a window adrt placed exactly in its slot
+ * is read back a couple of pixels larger. Without the slack every pass would
+ * "correct" that and the window would resize forever.
  */
-export function clampRectToArea(rect: Rect, area: Rect): Rect {
+export function clampRectToArea(rect: Rect, area: Rect, tolerance = 0): Rect {
+  const slack = Number.isFinite(tolerance) && tolerance > 0 ? tolerance : 0;
   const inside =
     rect.width >= 0 &&
     rect.height >= 0 &&
-    rect.x >= area.x &&
-    rect.y >= area.y &&
-    rect.x + rect.width <= area.x + area.width &&
-    rect.y + rect.height <= area.y + area.height;
+    rect.x >= area.x - slack &&
+    rect.y >= area.y - slack &&
+    rect.x + rect.width <= area.x + area.width + slack &&
+    rect.y + rect.height <= area.y + area.height + slack;
   if (inside) return { ...rect };
   const width = Math.max(0, Math.min(rect.width, area.width));
   const height = Math.max(0, Math.min(rect.height, area.height));

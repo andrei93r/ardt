@@ -151,3 +151,18 @@ A165-probe-sections
 #   release gate.
 A168-refusal-ladder-bounded
 A169-focus-after-visible
+
+# reason: the self-heal clamp must not fight a settled layout — the scenario
+#   measures a counter and the geometry over a settle window, so it needs the
+#   full suite's timing rather than the smoke's fast pass.
+A171-clamp-does-not-churn
+
+# reason: a focused helper window must not own the highlight — the scenario
+#   waits for a helper client to take the focus, which the smoke's fast pass
+#   does not guarantee.
+A172-helper-window-no-highlight
+
+# reason: the focus highlight must not be drawn before the model places the
+#   window — the scenario reads the journal's event order and needs a focus
+#   change plus its layout pass, which the smoke's fast pass does not guarantee.
+A173-focus-border-after-placement
