@@ -51,11 +51,11 @@ security-popups | A134-popup-never-tracked
 sticky-windows | A72-sticky-window-untiled
 
 # --------------------------------------------------------- minimize and reap
-minimize-and-reap | A35-minimize-removes-workspace A43-close-last-window-removes-workspace A62-minimize-onto-pair-stays-minimized A93-empty-workspace-reaped A115-look-empty-workspace-is-free A116-escape-clamped-own-workspace
+minimize-and-reap | A35-minimize-removes-workspace A43-close-last-window-removes-workspace A62-minimize-onto-pair-stays-minimized A93-empty-workspace-reaped A115-look-empty-workspace-is-free A116-escape-clamped-own-workspace A174-close-last-visible-reaps-fast
 prune-safety | A51-prune-safety A43-close-last-window-removes-workspace A93-empty-workspace-reaped | full-only: no single prune/reap golden path; the behaviour is asserted through A35/A93 which are full-only.
 
 # -------------------------------------------------------------- workspaces
-workspaces | A12-workspace-switch A14-monitor-change A27-session-unlock A35-minimize-removes-workspace A43-close-last-window-removes-workspace A46-finish-focus-nearest-left-or-right A47-border-hides-during-workspace-switch A54-overview-move-onto-pair A55-overview-move-pair-member A60-stuck-switch-watchdog A64-vertical-workspaces A76-workspace-runaway A93-empty-workspace-reaped A96-reorder-is-honoured-and-an-empty-workspace-is-pruned A97-drop-onto-single-maximised-splits A115-look-empty-workspace-is-free A116-escape-clamped-own-workspace A117-arrival-side-rule A128-switch-suppression-clears
+workspaces | A12-workspace-switch A14-monitor-change A27-session-unlock A35-minimize-removes-workspace A43-close-last-window-removes-workspace A46-finish-focus-nearest-left-or-right A47-border-hides-during-workspace-switch A54-overview-move-onto-pair A55-overview-move-pair-member A60-stuck-switch-watchdog A64-vertical-workspaces A76-workspace-runaway A93-empty-workspace-reaped A96-reorder-is-honoured-and-an-empty-workspace-is-pruned A97-drop-onto-single-maximised-splits A115-look-empty-workspace-is-free A116-escape-clamped-own-workspace A117-arrival-side-rule A128-switch-suppression-clears A174-close-last-visible-reaps-fast
 
 # ---------------------------------------------------------------- overview
 overview | A37-overview-border A47-border-hides-during-workspace-switch A54-overview-move-onto-pair A55-overview-move-pair-member A74-overview-drop-is-a-move A75-overview-patterns A94-overview-drop-onto-full-floats A97-drop-onto-single-maximised-splits
@@ -77,11 +77,11 @@ session-modes | A13-lock-screen A27-session-unlock A28-screen-sharing A123-sessi
 pause-during-sharing | A123-session-modes A140-prefs-options
 
 # --------------------------------------------------------------- highlight
-highlight | A36-close-ghost A37-overview-border A38-indicator-style A47-border-hides-during-workspace-switch A128-switch-suppression-clears A130-occlusion-hides-highlight A131-fullscreen-hides-highlight A135-highlight-below-notifications A170-popup-hides-highlight
+highlight | A36-close-ghost A37-overview-border A38-indicator-style A47-border-hides-during-workspace-switch A128-switch-suppression-clears A130-occlusion-hides-highlight A131-fullscreen-hides-highlight A135-highlight-below-notifications A170-popup-hides-highlight A172-helper-window-no-highlight A173-focus-border-after-placement
 
 # --------------------------------------------------- cursor / clamp / timing
 cursor-centre | A132-cursor-centre A133-cursor-follows-focus
-clamp-to-screen | A136-clamp-to-screen
+clamp-to-screen | A136-clamp-to-screen A171-clamp-does-not-churn
 os-timing-refresh | A29-frame-timing A138-os-timing
 
 # ------------------------------------------------------------ drag preview
@@ -102,7 +102,7 @@ shell-lifecycle | A25-settings-change A26-shell-restart A80-platform-probe | ful
 
 # ------------------------------------------------- diagnostics / scheduling
 diagnostics-journal-perf | A29-frame-timing A30-memory-bounds A63-client-text-bounded A65-logging-and-rotation A66-performance-counters A82-event-journal A103-record-trace-shape A104-queue-depth-returns-to-zero
-recording | A154-recording
+recording | A147-panel A154-recording
 scheduling-burst | A84-burst-single-drain A104-queue-depth-returns-to-zero | full-only: burst coalescing is a correctness backstop asserted by the full suite.
 adaptation | A15-adaptation A52-adaptation-no-bogus-min | full-only: refusal/adaptation timing is exercised by the full suite.
 reconcile-coherence | A33-reconcile-all A48-periodic-retile A56-coherence-sweep A58-lone-window-maximized

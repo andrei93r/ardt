@@ -124,6 +124,10 @@ declare module 'gi://GLib' {
     readonly FileTest: {
       readonly IS_DIR: number;
     };
+    /** `GLib.SeekType`, for resuming a stream at a byte offset. */
+    readonly SeekType: {
+      readonly SET: number;
+    };
     /** `GLib.Variant` constructor and static parser. */
     readonly Variant: {
       new (signature: string, value: unknown): Variant;
@@ -231,6 +235,18 @@ declare module 'gi://Gio' {
     readonly SubprocessLauncher: {
       'new'(flags: number): SubprocessLauncher;
     };
+    /** `Gio.ZlibCompressor` constructor, used for registry backups. */
+    readonly ZlibCompressor: {
+      new (properties: { format: number; level: number }): ZlibCompressor;
+    };
+    /** Compression formats (`Gio.ZlibCompressorFormat`). */
+    readonly ZlibCompressorFormat: {
+      readonly GZIP: number;
+    };
+    /** `Gio.ConverterOutputStream`: a stream through a converter (gzip). */
+    readonly ConverterOutputStream: {
+      'new'(base: FileOutputStream, converter: unknown): ConverterOutputStream;
+    };
   }
 
   /**
@@ -307,6 +323,13 @@ declare module 'gi://Gio' {
     monitor_file(flags: number, cancellable: unknown): FileMonitor;
     enumerate_children(attributes: string, flags: number, cancellable: unknown): FileEnumerator;
     append_to(flags: number, cancellable: unknown): FileOutputStream;
+    replace(
+      etag: string | null,
+      makeBackup: boolean,
+      flags: number,
+      cancellable: unknown,
+    ): FileOutputStream;
+    read(cancellable: unknown): FileInputStream;
     get_path(): string;
     load_contents(cancellable: Cancellable | null): [boolean, Uint8Array, string];
     replace_contents(
@@ -334,6 +357,28 @@ declare module 'gi://Gio' {
     write_all(bytes: Uint8Array, cancellable: unknown): boolean;
     close(cancellable: unknown): boolean;
   }
+
+  /** A read stream (`Gio.FileInputStream`), read in bounded chunks. */
+  export interface FileInputStream {
+    read_bytes(count: number, cancellable: unknown): Bytes;
+    seek(offset: number, type: number, cancellable: unknown): boolean;
+    close(cancellable: unknown): boolean;
+  }
+
+  /** A buffer of bytes (`GLib.Bytes`), as returned by `read_bytes`. */
+  export interface Bytes {
+    get_size(): number;
+    toArray(): Uint8Array;
+  }
+
+  /** A gzip filter stream (`Gio.ConverterOutputStream`). */
+  export interface ConverterOutputStream {
+    write_all(bytes: Uint8Array, cancellable: unknown): boolean;
+    close(cancellable: unknown): boolean;
+  }
+
+  /** A gzip converter (`Gio.ZlibCompressor`), passed to the output filter. */
+  export interface ZlibCompressor {}
 
   /** A file monitor (`Gio.FileMonitor`), read and cancelled by the tail. */
   export interface FileMonitor {
@@ -688,6 +733,15 @@ declare module 'gi://Clutter' {
     readonly ActorAlign: {
       readonly END: number;
     };
+    /**
+     * `Clutter.Orientation`: the direction of a layout. GNOME 48+ removed
+     * `St.BoxLayout`'s `vertical` property, so a vertical box is
+     * `orientation: Clutter.Orientation.VERTICAL`.
+     */
+    readonly Orientation: {
+      readonly HORIZONTAL: number;
+      readonly VERTICAL: number;
+    };
     readonly AnimationMode: {
       readonly EASE_OUT_QUAD: number;
       readonly EASE_IN_OUT_SINE: number;
@@ -744,6 +798,14 @@ declare module 'gi://Clutter' {
     get_stage(): unknown | null;
   }
 
+  /**
+   * A `Clutter.Grab`: the handle `Main.pushModal` returns and `Main.popModal`
+   * takes. It identifies the modal grab; the actor does not.
+   */
+  export interface ClutterGrab {
+    dismiss(): void;
+  }
+
   /** A `Clutter.Backend`: seat plus cursor renderer/tracker probes. */
   export interface Backend {
     get_default_seat?(): Seat | null;
@@ -796,8 +858,12 @@ declare module 'gi://Shell' {
   export default Shell;
 
   /**
-   * The `Shell` static surface the adapters read: keybinding modes, the window
-   * tracker and the modal dialog used by the recording prompt.
+   * The `Shell` static surface the adapters read: the keybinding modes and the
+   * window tracker.
+   *
+   * There is no `Shell.ModalDialog`: the GNOME modal dialog is a JavaScript
+   * module (`resource:///org/gnome/shell/ui/modalDialog.js`), not part of
+   * libshell, so the recording prompt builds its own overlay instead.
    */
   export interface ShellNamespace {
     readonly ActionMode: {
@@ -805,9 +871,6 @@ declare module 'gi://Shell' {
     };
     readonly WindowTracker: {
       get_default(): WindowTracker;
-    };
-    readonly ModalDialog: {
-      new (properties?: Record<string, unknown>): ModalDialog;
     };
   }
 
@@ -819,23 +882,6 @@ declare module 'gi://Shell' {
   /** The shell's window tracker (`Shell.WindowTracker`). */
   export interface WindowTracker {
     get_window_app(win: unknown): App | null;
-  }
-
-  /** One entry of `Shell.ModalDialog.setButtons`. */
-  export interface ModalDialogButton {
-    label: string;
-    action: () => void;
-    key?: unknown;
-    default?: boolean;
-  }
-
-  /** A `Shell.ModalDialog`, built by the recording prompt. */
-  export interface ModalDialog {
-    contentLayout: import('gi://St').Widget;
-    setButtons(buttons: ModalDialogButton[]): void;
-    open(): void;
-    close?(): void;
-    destroy(): void;
   }
 }
 declare module 'gi://GDesktopEnums' {
@@ -1124,6 +1170,8 @@ declare module 'gi://Adw' {
     remove(child: unknown): void;
     title: string;
     description: string;
+    /** Test hook: `A140` tells the recordings list from a plain row set. */
+    adrtRecordings?: boolean;
   }
 
   /** A preferences page (`Adw.PreferencesPage`). */
@@ -1240,8 +1288,21 @@ declare module 'resource:///org/gnome/shell/ui/main.js' {
     refreshRate?: number;
   }
   export function notify(title: string, message: string): void;
-  export function pushModal(actor: unknown): boolean;
-  export function popModal(actor: unknown): boolean;
+  /**
+   * `Main.pushModal` (GNOME 42+): grabs the actor and returns the grab handle.
+   * `Main.popModal` takes that handle, not the actor — passing the actor
+   * throws `incorrect pop` and leaves the modal grab in place.
+   *
+   * `actionMode` is the Shell action mode the grab runs in. The default is
+   * `Shell.ActionMode.NONE`, which filters out *every* keybinding while the
+   * modal is up, so a caller that wants the Shell's own shortcuts to keep
+   * working has to say so.
+   */
+  export function pushModal(
+    actor: unknown,
+    params?: { actionMode?: number },
+  ): import('gi://Clutter').ClutterGrab;
+  export function popModal(grab: import('gi://Clutter').ClutterGrab): void;
 }
 
 declare module 'resource:///org/gnome/shell/ui/quickSettings.js' {

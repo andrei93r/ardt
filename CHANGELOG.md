@@ -6,6 +6,142 @@ code changes, MINOR for features, PATCH for fixes.
 
 ## [Unreleased]
 
+### Faster empty-workspace reaping
+
+- **Bug:** a **workspace that looked empty lingered until the next safety-net
+  scan**. Closing the last visible window left the workspace holding only a
+  minimized window; `switchAwayIfEmpty` counted that as occupied and returned
+  before arming the reaper, so the workspace stayed until the periodic scan —
+  whose backoff reaches a minute. Recording `rec-20261026-233022` caught it: the
+  Chrome pair on workspace 0 closed at 7.6 s, and the workspace was still there
+  when the user came back to it, only being reaped at 12.6 s when the scan tick
+  happened to run. Every close now arms the normal settle prune; the pure
+  `reapPlan` decides whether the workspace is empty, holds only minimized
+  windows (relocated first), or is pinned by a float. A174 pins the close path
+  with the safety-net scan parked at 60 s.
+
+### Recording shortcut and the core determinism gate
+
+- **Bug:** a **tiled pair jittered by a pixel or two, forever**. The compositor
+  reports a window's *frame* — the toplevel plus its invisible
+  client-side-decoration border — so a window adrt placed exactly in its slot
+  is read back one or two pixels larger. The self-heal clamp read that as an
+  off-screen float and resized the window, every pass, forever (the history log
+  showed `clamp_to_screen` → `tile clamp-to-screen` → `resize_retry` in a loop).
+  The clamp now allows a few pixels of slack — the compositor's border — so a
+  window that is really on screen is left alone.
+- **Bug:** the **focus highlight was drawn before the window was in position**.
+  A focus change arrives *before* the model has placed the window, so the rect
+  the focus signal carries is the window's *pre-placement* frame. The border was
+  drawn at that rect the moment focus changed and then snapped to the placement
+  once the layout pass ran — a one-frame highlight in the wrong place, which the
+  bug recorder caught as `border.focus` preceding `model.layout reason=focus`.
+  `BorderState` now holds a `settled` gate: a focus signal marks the window
+  unsettled, and the highlight stays hidden until the model has placed it. The
+  gate is opened by the model's own focus-driven layout pass
+  (`model.layout reason=focus`), by a model state pass when no placement is owed
+  (an enable/disable cycle re-affirms focus with the window already in place, and
+  no compositor signal precedes it), or by the focused window's frame actually
+  moving off the pre-placement rect (`settleIfMoved`, used by the animated-frame
+  and motion-tick paths, which observe current geometry). An unrelated model
+  pass *while a placement is still owed* does not settle the border even if the
+  frame has moved: the compositor can carry a window part-way to its slot, and
+  settling on that intermediate rect is the same early draw by another route —
+  the repeated-focus scenario caught one such draw in eighty episodes.
+  Re-affirming the same focus from a state pass does not re-arm the gate, so the
+  highlight cannot be hidden by a later pass with no focus layout to re-settle
+  it — the enable/disable stress scenario proves it comes back.
+- **Bug:** the **active-window highlight was painted on a loader**. A helper
+  surface that took the focus before the real window arrived (an app's
+  placeholder) is neither a tile nor a modal, so it is not a highlight
+  candidate — but the state path set the border focus on whatever was focused
+  and put the border back after the focus path had refused it. The border now
+  follows the §23 candidate rule on that path too.
+- **Bug:** a **maximized** window flickered between full screen and half width
+  on every pass. Mutter reports a maximized frame including the invisible resize
+  border, so it is a couple of pixels wider and taller than the monitor; the
+  self-heal clamp took that for an off-screen float and resized the window —
+  and the only way to resize a maximized window is to unmaximize it first. The
+  window flashed to its restored size, the next pass maximized it again, and the
+  clamp's retry ladder fought the client in between (a maximized lone window
+  glitching on every motion tick). A maximized window is now left alone by the
+  clamp: its frame belongs to Mutter.
+- **Bug:** the **Record a bug** shortcut (`Super+Shift+R`) never showed the
+  observation prompt, so the description of the bug was never written into the
+  recording: the prompt built its box with `St.BoxLayout({ vertical: true })`,
+  and GNOME 48+ removed that property ("No property vertical on StBoxLayout"),
+  so the prompt failed to build every time. A vertical box is
+  `orientation: Clutter.Orientation.VERTICAL` now, the way GNOME's own
+  `js/ui/dialog.js` does it. A recording that could not ask for its note also
+  left its file without a footer until the next recording started; the failure
+  is now reported and the note closed with none instead.
+- **Bug:** the same prompt could leave the Shell unable to run *any* keybinding.
+  It took a `Main.pushModal` grab without keeping the handle and released it
+  with the actor, so GNOME threw `incorrect pop`, dropped the stage's key focus
+  and could leave the grab held — and a held grab keeps `Main.actionMode` at
+  `NONE`, which filters out every keybinding. The prompt now keeps the grab
+  handle, releases it with `Main.popModal(handle)` and asks for
+  `Shell.ActionMode.NORMAL`, so the Shell's own shortcuts keep working while it
+  is open.
+- **Bug:** the shortcut was silent — a press started a recording with nothing on
+  screen, which reads as a broken shortcut. Starting, stopping and saving a
+  recording now raise a notice.
+- **Tooling:** the core determinism gate (`npm run check:core`) no longer
+  false-positives on a parameter default (`now: Date = new Date()` — the
+  injection seam its `Date.now` rule already allows) nor on a date built from
+  explicit components (`new Date(year, month, …)`). An argument-less
+  `new Date()` outside a seam still fails the gate, and a comment that merely
+  mentions an API no longer does.
+- **Tooling:** the prompt's `Shell.ModalDialog` branch is gone: the GNOME modal
+  dialog is a JavaScript module (`resource:///org/gnome/shell/ui/modalDialog.js`),
+  not a libshell API, so the branch could never run. The overlay is the only
+  mechanism, and the `gi://` declarations now match the GNOME 42+ `pushModal`
+  / `popModal` API.
+- **Tooling:** `npm test` runs the core suite (the script was missing).
+- **Tooling:** the fixed bugs above are now pinned by tests: the core
+  determinism gate is exercised against a throwaway tree
+  (`tests/core/core-purity-gate.test.ts`), the Shell-API facts that broke the
+  prompt are enforced over every adapter source
+  (`tests/core/shell-api-drift.test.ts`), the recording lifecycle is journalled
+  so a silent shortcut is provable (A147), and A171/A172 cover the clamp and the
+  highlight rule live. The clamp's CSD-border and maximized-frame cases cannot be
+  produced by the headless backend — they are the manual check in
+  `tests/MANUAL.md` §14, with their modelled half unit-tested in the core.
+- **Tooling:** A41 (same-app second window splits) no longer depends on Nautilus
+  opening a window per URI: Nautilus 51 is single-instance, so a bare
+  `nautilus trash://` raised the open window and the scenario saw one window and
+  failed for the client's behaviour. It now drives the rule with whichever
+  client really opens a second toplevel (an editor via `--new-window`, Nautilus
+  as fallback) and skips only if every client is single-instance.
+- **Tooling:** the agent run's journal scan no longer warns on a JS error that
+  GNOME Shell itself threw (its stack frames are all
+  `resource:///org/gnome/shell/` — a `windowManager.js` `_syncEnabled` race while
+  a window-destroy transition runs). An error that reaches any other module, or
+  that printed no stack at all, still warns.
+- **Feature:** the preferences window has a **Recordings** page. It lists every
+  bug recording on disk newest first, each with the local time it started, its
+  size, how long it ran and the note you typed — and a remove button per row.
+  A **Delete all** action sits behind a confirmation. The list is rebuilt from
+  disk after every removal, and removal only ever touches a name that is both
+  present and shaped like a recording, so a stale selection cannot delete
+  anything else.
+- **Tooling:** the recordings list's parse/sort/remove decisions are pure
+  (`core/recording.ts`: `formatBytes`, `summarizeRecording`,
+  `sortRecordingsNewest`, `recordingsToRemove`) and unit-tested; the A140
+  constructed-prefs pass seeds two recordings in an isolated data dir and
+  asserts the page lists them newest-first, then clicks a remove button and
+  checks the file is gone and the list rebuilt. The #9 fix is pinned at two
+  levels: the `BorderState` settle-gate unit tests stage the pre-placement frame
+  directly (a fresh focus does not draw; a state pass while a placement is owed
+  does not settle, even on an intermediate frame; a state pass with none owed
+  does, so an enable/disable cycle brings the highlight back), and live scenario
+  A173 cycles focus across a tiled pair and reads the journal's event order,
+  failing if any border is drawn before its focus-driven layout. A173 was
+  probe-verified against the older settle-timing behaviour, where it reports the
+  early draw in a handful of episodes — and it then caught one residual
+  intermediate-frame draw in eighty on the tightened gate. A161's disable/enable
+  stress caught the other half, a gate that could open early but never late.
+
 ### Backlog §3–§4 and gap-list hardening
 
 - **Model decisions:** a `left-half`/`right-half` rule now splits along the
@@ -31,6 +167,12 @@ code changes, MINOR for features, PATCH for fixes.
   painted through an open menu. The highlight now hides while a popup belonging
   to the focused window is mapped (`popup` suppression) and returns when the
   last one closes; A170 covers both transitions.
+- **Gestures:** a swipe whose configured action matches GNOME's own is no longer
+  intercepted. Three- and four-finger workspace switching now reaches GNOME's
+  swipe tracker and follows the fingers; previously the extension swallowed it
+  and called `activate()` only on release, which read as lag while switching
+  workspaces. A custom action on either axis still owns that finger count, and
+  `none` leaves the gesture to GNOME (the master toggle disables gestures).
 - **Backlog §3:** A167 (screen-change single-plan stability), A168 (bounded
   refusal ladder, no top flip) and A169 (focus only after a real frame) verify
   the capture-era symptoms no longer reproduce on this build; §3.3 is fixed and

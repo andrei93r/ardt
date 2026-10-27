@@ -2,20 +2,51 @@
 # Generated with AI for personal use.
 # Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
 # and can maintain this code.
-# A41 Same-app second window splits: opening Trash next to Files' Home window
-# must tile the two, not stack them maximized.
+# A41 Same-app second window splits: opening a second window of the app that
+# already has one must tile the two, not stack the newcomer maximized. The rule
+# is client-independent, so the scenario drives it with whichever available
+# client actually opens a second toplevel (an editor via `--new-window`, with
+# Nautilus as the fallback), and skips only if every client on the box is
+# single-instance and can therefore show nothing.
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 ensure_clean
-spawn_window "nautilus" >/dev/null
-wait_count 1 15 || true
+
+# Prefer a client that reliably opens a second *toplevel*: the rule is about
+# two windows of one app, and a single-instance client cannot show it. Nautilus
+# 51 is single-instance (a bare `nautilus trash://` raises the open window), so
+# the scenario drives the split with an editor that supports `--new-window`,
+# then falls back to Nautilus and skips if that too turns out single-instance.
+open_second_window() { # argv-json
+  adrt SpawnWindow "$1" '{}' >/dev/null 2>&1
+  wait_count 2 15
+}
+
+spawn_window "gnome-text-editor --new-window" >/dev/null
+wait_count 1 20 || true
+wait_settled 15
+
+if open_second_window '["gnome-text-editor","--new-window"]'; then
+  app="the two editor windows"
+else
+  # Both windows must be gone before the fallback, or the count below would be
+  # satisfied by a leftover.
+  ensure_clean
+  spawn_window "nautilus" >/dev/null
+  wait_count 1 15 || true
+  wait_settled 12
+  if open_second_window '["nautilus","--new-window","trash://"]'; then
+    app="the two Files windows"
+  else
+    skip "no available client opened a second toplevel (single-instance clients only raise the existing window); the same-app split rule cannot be observed"
+    ensure_clean
+    summary
+    exit 0
+  fi
+fi
 wait_settled 12
 
-spawn_window "nautilus trash://" >/dev/null
-wait_count 2 15 || true
-wait_settled 12
-
-check_python "the two Files windows are tiled side by side" '
+check_python "$app are tiled side by side" '
 import json, sys
 d = json.load(sys.stdin)
 area = d["monitors"][0].get("workArea") or d["monitors"][0]["geometry"]

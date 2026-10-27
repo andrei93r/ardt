@@ -6,7 +6,14 @@ import { describe, expect, it } from 'vitest';
 
 import type { AdaptationRecord } from '../../src/core/config.js';
 import type { AppEntry } from '../../src/core/appregistry.js';
-import { AppRegistry, REGISTRY_VERSION, sanitizeAdapt } from '../../src/core/appregistry.js';
+import {
+  AppRegistry,
+  MAX_PLACEMENTS_PER_APP,
+  MAX_REGISTRY_BYTES,
+  REGISTRY_VERSION,
+  sanitizeAdapt,
+} from '../../src/core/appregistry.js';
+import { MAX_TEXT } from '../../src/core/text.js';
 import type { Rect } from '../../src/core/types.js';
 
 function rect(x = 0, y = 0, width = 960, height = 1080): Rect {
@@ -45,6 +52,21 @@ describe('observe', () => {
     expect(entry.windowsSeen).toBe(2);
     expect(entry.lastTitle).toBe('Second');
     expect(entry.neverTile).toBe(false);
+  });
+
+  it('clips a pathological title at the edge instead of storing it', () => {
+    const registry = new AppRegistry();
+    const entry = registry.observe({ appId: 'firefox', title: 'x'.repeat(5_000_000) });
+    expect(entry.lastTitle.length).toBeLessThanOrEqual(MAX_TEXT + 1);
+    expect(entry.lastTitle.endsWith('…')).toBe(true);
+    expect(registry.toJSON().entries[0].lastTitle.length).toBeLessThanOrEqual(MAX_TEXT + 1);
+  });
+
+  it('does not double non-ASCII titles across a save/load round-trip', () => {
+    const registry = new AppRegistry();
+    registry.observe({ appId: 'firefox', title: 'Büro – naïve façade 日本語' });
+    const restored = AppRegistry.fromJSON(JSON.parse(JSON.stringify(registry.toJSON())));
+    expect(restored.get('firefox')?.lastTitle).toBe('Büro – naïve façade 日本語');
   });
 });
 
@@ -115,6 +137,39 @@ describe('placements and ordinals', () => {
 
     expect(registry.placementByOrdinal('files', 2)?.instanceId).toBe('win-b');
     expect(registry.placements('files').map((placement) => placement.ordinal)).toEqual([1, 2]);
+  });
+
+  it('caps placements per app, keeping the newest ordinals', () => {
+    const registry = new AppRegistry();
+    const total = MAX_PLACEMENTS_PER_APP + 12;
+    for (let index = 0; index < total; index += 1) {
+      registry.place('files', `win-${index}`, { connector: 'eDP-1', slot: 0, rect: rect() }, index);
+    }
+    const placements = registry.placements('files');
+    expect(placements).toHaveLength(MAX_PLACEMENTS_PER_APP);
+    expect(placements[0].ordinal).toBe(total - MAX_PLACEMENTS_PER_APP + 1);
+    expect(registry.ordinalFor('files', 'win-0')).toBeUndefined();
+  });
+
+  it('drops excess persisted placements on load', () => {
+    const placements: Record<string, unknown> = {};
+    for (let index = 0; index < MAX_PLACEMENTS_PER_APP + 5; index += 1) {
+      placements[`win-${index}`] = {
+        ordinal: index + 1,
+        connector: 'eDP-1',
+        slot: 0,
+        maximized: false,
+        fullscreen: false,
+        rect: rect(),
+      };
+    }
+    const restored = AppRegistry.fromJSON({
+      version: REGISTRY_VERSION,
+      entries: [entry({ placements: placements as never, nextOrdinal: 999 })],
+    });
+    expect(restored.placements('files')).toHaveLength(MAX_PLACEMENTS_PER_APP);
+    expect(restored.ordinalFor('files', 'win-0')).toBeUndefined();
+    expect(restored.ordinalFor('files', `win-${MAX_PLACEMENTS_PER_APP + 4}`)).toBeDefined();
   });
 });
 
@@ -308,5 +363,22 @@ describe('serialization', () => {
     });
     const placed = restored.place('files', 'win-b', { connector: 'eDP-1', slot: 1, rect: rect() });
     expect(placed.ordinal).toBe(8);
+  });
+
+  it('bounds the serialized registry and keeps durable decisions first', () => {
+    const registry = new AppRegistry();
+    registry.setNeverTile('pinned', true, 1);
+    for (let index = 0; index < 400; index += 1) {
+      registry.observe({ appId: `app-${index}`, title: 't'.repeat(MAX_TEXT), now: index + 2 });
+    }
+    const cap = 32 * 1024;
+    const text = JSON.stringify(registry.toJSON(cap));
+    expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(cap);
+    const rounded = JSON.parse(text) as { entries: AppEntry[] };
+    expect(rounded.entries.some((item) => item.appId === 'pinned' && item.neverTile)).toBe(true);
+    // Everything was bounded, so the default cap also holds for the full copy.
+    expect(new TextEncoder().encode(JSON.stringify(registry.toJSON())).length).toBeLessThanOrEqual(
+      MAX_REGISTRY_BYTES,
+    );
   });
 });

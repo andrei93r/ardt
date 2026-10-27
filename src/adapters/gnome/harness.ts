@@ -487,12 +487,19 @@ export class Harness {
   private showRecordingPrompt(): void {
     const prompt = this.deps.recordingPrompt();
     if (prompt === null) return;
-    prompt.show({
+    const shown = prompt.show({
       onSubmit: (text) => this.submitRecordingNote(text),
       onCancel: () => {
         this.deps.recorder()?.cancelNote();
       },
     });
+    if (shown) return;
+    // The prompt could not be built: the note would never arrive, so the
+    // recording is closed with none and the failure is reported. A silent
+    // failure here strands the file with no footer and looks like a broken
+    // shortcut.
+    this.deps.reportError('recording-prompt', new Error('the observation prompt could not be shown'));
+    this.deps.recorder()?.cancelNote();
   }
 
   /**

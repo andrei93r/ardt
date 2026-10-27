@@ -8,6 +8,7 @@
  "scripts": {
   "build": "rm -rf dist && tsc",
   "lint": "eslint src tests",
+  "test": "vitest run tests/core",
   "test:core": "vitest run tests/core",
   "test:core:watch": "vitest tests/core",
   "check:types": "tsc --noEmit -p tsconfig.test.json",

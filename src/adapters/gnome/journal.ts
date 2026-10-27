@@ -21,9 +21,9 @@ import Gio from 'gi://Gio';
 
 import { RingBuffer } from '../../core/ringbuffer.js';
 import { JsonlBuffer, dayString, encodeText, jsonLine } from '../../core/jsonl.js';
-import { partPath, shouldRotate } from '../../core/rotation.js';
+import { LOG_RETENTION_DAYS, partPath, retentionCutoffDay, shouldRotate } from '../../core/rotation.js';
 import { clipPayload } from '../../core/text.js';
-import { dataDir, readText, writeAtomic } from './adapt.js';
+import { dataDir } from './adapt.js';
 
 /** Rotated parts kept per day before the oldest is deleted. */
 const MAX_PARTS = 5;
@@ -76,7 +76,7 @@ export class EventJournal {
   private flushSource: number | null = null;
 
   constructor(
-    private readonly retentionDays = 30,
+    private readonly retentionDays = LOG_RETENTION_DAYS,
     maxBytes = DEFAULT_MAX_BYTES,
   ) {
     this.maxBytes = maxBytes > 0 ? maxBytes : DEFAULT_MAX_BYTES;
@@ -140,8 +140,7 @@ export class EventJournal {
 
   /** Delete day files older than the retention window. */
   prune(now: Date = new Date()): number {
-    const cutoff = new Date(now.getTime() - this.retentionDays * 24 * 60 * 60 * 1000);
-    const cutoffDay = dayString(cutoff);
+    const cutoffDay = retentionCutoffDay(now, this.retentionDays);
     let removed = 0;
     for (const day of this.days()) {
       if (day >= cutoffDay) continue;
@@ -238,13 +237,8 @@ export class EventJournal {
       stream.close(null);
       this.written += batch.count;
     } catch {
-      // Bounded by rotation, so a read-modify-write fallback is acceptable.
-      try {
-        writeAtomic(base, `${readText(base) ?? ''}${batch.text}`);
-        this.written += batch.count;
-      } catch {
-        /* never let logging break the shell */
-      }
+      // Logging must never break the Shell. A bounded batch is dropped rather
+      // than read back into memory for a read-modify-write.
     }
   }
 
@@ -260,12 +254,7 @@ export class EventJournal {
         stream.close(null);
         this.written += 1;
       } catch {
-        try {
-          writeAtomic(path, `${readText(path) ?? ''}${line}\n`);
-          this.written += 1;
-        } catch {
-          /* never let logging break the shell */
-        }
+        /* never let logging break the shell */
       }
     }
   }

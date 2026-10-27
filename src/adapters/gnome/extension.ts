@@ -25,6 +25,7 @@ import type { AdrtRecentError } from '../../core/dump-schema.js';
 import { SessionMachine } from '../../core/session.js';
 import { ChangeLog } from '../../core/undo.js';
 import { NoticeGate, isAlwaysNotice, noticeTitle } from '../../core/notify.js';
+import { LOG_RETENTION_DAYS } from '../../core/rotation.js';
 import { TRIGGERS, buildDispatch } from '../../core/triggers.js';
 import { clamp, Layer } from '../../core/types.js';
 import type { Rect } from '../../core/types.js';
@@ -48,6 +49,7 @@ import { Persistence } from './persistence.js';
 import { Recovery } from './recovery.js';
 import { SignalRegistry, TimeoutRegistry } from './lifecycle.js';
 import { Recorder } from './recorder.js';
+import type { RecordingStatus } from './recorder.js';
 import { RecordingPrompt } from './recording-prompt.js';
 import { RegistryStore } from './registry.js';
 import { WindowSession } from './session.js';
@@ -271,7 +273,7 @@ export default class AdrtExtension extends Extension {
    * in-place restart and letting GNOME disable the half-built extension. */
   private enableWith(started: number): void {
     // The journal comes first: everything below it may log a decision.
-    this.journal = new EventJournal(30);
+    this.journal = new EventJournal(LOG_RETENTION_DAYS);
     this.journal.prune();
     this.injectionEnabled = GLib.getenv('ADRT_INJECT') === '1';
     // Record which build is loaded: on Wayland a logout is needed to reload, so
@@ -309,7 +311,7 @@ export default class AdrtExtension extends Extension {
 
     this.history = new History(
       this.settings.boolean('history-enabled', true),
-      this.settings.int('history-retention-days', 30),
+      this.settings.int('history-retention-days', LOG_RETENTION_DAYS),
       this.settings.boolean('history-daily-folders', false),
       this.settings.int('history-max-bytes', 8388608),
     );
@@ -462,8 +464,10 @@ export default class AdrtExtension extends Extension {
       monitors: () => this.host.screens().map((screen) => ({ ...screen })),
       settings: () => this.settings.snapshot(),
       snapshot: () => this.diagnostics.recordSnapshot(),
-      onChanged: () => undefined,
+      onChanged: (status) => this.onRecordingChanged(status),
     });
+    // Same 31-day window as the logs: recordings are diagnostics, not archives.
+    this.recorder.prune();
     // §22 extension: the observation prompt. Built empty; `show()` is lazy so
     // no Shell chrome exists until a user stop actually needs it.
     this.recordingPrompt = new RecordingPrompt();
@@ -854,6 +858,11 @@ export default class AdrtExtension extends Extension {
       this.syncIndicator();
       return;
     }
+    // §23.3: the rect here is the window's *pre-placement* frame — the focus
+    // signal arrives before the model's focus-driven pass repositions it. The
+    // border therefore stays hidden until the model settles it: the focus-driven
+    // layout opens the gate (`onModelEvent`), as does a state pass that owes no
+    // placement (`onStateChanged`, an enable/disable cycle).
     this.border.setFocus(id, tracked.surface.frame);
     this.refreshPopupSuppression();
     this.startMotionWatch();
@@ -1108,8 +1117,19 @@ export default class AdrtExtension extends Extension {
       this.suppressForWorkspaceSwitch();
     } else {
       this.motionStable += 1;
-      if (this.motionStable >= MOTION_STABLE_SAMPLES && this.border.isSuppressed('workspace-switch')) {
-        this.unsuppressBorder('workspace-switch');
+      if (this.motionStable >= MOTION_STABLE_SAMPLES) {
+        // §23.3: the focus signal's rect is a pre-placement guess, and this is a
+        // fallback for a plain focus move that no layout pass follows. It may
+        // settle only if the focused window's frame has actually moved off that
+        // guess — the pointer being still says nothing about the window, so
+        // settling on stillness alone would draw at the frame the window is
+        // about to leave.
+        const focused = this.session.focused();
+        if (focused !== null && this.border.focusedId === focused.id) {
+          focused.refreshFrame();
+          this.border.settleIfMoved(focused.surface.frame);
+        }
+        if (this.border.isSuppressed('workspace-switch')) this.unsuppressBorder('workspace-switch');
         this.syncIndicator();
       }
     }
@@ -1383,7 +1403,22 @@ export default class AdrtExtension extends Extension {
   private onStateChanged(): void {
     const focused = this.session.focused();
     if (focused !== null) {
-      this.border.setFocus(focused.id, focused.surface.frame);
+      // §23: only a highlight candidate owns the border. A helper surface that
+      // took the focus — a loader or a placeholder that appears before the real
+      // window — is neither a tile nor a modal, so the border must not follow
+      // it: the highlight would be painted on a window that is about to go.
+      // The focus path already refuses it; this path must not put it back.
+      if (getsActiveHighlight(this.session.classify(focused))) {
+        // §23.3: this is a model *state* pass, so its rect is the model's
+        // current geometry and settles the border — unless a focus signal's
+        // placement is still owed, in which case this is an unrelated pass
+        // (route, self-heal, drag) carrying a pre-placement or intermediate
+        // frame; only the focus layout settles for real (`setFocusFromState`
+        // decides; a frame that merely differs is not the placement).
+        this.border.setFocusFromState(focused.id, focused.surface.frame);
+      } else {
+        this.border.clearFocus();
+      }
       this.startMotionWatch();
     }
     this.refreshOcclusion();
@@ -1400,7 +1435,10 @@ export default class AdrtExtension extends Extension {
   private onAnimatedFrame(id: number, rect: Rect): void {
     this.onFrameSample();
     if (this.border.focusedId === id) {
-      this.border.updateRect(rect);
+      // An animated frame is the window's *current* geometry, so the border may
+      // draw here before the model's pass ends (§23.3) — but only once the frame
+      // has actually moved off the pre-placement rect the focus signal carried.
+      this.border.settleIfMoved(rect);
       this.syncIndicator();
     }
   }
@@ -1755,6 +1793,45 @@ export default class AdrtExtension extends Extension {
     return true;
   }
 
+  /**
+   * §22 extension: the recording shortcut has no panel to redraw any more, so
+   * this notice is the only feedback the user gets. A shortcut that changes
+   * nothing on screen reads as a broken shortcut, and the recording is the
+   * user's evidence for a bug report — it has to be visible that it runs.
+   */
+  private onRecordingChanged(status: RecordingStatus): void {
+    // The journal is the record of what adrt did, so the recording lifecycle
+    // goes in it: a shortcut that changes nothing on screen is only provable
+    // from the log.
+    this.journal.record('recorder', 'recording', {
+      // `started` → running, `stopped` → the observation prompt is open and
+      // waiting for a note, `saved` → the note (or a cancel) closed the file,
+      // `ended` → it closed by itself (the cap) or by `disable()`.
+      state: status.recording ? 'started' : status.awaitingNote ? 'stopped' : status.stopReason === 'user' ? 'saved' : 'ended',
+      path: status.path,
+      reason: status.stopReason,
+    });
+    if (status.recording) {
+      const accelerator = this.settings.strv('kb-recording-toggle')[0] ?? '';
+      notify(
+        'Adrt',
+        accelerator.length > 0
+          ? `Recording started — press ${accelerator} again to stop it.`
+          : 'Recording started.',
+      );
+      return;
+    }
+    if (status.promptOpen) {
+      notify('Adrt', 'Recording stopped — describe what you saw.');
+      return;
+    }
+    if (status.stopReason === 'cap') {
+      notify('Adrt', 'Recording stopped — it reached its time limit.');
+      return;
+    }
+    notify('Adrt', 'Recording saved.');
+  }
+
   /** Harness trigger: exercise the catalogue and the gate end to end. */
   /**
    * Border suppression is a transient state that a loaded test can miss by
@@ -1781,6 +1858,11 @@ export default class AdrtExtension extends Extension {
   /** Journal one model-level event for the replayable trace. */
   private onModelEvent(event: string, fields: Record<string, unknown>): void {
     this.journal.record('model', event, fields);
+    // §23.3: the focus-driven layout pass is the model's statement that the
+    // focused window is now where it belongs, so the border may draw. Every
+    // other pass leaves the border as it is: if it was unsettled, it stays
+    // unsettled until the focus pass or a real frame movement settles it.
+    if (event === 'layout' && fields.reason === 'focus') this.border.settle();
   }
 
   // ----------------------------------------------------- input injection

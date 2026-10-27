@@ -12,6 +12,7 @@ import {
   DEFAULT_MAX_MS,
   eventRecord,
   footerRecord,
+  formatBytes,
   headerRecord,
   MAX_CAP_SECONDS,
   MAX_RECORDING_FILES,
@@ -19,12 +20,18 @@ import {
   NOTE_MAX_LENGTH,
   normalizeNote,
   noteRecord,
+  RECORDING_RETENTION_DAYS,
   recordingFileName,
+  recordingTimestamp,
+  recordingsExpired,
   recordingsToDelete,
+  recordingsToRemove,
   sampleDue,
   SNAPSHOT_INTERVAL_MS,
   snapshotKey,
+  sortRecordingsNewest,
   stateRecord,
+  summarizeRecording,
 } from '../../src/core/recording.js';
 
 describe('recordingFileName', () => {
@@ -106,6 +113,28 @@ describe('recordingsToDelete', () => {
   });
 });
 
+describe('recording expiry', () => {
+  it('reads the local timestamp back from a recording name', () => {
+    const date = new Date(2026, 9, 2, 21, 31, 2);
+    expect(recordingTimestamp('rec-20261002-213102.jsonl')).toBe(date.getTime());
+    expect(recordingTimestamp('rec-20261002-213102-3.jsonl')).toBe(date.getTime());
+    expect(recordingTimestamp('other.jsonl')).toBeNull();
+    expect(recordingTimestamp('rec-20261301-000000.jsonl')).toBeNull();
+  });
+
+  it('expires recordings older than 31 days', () => {
+    const now = new Date(2026, 9, 18, 12, 0, 0);
+    const names = [
+      'rec-20260917-120000.jsonl', // exactly 31 days: keep
+      'rec-20260916-115959.jsonl', // one second beyond: delete
+      'rec-20261018-120000.jsonl', // today: keep
+      'foreign.jsonl',
+    ];
+    expect(RECORDING_RETENTION_DAYS).toBe(31);
+    expect(recordingsExpired(names, now)).toEqual(['rec-20260916-115959.jsonl']);
+  });
+});
+
 describe('sampleDue', () => {
   it('samples immediately, then at most once per interval', () => {
     expect(sampleDue(0, 1_000)).toBe(true);
@@ -155,6 +184,101 @@ describe('line formats', () => {
     const footer = footerRecord(12, { reason: 'user', note: 'drag did not land' });
     expect(note).toEqual({ kind: 'note', t: 11, text: 'drag did not land' });
     expect(footer.note).toBe(note.text);
+  });
+});
+
+describe('formatBytes', () => {
+  it('uses binary units', () => {
+    expect(formatBytes(0)).toBe('0 B');
+    expect(formatBytes(512)).toBe('512 B');
+    expect(formatBytes(1024)).toBe('1.0 KiB');
+    expect(formatBytes(1536)).toBe('1.5 KiB');
+    expect(formatBytes(1024 * 1024)).toBe('1.0 MiB');
+    expect(formatBytes(3 * 1024 * 1024)).toBe('3.0 MiB');
+    expect(formatBytes(20 * 1024 * 1024)).toBe('20 MiB');
+  });
+
+  it('treats a non-finite or negative size as empty', () => {
+    expect(formatBytes(-1)).toBe('0 B');
+    expect(formatBytes(Number.NaN)).toBe('0 B');
+    expect(formatBytes(Number.POSITIVE_INFINITY)).toBe('0 B');
+  });
+});
+
+describe('summarizeRecording', () => {
+  const lines = [
+    JSON.stringify(headerRecord(1, { platform: 'gnome' })),
+    JSON.stringify(eventRecord(2, { source: 'host', event: 'focus-changed' })),
+    JSON.stringify(noteRecord(3, 'the split snapped back')),
+    JSON.stringify(footerRecord(4, { reason: 'user', durationMs: 4573, note: 'the split snapped back' })),
+  ];
+
+  it('reads the timestamp, note, stop reason and duration', () => {
+    const summary = summarizeRecording('rec-20261021-080540.jsonl', 165901, lines.join('\n') + '\n');
+    expect(summary.name).toBe('rec-20261021-080540.jsonl');
+    expect(summary.timestamp).toBe(recordingTimestamp('rec-20261021-080540.jsonl'));
+    expect(summary.bytes).toBe(165901);
+    expect(summary.note).toBe('the split snapped back');
+    expect(summary.stopReason).toBe('user');
+    expect(summary.durationMs).toBe(4573);
+    expect(summary.open).toBe(false);
+  });
+
+  it('marks a file without a footer as open (still recording or truncated)', () => {
+    const summary = summarizeRecording('rec-20261021-080540.jsonl', 10, lines.slice(0, 2).join('\n'));
+    expect(summary.open).toBe(true);
+    expect(summary.stopReason).toBeNull();
+    // The note line alone is enough, even without the footer copy.
+    const partial = summarizeRecording('rec-20261021-080540.jsonl', 10, lines.slice(0, 3).join('\n'));
+    expect(partial.open).toBe(true);
+    expect(partial.note).toBe('the split snapped back');
+  });
+
+  it('tolerates a truncated or foreign line instead of throwing', () => {
+    const text = lines[0] + '\n{"kind":"foote';
+    const summary = summarizeRecording('rec-20261021-080540.jsonl', 10, text);
+    expect(summary.open).toBe(true);
+    expect(summary.timestamp).toBeGreaterThan(0);
+  });
+
+  it('reports a foreign name with a zero timestamp', () => {
+    const summary = summarizeRecording('not-a-recording.jsonl', 4, '');
+    expect(summary.timestamp).toBe(0);
+    expect(summary.open).toBe(true);
+  });
+});
+
+describe('sortRecordingsNewest', () => {
+  it('orders by the name timestamp, newest first', () => {
+    const rows = [
+      summarizeRecording('rec-20260101-000000.jsonl', 1, ''),
+      summarizeRecording('rec-20260301-000000.jsonl', 1, ''),
+      summarizeRecording('rec-20260201-000000.jsonl', 1, ''),
+    ];
+    expect(sortRecordingsNewest(rows).map((r) => r.name)).toEqual([
+      'rec-20260301-000000.jsonl',
+      'rec-20260201-000000.jsonl',
+      'rec-20260101-000000.jsonl',
+    ]);
+  });
+
+  it('falls back to the name for a foreign file and does not mutate the input', () => {
+    const rows = [summarizeRecording('rec-20260101-000000.jsonl', 1, ''), summarizeRecording('zzz.jsonl', 1, '')];
+    const sorted = sortRecordingsNewest(rows);
+    expect(sorted[0].name).toBe('rec-20260101-000000.jsonl');
+    expect(rows.map((r) => r.name)).toEqual(['rec-20260101-000000.jsonl', 'zzz.jsonl']);
+  });
+});
+
+describe('recordingsToRemove', () => {
+  it('returns only a present, well-formed recording name', () => {
+    const present = ['rec-20260101-000000.jsonl', 'rec-20260102-000000.jsonl', 'notes.txt'];
+    expect(recordingsToRemove(['rec-20260101-000000.jsonl'], present)).toEqual(['rec-20260101-000000.jsonl']);
+    // A stale name that is no longer on disk, or is not a recording, is dropped.
+    expect(recordingsToRemove(['rec-20260101-000000.jsonl', 'gone.jsonl', 'notes.txt'], present)).toEqual([
+      'rec-20260101-000000.jsonl',
+    ]);
+    expect(recordingsToRemove([], present)).toEqual([]);
   });
 });
 

@@ -23,6 +23,34 @@ export function clipText(value: unknown, max = MAX_TEXT): string {
 }
 
 /**
+ * UTF-8 byte length of a string, counted without allocating an encoded copy.
+ * Used to gate a serialized file against a byte cap before writing it; JS
+ * `string.length` counts UTF-16 code units, which understates non-ASCII text.
+ */
+export function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+      const low = text.charCodeAt(index + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        bytes += 4;
+        index += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+/**
  * Deep-clip the string values of a history payload, so one pathological client
  * string (or a corrupted one that grows) can never produce a giant log line.
  */

@@ -38,6 +38,7 @@ import {
   normalizeNote,
   noteRecord,
   recordingFileName,
+  recordingsExpired,
   recordingsToDelete,
   sampleDue,
   snapshotKey,
@@ -45,7 +46,7 @@ import {
 } from '../../core/recording.js';
 import type { StopReason } from '../../core/recording.js';
 import { encodeText, jsonLine } from '../../core/jsonl.js';
-import { dataDir, readText, writeAtomic } from './adapt.js';
+import { dataDir } from './adapt.js';
 
 /** A journal entry, as much of it as the sink needs to identify and timestamp. */
 interface JournalLike {
@@ -73,8 +74,12 @@ export interface RecorderDeps {
   settings: () => Record<string, unknown>;
   /** The live model snapshot for a `state` line. */
   snapshot: () => Record<string, unknown>;
-  /** Called whenever recording starts or stops, so the panel can redraw. */
-  onChanged: () => void;
+  /**
+   * Called whenever recording starts or stops, so the user can see that the
+   * shortcut did something. The status says which: running, stopped with the
+   * observation prompt open, or stopped and closed.
+   */
+  onChanged: (status: RecordingStatus) => void;
   /** Overrides for the bound, used only by the unit tests. */
   platform?: string;
 }
@@ -94,6 +99,13 @@ export interface RecordingStatus {
   promptOpen: boolean;
   /** The note recorded so far (empty until a submit). */
   note: string;
+  /**
+   * True while a user stop is waiting for its note. `promptOpen` is the
+   * *observable* half of the same wait (the prompt is on screen, or would be);
+   * this is the recorder's own state, so the journal can tell a stop that is
+   * still awaiting a note from one whose note has already been saved.
+   */
+  awaitingNote: boolean;
 }
 
 function recordingDir(): string {
@@ -165,7 +177,7 @@ export class Recorder {
     // carries one; the motion tick adds the rest.
     this.lastSampleMs = now.getTime();
     this.writeSnapshot(now.getTime());
-    this.deps.onChanged();
+    this.deps.onChanged(this.describe());
     return this.path;
   }
 
@@ -189,7 +201,7 @@ export class Recorder {
     } else {
       this.writeFooter(reason, '');
     }
-    this.deps.onChanged();
+    this.deps.onChanged(this.describe());
     return path;
   }
 
@@ -206,7 +218,7 @@ export class Recorder {
     this.writeFooter(this.pendingReason ?? 'user', note);
     this.awaitingNote = false;
     this.pendingReason = null;
-    this.deps.onChanged();
+    this.deps.onChanged(this.describe());
     return this.path;
   }
 
@@ -252,6 +264,10 @@ export class Recorder {
       stopReason: this.stopReason,
       promptOpen: this.awaitingNote,
       note: this.lastNote,
+      // Whether a note is still awaited: a user stop defers the footer, so the
+      // lifecycle is `stopped` until the note (or a cancel) resolves it. The
+      // journal needs the distinction to say what the user did.
+      awaitingNote: this.awaitingNote,
     };
   }
 
@@ -363,6 +379,33 @@ export class Recorder {
     }
   }
 
+  /** Delete recordings older than the retention window (31 days). */
+  prune(now: Date = new Date()): number {
+    let removed = 0;
+    try {
+      const dir = recordingDir();
+      const enumerator = Gio.File.new_for_path(dir).enumerate_children(
+        'standard::name',
+        Gio.FileQueryInfoFlags.NONE,
+        null,
+      );
+      const names: string[] = [];
+      let info: FileInfoLike | null;
+      while ((info = enumerator.next_file(null)) !== null) names.push(info.get_name());
+      for (const name of recordingsExpired(names, now)) {
+        try {
+          Gio.File.new_for_path(`${dir}/${name}`).delete(null);
+          removed += 1;
+        } catch {
+          /* already gone */
+        }
+      }
+    } catch {
+      /* a directory that cannot be listed must not stop logging */
+    }
+    return removed;
+  }
+
   /** Append one JSON line and account its size. */
   private writeLine(record: Record<string, unknown>): void {
     if (this.path === null) return;
@@ -379,12 +422,8 @@ export class Recorder {
       stream.close(null);
       this.bytes += size;
     } catch {
-      try {
-        writeAtomic(this.path, `${readText(this.path) ?? ''}${line}`);
-        this.bytes += size;
-      } catch {
-        /* never let recording break the shell */
-      }
+      // Recording is diagnostic: never let it break the Shell, and never read
+      // the whole file back to append one line.
     }
   }
 }

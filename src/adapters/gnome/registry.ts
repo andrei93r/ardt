@@ -15,11 +15,13 @@
  */
 
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 
 import type { AppEntry, AppPlacement, AppRegistryData, AdaptRecord, MigrationReport, PlacementInput } from '../../core/appregistry.js';
-import { AppRegistry, DEFAULT_TTL_MS } from '../../core/appregistry.js';
+import { AppRegistry, DEFAULT_TTL_MS, MAX_REGISTRY_BYTES } from '../../core/appregistry.js';
 import * as identity from '../../core/identity.js';
-import { dataDir, readJson, writeAtomic } from './adapt.js';
+import { quarantineFileName, registryFileAction } from '../../core/registry-file.js';
+import { dataDir, fileSize, gzipFile, readText, readJson, writeAtomic } from './adapt.js';
 
 const SAVE_DEBOUNCE_MS = 2000;
 const TRUSTED_OBSERVATIONS = 2;
@@ -60,11 +62,46 @@ export class RegistryStore {
 
   // ------------------------------------------------------------------ state
 
+  /**
+   * Read the registry, refusing to ever materialize an oversized file. The
+   * size gate runs before `readText`/`JSON.parse`: a 201 MB file full of one
+   * exponential mojibake title used to OOM the Shell during `enable()`.
+   * Oversized or unparseable files are gzipped into `backups/` and replaced by
+   * an empty in-memory registry, so startup always proceeds.
+   */
   load(): void {
-    const raw = readJson(this.file);
-    if (raw === null || typeof raw !== 'object') return;
+    const path = this.file;
+    const size = fileSize(path);
+    const action = registryFileAction(size, MAX_REGISTRY_BYTES);
+    if (action === 'missing') return;
+    if (action === 'quarantine') {
+      console.error(
+        `[adrt] registry.json is ${size ?? 'unknown'} bytes (cap ${MAX_REGISTRY_BYTES}); ` +
+          'quarantining it and starting with an empty registry',
+      );
+      this.quarantine('oversize');
+      this.registry = new AppRegistry({ ttlMs: this.ttlMs });
+      return;
+    }
+
+    const text = readText(path);
+    if (text === null) return;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch (e) {
+      console.error(`[adrt] registry.json is corrupt: ${(e as Error).message}; quarantining it`);
+      this.quarantine('corrupt');
+      this.registry = new AppRegistry({ ttlMs: this.ttlMs });
+      return;
+    }
+    if (raw === null || typeof raw !== 'object') {
+      this.quarantine('corrupt');
+      this.registry = new AppRegistry({ ttlMs: this.ttlMs });
+      return;
+    }
+
     const data = raw as Partial<RegistryFile>;
-    if (!Array.isArray(data.entries)) return;
     const version = typeof data.version === 'number' ? data.version : 0;
     this.loadedVersion = version;
     if (version > 1) {
@@ -72,10 +109,41 @@ export class RegistryStore {
       // rewriting it in an older shape (no destructive downgrade).
       return;
     }
+    if (!Array.isArray(data.entries)) {
+      this.quarantine('corrupt');
+      this.registry = new AppRegistry({ ttlMs: this.ttlMs });
+      return;
+    }
     this.registry = AppRegistry.fromJSON(
       { version: 1, entries: data.entries as never[] },
       { ttlMs: this.ttlMs },
     );
+  }
+
+  /**
+   * Move a bad registry out of the way. Compression streams the original, so
+   * quarantining a 200 MB file costs one chunk of memory; if gzip is
+   * unavailable the file is moved as-is instead. Either way the live path is
+   * gone before the next startup.
+   */
+  private quarantine(reason: 'oversize' | 'corrupt'): void {
+    const source = Gio.File.new_for_path(this.file);
+    const backups = `${dataDir()}/backups`;
+    GLib.mkdir_with_parents(backups, 0o755);
+    const target = `${backups}/${quarantineFileName(reason, new Date())}`;
+    try {
+      gzipFile(this.file, target);
+      source.delete(null);
+      return;
+    } catch (e) {
+      console.error(`[adrt] could not gzip ${this.file}: ${(e as Error).message}`);
+    }
+    try {
+      const fallback = Gio.File.new_for_path(target.replace(/\.gz$/, ''));
+      source.move(fallback, Gio.FileCopyFlags.OVERWRITE, null, null);
+    } catch (e) {
+      console.error(`[adrt] could not quarantine ${this.file}: ${(e as Error).message}`);
+    }
   }
 
   /**
@@ -346,7 +414,11 @@ export class RegistryStore {
     if (this.loadedVersion > 1) return; // never overwrite a newer file
     this.dirty = false;
     try {
-      writeAtomic(this.file, JSON.stringify(this.registry.toJSON()));
+      // Bound the serialized copy (4 MB by default): the live object may keep
+      // more entries this session, but the file startup parses never grows
+      // unbounded. Durable neverTile entries are kept first.
+      const text = JSON.stringify(this.registry.toJSON(MAX_REGISTRY_BYTES));
+      writeAtomic(this.file, text);
     } catch (error) {
       // The write runs inside a GLib timeout; a throw would escape into the
       // main loop. Re-mark dirty so the state is not lost, report, and retry on

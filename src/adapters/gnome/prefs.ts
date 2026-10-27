@@ -15,6 +15,7 @@
 
 import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 import type {
   AdwActionRow,
@@ -50,10 +51,18 @@ import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/
 
 import { _, loadTranslations } from './i18n.js';
 import { RegistryStore } from './registry.js';
+import { dataDir, fileSize, readText } from './adapt.js';
 import { TILE_MODES, validateRule } from '../../core/rules.js';
 import type { TileMode } from '../../core/rules.js';
 import { AppRegistry, DEFAULT_TTL_MS, REGISTRY_VERSION } from '../../core/appregistry.js';
 import type { AppEntry, AppRegistryData } from '../../core/appregistry.js';
+import {
+  formatBytes,
+  recordingsToRemove,
+  sortRecordingsNewest,
+  summarizeRecording,
+} from '../../core/recording.js';
+import type { RecordingSummary } from '../../core/recording.js';
 import type { SettingKey } from '../../core/settings-descriptor.js';
 
 /** The widget a settings row is rendered with. */
@@ -360,7 +369,7 @@ export const PREFERENCES_LAYOUT: readonly PageSpec[] = [
         description: _('An append-only log of what adrt did, written as JSONL files.'),
         rows: [
           { key: 'history-enabled', kind: 'switch', title: _('Record event history') },
-          { key: 'history-retention-days', kind: 'spin', title: _('Keep history for'), subtitle: _('Days.'), lower: 1, upper: 3650 },
+          { key: 'history-retention-days', kind: 'spin', title: _('Keep history for'), subtitle: _('Days (31 by default).'), lower: 1, upper: 3650 },
           { key: 'history-daily-folders', kind: 'switch', title: _('Store each day in its own folder') },
           { key: 'history-max-bytes', kind: 'spin', title: _('Rotate each file at'), subtitle: _('Megabytes.'), lower: 1, upper: 256, scale: 1048576 },
           { key: 'log-workspace-reorder', kind: 'switch', title: _('Log workspace reorders') },
@@ -438,6 +447,108 @@ interface MergeResult {
   added: number;
 }
 
+/** The recordings directory: `$XDG_DATA_HOME/adrt/recordings`, created on demand. */
+function recordingsDir(): string {
+  const dir = `${dataDir()}/recordings`;
+  GLib.mkdir_with_parents(dir, 0o755);
+  return dir;
+}
+
+/** The one field of a `Gio.FileInfo` the recording listing reads. */
+interface FileInfoLike {
+  get_name(): string;
+  get_size(): number;
+}
+
+/**
+ * Every recording on disk with its summary, newest first. IO lives here, not in
+ * core: the pure parse (`summarizeRecording`) is handed the file's text. A file
+ * that cannot be read is still listed, with whatever the name and size say, so
+ * a locked or half-written recording never disappears from the window.
+ */
+function listRecordings(): RecordingSummary[] {
+  const dir = recordingsDir();
+  const rows: RecordingSummary[] = [];
+  try {
+    const enumerator = Gio.File.new_for_path(dir).enumerate_children(
+      'standard::name,standard::size',
+      Gio.FileQueryInfoFlags.NONE,
+      null,
+    );
+    let info: FileInfoLike | null;
+    while ((info = enumerator.next_file(null)) !== null) {
+      const name = info.get_name();
+      if (!/^rec-\d{8}-\d{6}(-\d+)?\.jsonl$/.test(name)) continue;
+      const path = `${dir}/${name}`;
+      const text = readText(path) ?? '';
+      const size = Number.isFinite(info.get_size()) ? info.get_size() : (fileSize(path) ?? 0);
+      rows.push(summarizeRecording(name, size, text));
+    }
+  } catch {
+    /* no directory yet, or it cannot be listed: an empty list is honest */
+  }
+  return sortRecordingsNewest(rows);
+}
+
+/**
+ * Delete the named recordings, returning how many were removed. Only names that
+ * are still on disk and look like a recording are touched, so a stale selection
+ * can never delete anything else.
+ */
+function deleteRecordings(names: readonly string[]): number {
+  const dir = recordingsDir();
+  const present: string[] = [];
+  try {
+    const enumerator = Gio.File.new_for_path(dir).enumerate_children(
+      'standard::name',
+      Gio.FileQueryInfoFlags.NONE,
+      null,
+    );
+    let info: FileInfoLike | null;
+    while ((info = enumerator.next_file(null)) !== null) present.push(info.get_name());
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const name of recordingsToRemove(names, present)) {
+    try {
+      Gio.File.new_for_path(`${dir}/${name}`).delete(null);
+      removed += 1;
+    } catch {
+      /* already gone */
+    }
+  }
+  return removed;
+}
+
+/**
+ * A recording's row title: the local time it started. The name carries the
+ * timestamp, so a recording is findable by the moment the user saw the bug.
+ */
+function recordingTitle(recording: RecordingSummary): string {
+  if (recording.timestamp <= 0) return recording.name;
+  const date = new Date(recording.timestamp);
+  const pad = (n: number): string => (n < 10 ? `0${n}` : `${n}`);
+  const stamp =
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return recording.open ? `${stamp} — ${_('recording…')}` : stamp;
+}
+
+/**
+ * A recording's row subtitle: its size and what stops it — the stop reason when
+ * it closed, or the note text the user typed. The note wins, because that is
+ * what the user wrote it for.
+ */
+function recordingSubtitle(recording: RecordingSummary): string {
+  const parts: string[] = [formatBytes(recording.bytes)];
+  if (recording.durationMs > 0) parts.push(`${(recording.durationMs / 1000).toFixed(1)}s`);
+  if (recording.note.length > 0) parts.push(recording.note);
+  else if (recording.open) parts.push(_('still recording'));
+  else if (recording.stopReason !== null) parts.push(recording.stopReason);
+  return parts.join(' · ');
+}
+
 /** Await an `Adw.AlertDialog`, resolving with the chosen response id. */
 function chooseDialog(dialog: AdwAlertDialog, parent: GtkWindow | null): Promise<string> {
   return new Promise<string>((resolve, reject) => {
@@ -490,6 +601,7 @@ export default class AdrtPreferences extends ExtensionPreferences {
     // The rule editor is not a settings row, but lives on the Rules page.
     pages.get(_('Rules'))?.add(this.rulesEditorGroup(settings));
     window.add(this.appsPage(settings, window));
+    window.add(this.recordingsPage(window));
     window.add(this.aboutPage(settings));
   }
 
@@ -1186,6 +1298,104 @@ export default class AdrtPreferences extends ExtensionPreferences {
       added += 1;
     }
     return { data: { version: REGISTRY_VERSION, entries }, added };
+  }
+
+  /**
+   * §22: the bug recordings. One row per `rec-YYYYMMDD-HHMMSS.jsonl` under
+   * `$XDG_DATA_HOME/adrt/recordings`, newest first, with its date, size and the
+   * observation note. Each row has a remove button; the group has a "Delete
+   * all" action behind a confirmation. The list is rebuilt from disk after every
+   * removal, so what is shown is what is there.
+   */
+  private recordingsPage(window: AdwPreferencesWindow): AdwPreferencesPage {
+    const page: AdwPreferencesPage = new Adw.PreferencesPage({ title: _('Recordings'), icon_name: 'media-record-symbolic' });
+    const group: AdwPreferencesGroup = new Adw.PreferencesGroup({
+      title: _('Bug recordings'),
+      description: _(
+        'Short recordings you captured with the bug shortcut. The newest are kept automatically; remove one once you have reported it.',
+      ),
+    });
+    // Test hook: A140 tells the recordings list from a plain row set.
+    group.adrtRecordings = true;
+    page.add(group);
+
+    let rows: AdwPreferencesRow[] = [];
+    const rebuild = (): void => {
+      for (const row of rows) group.remove(row);
+      rows = [];
+      const recordings = listRecordings();
+      if (recordings.length === 0) {
+        const empty: AdwActionRow = new Adw.ActionRow({
+          title: _('No recordings'),
+          subtitle: _('Press the bug shortcut while adrt is running to capture one.'),
+        });
+        group.add(empty);
+        rows.push(empty);
+        return;
+      }
+      for (const recording of recordings) {
+        const row: AdwActionRow = new Adw.ActionRow({
+          title: recordingTitle(recording),
+          subtitle: recordingSubtitle(recording),
+        });
+        const button: GtkButton = new Gtk.Button({
+          icon_name: 'user-trash-symbolic',
+          valign: Gtk.Align.CENTER,
+          tooltip_text: _('Remove this recording'),
+        });
+        button.connect('clicked', () => {
+          deleteRecordings([recording.name]);
+          rebuild();
+        });
+        row.add_suffix(button);
+        group.add(row);
+        rows.push(row);
+      }
+    };
+
+    const actions: AdwPreferencesGroup = new Adw.PreferencesGroup({ title: _('Manage') });
+    const clearRow: AdwActionRow = new Adw.ActionRow({
+      title: _('Delete all'),
+      subtitle: _('Remove every recording on disk.'),
+    });
+    const clearButton: GtkButton = new Gtk.Button({ label: _('Delete all'), valign: Gtk.Align.CENTER });
+    clearButton.add_css_class('flat');
+    clearButton.connect('clicked', () => {
+      void this.clearRecordings(window, () => rebuild());
+    });
+    clearRow.add_suffix(clearButton);
+    actions.add(clearRow);
+    page.add(actions);
+
+    rebuild();
+    return page;
+  }
+
+  /**
+   * §22: delete every recording, but confirm first. The dialog is built on
+   * demand, so constructing the page headlessly never opens one. Cancel is the
+   * default and the close response, so Escape or dismissing deletes nothing.
+   */
+  private async clearRecordings(window: AdwPreferencesWindow, onCleared: () => void): Promise<void> {
+    const names = listRecordings().map((recording) => recording.name);
+    if (names.length === 0) return;
+    const dialog: AdwAlertDialog = new Adw.AlertDialog();
+    dialog.set_heading(_('Delete every recording?'));
+    dialog.set_body(_('This removes all bug recordings on disk. It cannot be undone.'));
+    dialog.add_response('cancel', _('Cancel'));
+    dialog.add_response('clear', _('Delete all'));
+    dialog.set_response_appearance('clear', Adw.ResponseAppearance.DESTRUCTIVE);
+    dialog.set_default_response('cancel');
+    dialog.set_close_response('cancel');
+    let response: string;
+    try {
+      response = await chooseDialog(dialog, window);
+    } catch {
+      return;
+    }
+    if (response !== 'clear') return;
+    deleteRecordings(names);
+    onCleared();
   }
 
   private aboutPage(settings: GioSettings): AdwPreferencesPage {

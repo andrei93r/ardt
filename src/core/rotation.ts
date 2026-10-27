@@ -8,6 +8,35 @@
  * and crashed the Shell).
  */
 
+/** Exactly this many days of extension logs are kept. */
+export const LOG_RETENTION_DAYS = 31;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** The `YYYY-MM-DD` day before which files are expired, given a retention window. */
+export function retentionCutoffDay(
+  now: Date = new Date(),
+  retentionDays: number = LOG_RETENTION_DAYS,
+): string {
+  const days = Number.isFinite(retentionDays) && retentionDays > 0 ? Math.floor(retentionDays) : LOG_RETENTION_DAYS;
+  const cutoff = new Date(now.getTime() - days * MS_PER_DAY);
+  const year = cutoff.getFullYear();
+  const month = `${cutoff.getMonth() + 1}`.padStart(2, '0');
+  const day = `${cutoff.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Whether a day file is older than the retention window. The cutoff day itself
+ * is kept; a file dated before it is expired. Day strings sort chronologically.
+ */
+export function isDayExpired(
+  day: string,
+  now: Date = new Date(),
+  retentionDays: number = LOG_RETENTION_DAYS,
+): boolean {
+  return day < retentionCutoffDay(now, retentionDays);
+}
+
 /** Whether the current part has grown to the rotation threshold. */
 export function shouldRotate(currentBytes: number, maxBytes: number): boolean {
   if (!Number.isFinite(maxBytes) || maxBytes <= 0) return false;

@@ -613,7 +613,7 @@ never debug-gated (the deduplication and rate limits still apply).
 
 ## 22. Journal and instrumentation
 
-- The journal is **append-only, one file per day, kept for at most 30 days**, rotated
+- The journal is **append-only, one file per day, kept for at most 31 days**, rotated
   by size into numbered parts exactly like the event history, with an in-memory tail
   for `DumpEvents`.
 - Every entry carries a **monotonic sequence shared with the decision log**, so a
@@ -692,7 +692,7 @@ never debug-gated (the deduplication and rate limits still apply).
     dominating window (at least 70% of the work area) maximized, else the top two by
     visible surface paired; the rest minimized.
 29. **Debug notifications** are per-decision checkboxes phrased as the decision (§21),
-    and the journal is append-only per day with 30-day retention (§22).
+    and the journal is append-only per day with 31-day retention (§22).
 30. **A minimized window left alone** is relocated left, else right, else left where it
     is — and the workspace is then allowed to persist holding only minimized windows,
     because there is nowhere to put it. This is the second exception to §5's packing

@@ -9,6 +9,18 @@
 
 import type { Rect } from './types.js';
 
+/**
+ * The slack, in pixels, the clamp pass allows on every side.
+ *
+ * The compositor reports a window's *frame*, and a frame includes the
+ * toplevel's invisible client-side-decoration border: a window adrt placed
+ * exactly in its slot is read back up to two pixels wider and one taller.
+ * Without the slack the clamp reads that as an off-screen float, resizes the
+ * window, and the next pass reads the same border again — a permanent 1 px
+ * resize loop that showed up as a tiled pair jittering by a pixel or two.
+ */
+export const CLAMP_TOLERANCE_PX = 4;
+
 export interface ClampCandidate {
   /** The window has been adopted and its first frame has arrived. */
   ready: boolean;
@@ -16,6 +28,15 @@ export interface ClampCandidate {
   routePending: boolean;
   fullscreen: boolean;
   minimized: boolean;
+  /**
+   * The window is maximized. Mutter owns that window's frame: it reports the
+   * maximized *frame* including the invisible resize border, so it is a couple
+   * of pixels wider and taller than the monitor. Clamping it to the monitor
+   * means resizing a maximized window, and the only way to resize one is to
+   * unmaximize it first — the window then flashes to its restored size and the
+   * next pass maximizes it again.
+   */
+  maximized: boolean;
   /** §12: an app that has demonstrably refused geometry is not fought. */
   stubborn: boolean;
   /**
@@ -47,10 +68,16 @@ export interface ClampCandidate {
  * the "recently moved" clock so the next drain clamps again. Chrome and VS Code
  * skip adrt's animation entirely, so the tiler's apply is their whole
  * transition and this race is what read as the live jump/tear.
+ *
+ * A **maximized** window is left alone for the same reason: its frame belongs
+ * to Mutter (it includes the invisible resize border, so it is a few pixels
+ * wider than the monitor) and resizing it means unmaximizing it first, which
+ * flashes the window to its restored size — a maximized lone window then
+ * flickers between full screen and half width on every pass.
  */
 export function shouldClampWindow(candidate: ClampCandidate): boolean {
   if (!candidate.ready || candidate.routePending || candidate.settling) return false;
-  if (candidate.fullscreen || candidate.minimized || candidate.stubborn) return false;
+  if (candidate.fullscreen || candidate.minimized || candidate.maximized || candidate.stubborn) return false;
   if (candidate.frame.width <= 0 || candidate.frame.height <= 0) return false;
   return true;
 }

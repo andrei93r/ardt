@@ -8,17 +8,19 @@
  * note; on Save the text is handed to the recorder as the note that is written
  * before the footer, on Cancel the recording closes with none.
  *
- * `Shell.ModalDialog` is used when the running Shell exposes it; otherwise a
- * full-screen `St.Widget` backdrop is added to `Main.uiGroup`, sized to the
- * stage and carrying a centred `St.BoxLayout`. The overlay must take a
+ * The prompt is a full-screen `St.Widget` backdrop added to `Main.uiGroup`,
+ * sized to the stage and carrying a centred `St.BoxLayout`. (The GNOME modal
+ * dialog is a JavaScript module, `resource:///org/gnome/shell/ui/modalDialog.js`,
+ * not a libshell API, so it is not used here.) The overlay must take a
  * `Main.pushModal` grab and focus the entry itself, otherwise keystrokes go to
  * the compositor's focused window and the user can neither type nor submit.
- * Either way the dialog is asynchronous (`open()`/`close()`, never a nested main
- * loop), so it does not block the Shell. It is a view: it owns no recording
- * state and `close()` releases the grab before destroying.
+ * It is asynchronous (`show()`/`close()`, never a nested main loop), so it does
+ * not block the Shell. It is a view: it owns no recording state and `close()`
+ * releases the grab before destroying.
  */
 
 import Clutter from 'gi://Clutter';
+import type { ClutterGrab } from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
@@ -72,25 +74,10 @@ interface StButtonLike extends StActorLike {
   emit(signal: string, ...args: unknown[]): unknown;
 }
 
-/** Whatever is currently on screen: the `Shell.ModalDialog` or the overlay actor. */
+/** Whatever is currently on screen: the overlay actor. */
 interface PromptActorLike {
   close?(): void;
   destroy(): void;
-}
-
-/** One entry of `Shell.ModalDialog.setButtons`. */
-interface ModalDialogButton {
-  label: string;
-  action: () => void;
-  key?: unknown;
-  default?: boolean;
-}
-
-/** The `Shell.ModalDialog` built when the running Shell exposes it. */
-interface ModalDialogLike extends PromptActorLike {
-  contentLayout: StActorLike;
-  setButtons(buttons: ModalDialogButton[]): void;
-  open(): void;
 }
 
 /** A `Clutter.Event` as read by the overlay's key handler. */
@@ -118,8 +105,14 @@ export class RecordingPrompt {
   private cancelButton: StButtonLike | null = null;
   private mechanism: RecordingPromptKind | null = null;
   private callbacks: RecordingPromptCallbacks | null = null;
-  /** True while a modal grab is held (either mechanism). */
+  /** True while a modal grab is held. */
   private grabHeld = false;
+  /**
+   * The grab handle `Main.pushModal` returned. `Main.popModal` looks the
+   * handle up in the Shell's modal stack, so it is the only thing that can
+   * release the grab; the actor is not.
+   */
+  private grab: ClutterGrab | null = null;
   /** Stage `notify::width/height` handlers, disconnected on close. */
   private stageSignals: number[] = [];
 
@@ -169,14 +162,13 @@ export class RecordingPrompt {
   }
 
   /**
-   * Show the prompt. Returns false when neither a modal nor the overlay could
-   * be built (the recorder still holds the deferred note, so the D-Bus test can
-   * still submit one). A second `show()` while open is a no-op.
+   * Show the prompt. Returns false when the overlay could not be built (the
+   * recorder still holds the deferred note, so the D-Bus test can still submit
+   * one). A second `show()` while open is a no-op.
    */
   show(callbacks: RecordingPromptCallbacks): boolean {
     if (this.actor !== null) return true;
     this.callbacks = callbacks;
-    if (this.tryModal()) return true;
     if (this.tryOverlay()) return true;
     this.callbacks = null;
     return false;
@@ -214,8 +206,7 @@ export class RecordingPrompt {
    */
   close(): void {
     const actor = this.actor;
-    const overlay = this.overlay;
-    const hadGrab = this.grabHeld && overlay !== null;
+    const grab = this.grab;
     this.actor = null;
     this.overlay = null;
     this.contentBox = null;
@@ -226,10 +217,14 @@ export class RecordingPrompt {
     this.mechanism = null;
     this.callbacks = null;
     this.grabHeld = false;
+    this.grab = null;
     this.disconnectStage();
     if (actor === null) return;
     try {
-      if (hadGrab) popModal(overlay);
+      // The grab *handle*, never the actor: `Main.popModal` looks the handle
+      // up in the Shell's modal stack and throws `incorrect pop` for anything
+      // else — which would drop the stage's key focus and leave the grab held.
+      if (grab !== null) popModal(grab);
     } catch {
       /* the grab was already released */
     }
@@ -242,7 +237,13 @@ export class RecordingPrompt {
   }
 
   private buildFields(): StActorLike {
-    const box: StActorLike = new St.BoxLayout({ vertical: true, style_class: 'adrt-recording-body' });
+    // GNOME 48+ dropped `St.BoxLayout`'s `vertical` property — passing it
+    // throws "No property vertical on StBoxLayout" and the prompt never
+    // appears. The direction is the layout's `orientation` instead.
+    const box: StActorLike = new St.BoxLayout({
+      orientation: Clutter.Orientation.VERTICAL,
+      style_class: 'adrt-recording-body',
+    });
     box.spacing = 8;
     box.add_child(new St.Label({ text: 'What did you observe?', style_class: 'adrt-recording-title' }));
     const entry: StEntryLike = new St.Entry({
@@ -273,7 +274,10 @@ export class RecordingPrompt {
   }
 
   private buildButtons(): StActorLike {
-    const buttons: StActorLike = new St.BoxLayout({ style_class: 'adrt-recording-buttons' });
+    const buttons: StActorLike = new St.BoxLayout({
+      orientation: Clutter.Orientation.HORIZONTAL,
+      style_class: 'adrt-recording-buttons',
+    });
     buttons.spacing = 8;
     buttons.set_x_align(Clutter.ActorAlign.END);
     const cancelButton: StButtonLike = new St.Button({ label: 'Cancel', style_class: 'adrt-recording-button' });
@@ -305,33 +309,6 @@ export class RecordingPrompt {
     const callbacks = this.callbacks;
     this.close();
     callbacks?.onCancel();
-  }
-
-  private tryModal(): boolean {
-    try {
-      if (typeof Shell.ModalDialog !== 'function') return false;
-      const dialog: ModalDialogLike = new Shell.ModalDialog({ styleClass: 'adrt-recording-dialog' });
-      dialog.contentLayout.add_child(this.buildFields());
-      dialog.setButtons([
-        { label: 'Cancel', action: () => this.cancel(), key: Clutter.KEY_Escape },
-        { label: 'Save', action: () => this.submit(), default: true },
-      ]);
-      dialog.open();
-      this.actor = dialog;
-      this.mechanism = 'modal';
-      // ModalDialog owns its own grab; `close()` must not pop it again.
-      this.grabHeld = true;
-      this.focusEntry();
-      return true;
-    } catch (error) {
-      console.error(`[adrt] recording prompt (modal) unavailable: ${(error as Error).message}`);
-      this.actor = null;
-      this.contentBox = null;
-      this.entry = null;
-      this.noteEntry = null;
-      this.grabHeld = false;
-      return false;
-    }
   }
 
   private tryOverlay(): boolean {
@@ -375,7 +352,7 @@ export class RecordingPrompt {
       console.error(`[adrt] recording prompt (overlay) failed: ${(error as Error).message}`);
       try {
         if (overlay !== null) {
-          if (this.grabHeld) popModal(overlay);
+          if (this.grab !== null) popModal(this.grab);
           overlay.destroy();
         }
       } catch {
@@ -389,19 +366,32 @@ export class RecordingPrompt {
       this.saveButton = null;
       this.cancelButton = null;
       this.grabHeld = false;
+      this.grab = null;
       this.disconnectStage();
       return false;
     }
   }
 
-  /** Take the modal grab once; guarded so a double call is a no-op. */
+  /**
+   * Take the modal grab once; guarded so a double call is a no-op.
+   *
+   * `Main.pushModal` (GNOME 42+) returns the grab handle, and `Main.popModal`
+   * takes that handle — the actor is not enough, and passing it makes the Shell
+   * throw `incorrect pop`, drop the stage's key focus and keep the grab.
+   *
+   * The action mode is explicit: the default is `Shell.ActionMode.NONE`, and
+   * GNOME filters out *every* keybinding in that mode. Left at the default, the
+   * prompt would silently kill the recording shortcut (and every other one)
+   * for as long as it was open.
+   */
   private takeGrab(actor: StActorLike): void {
     if (this.grabHeld) return;
     try {
-      pushModal(actor);
+      this.grab = pushModal(actor, { actionMode: Shell.ActionMode.NORMAL });
       this.grabHeld = true;
     } catch (error) {
       console.error(`[adrt] recording prompt could not take a modal grab: ${(error as Error).message}`);
+      this.grab = null;
       this.grabHeld = false;
     }
   }

@@ -270,9 +270,9 @@
       <description>Write JSONL history files.</description>
     </key>
     <key name="history-retention-days" type="i">
-      <default>30</default>
+      <default>31</default>
       <summary>History retention</summary>
-      <description>Days of history to keep.</description>
+      <description>Days of history to keep (31 by default).</description>
     </key>
     <key name="history-daily-folders" type="b">
       <default>false</default>

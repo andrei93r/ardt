@@ -73,6 +73,13 @@ interface DumpRecording {
   stopReason: string | null;
   promptOpen: boolean;
   note: string;
+  /**
+   * The recorder's own wait flag: true while a user stop is waiting for its
+   * note. `promptOpen` is the observable half (the prompt is on screen, or
+   * would be); this is what the journal keys the `stopped`/`saved` lifecycle
+   * states off.
+   */
+  awaitingNote?: boolean;
 }
 
 interface DumpWorkspaceMode {

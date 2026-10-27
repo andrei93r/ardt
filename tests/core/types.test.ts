@@ -121,4 +121,20 @@ describe('clampRectToArea', () => {
       height: 300,
     });
   });
+
+  it('leaves a rect that pokes out by no more than the tolerance alone', () => {
+    // The compositor reports a frame that includes the toplevel's invisible
+    // border, so a window placed exactly in its slot reads back a couple of
+    // pixels larger. Clamping that would resize the window on every pass.
+    const work: Rect = { x: 0, y: 34, width: 1920, height: 1166 };
+    const frame = { x: 962, y: 34, width: 960, height: 1167 };
+    expect(clampRectToArea(frame, work)).not.toEqual(frame);
+    expect(clampRectToArea(frame, work, 4)).toEqual(frame);
+  });
+
+  it('still clamps a rect that is really outside the area', () => {
+    const work: Rect = { x: 0, y: 34, width: 1920, height: 1166 };
+    const off = { x: 2000, y: 34, width: 400, height: 300 };
+    expect(clampRectToArea(off, work, 4)).toEqual({ x: 1520, y: 34, width: 400, height: 300 });
+  });
 });

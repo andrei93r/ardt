@@ -426,8 +426,44 @@ for ((i = 0; i < WORKERS; i++)); do
   fi
   # The nested Shell logs a benign gio error while clearing its
   # disable-extensions marker; ignore only that one.
+  #
+  # A second class of known Shell-internal noise: a JS error thrown inside the
+  # Shell's own modules (its stack frames are all `resource:///org/gnome/shell/`
+  # — e.g. `ui/windowManager.js` `_syncEnabled` racing a window-destroy
+  # transition). Those are not adrt's; an error that mentions adrt, or whose
+  # stack reaches any other module, still warns. A JS error with no following
+  # stack line cannot be attributed and therefore still warns.
   if grep -aE '\*\* ERROR|JS ERROR' "$log" | grep -qv 'gnome-shell-disable-extensions'; then
-    echo "WARN  worker-$i journal contains a JS error"
+    python3 - "$log" "$i" <<'PY'
+import re, sys
+
+path, worker = sys.argv[1], sys.argv[2]
+lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+header = re.compile(r'\*\* ERROR|JS ERROR')
+# Any stack frame: an optional function name, then @<scheme>://<path>:<line>:<col>.
+anyframe = re.compile(r'(?:[^\s@]*@)(?:resource|file|https?)://[^\s]*:\d+:\d+')
+shellframe = re.compile(r'(?:[^\s@]*@)?resource:///org/gnome/shell/[^\s]*')
+offenders = []
+i = 0
+while i < len(lines):
+    if header.search(lines[i]) and 'gnome-shell-disable-extensions' not in lines[i]:
+        stack = []
+        j = i + 1
+        while j < len(lines) and anyframe.fullmatch(lines[j].strip()):
+            stack.append(lines[j].strip())
+            j += 1
+        # Ignore only when the error printed a stack and every frame is
+        # Shell-internal. No stack → cannot attribute → keep.
+        if not stack or not all(shellframe.fullmatch(f) for f in stack):
+            offenders.append(lines[i])
+        i = j
+    else:
+        i += 1
+if offenders:
+    print(f"WARN  worker-{worker} journal contains a JS error not attributable to GNOME Shell internals")
+    for line in offenders[:5]:
+        print("      " + line)
+PY
   fi
 done
 if [ "$JOURNAL_ERRORS" -eq 0 ]; then

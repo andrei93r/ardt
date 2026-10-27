@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { MAX_LOG_TEXT, MAX_TEXT, clipPayload, clipText } from '../../src/core/text.js';
+import { MAX_LOG_TEXT, MAX_TEXT, clipPayload, clipText, utf8ByteLength } from '../../src/core/text.js';
 
 describe('clipText', () => {
   it('keeps a normal title', () => {
@@ -24,6 +24,21 @@ describe('clipText', () => {
   it('returns empty for non-strings', () => {
     expect(clipText(null)).toBe('');
     expect(clipText(42)).toBe('');
+  });
+});
+
+describe('utf8ByteLength', () => {
+  it('counts bytes, not UTF-16 code units', () => {
+    expect(utf8ByteLength('')).toBe(0);
+    expect(utf8ByteLength('abc')).toBe(3);
+    expect(utf8ByteLength('é')).toBe(2);
+    expect(utf8ByteLength('日本語')).toBe(9);
+    expect(utf8ByteLength('😀')).toBe(4);
+  });
+
+  it('matches TextEncoder for mixed text', () => {
+    const text = 'café — 日本語 🚀';
+    expect(utf8ByteLength(text)).toBe(new TextEncoder().encode(text).length);
   });
 });
 
