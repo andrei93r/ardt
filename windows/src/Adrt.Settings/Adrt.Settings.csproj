@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- The window is hosted by Adrt.Windows (tray); this project is the UI only. -->
+    <OutputType>Library</OutputType>
+    <UseWPF>true</UseWPF>
+    <!-- Allow building the Windows target from a Linux dev box. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RootNamespace>Adrt.Settings</RootNamespace>
+    <AssemblyName>Adrt.Settings</AssemblyName>
+    <Version>0.2.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Adrt.Core\Adrt.Core.csproj" />
+  </ItemGroup>
+
+</Project>

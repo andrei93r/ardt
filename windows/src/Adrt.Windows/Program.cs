@@ -1,30 +1,41 @@
 using System.ComponentModel;
-using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Adrt.Windows.Input;
 
 namespace Adrt.Windows;
 
 /// <summary>
-/// Tray-less W3 host: starts the WinEvent pump, tiles two windows per monitor
-/// through <see cref="TilingHost"/>, and exposes pause/quit hotkeys.
+/// Tray-less W5 host: starts the WinEvent pump, tiles two windows per monitor
+/// through <see cref="TilingHost"/>, and owns the W5 input + chrome layer.
 /// </summary>
 /// <remarks>
-/// The main thread owns a plain Win32 message loop so <c>RegisterHotKey</c> and
-/// the drain timer both post to its queue. There is no window, tray or UI yet;
-/// every applied plan is logged to the console.
+/// <para>
+/// The main thread is STA and runs a plain Win32 message loop, so
+/// <c>RegisterHotKey</c> deliveries, the layered border windows and the WTS
+/// session watcher all share one thread and one queue. There is no window,
+/// tray or settings UI yet; every applied plan and every action is logged to
+/// the console.
+/// </para>
+/// <para>
+/// Hotkeys are <see cref="HotkeyTable.Default"/>, registered by
+/// <see cref="HotkeyRegistrar"/>: conflicts are logged and skipped. The border
+/// is on unless <c>--no-border</c> / <c>ADRT_BORDER=0</c> is given;
+/// <c>Ctrl+Alt+B</c> toggles it at runtime.
+/// </para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
 internal static class Program
 {
     private const string MutexName = @"Local\Adrt.Windows.SingleInstance";
     private const uint TickIntervalMs = 40;
-    private const int HotkeyPause = 1;
-    private const int HotkeyQuit = 2;
 
     private static readonly ManualResetEvent QuitEvent = new(false);
 
-    private static int Main()
+    [STAThread]
+    private static int Main(string[] args)
     {
+        InputOptions options = InputOptions.Parse(args);
+
         using var mutex = new Mutex(initiallyOwned: true, MutexName, out bool createdNew);
         if (!createdNew)
         {
@@ -34,7 +45,7 @@ internal static class Program
 
         try
         {
-            Run();
+            Run(options);
             return 0;
         }
         catch (Win32Exception error)
@@ -53,7 +64,7 @@ internal static class Program
         }
     }
 
-    private static void Run()
+    private static void Run(InputOptions options)
     {
         using var pump = new WindowEventPump();
         pump.Start();
@@ -63,12 +74,13 @@ internal static class Program
         host.Start();
 
         using var hotkeys = new HotkeyManager();
-        RegisterHotkey(hotkeys, HotkeyPause, HotkeyModifiers.Control | HotkeyModifiers.Alt, (uint)'P', "Ctrl+Alt+P (pause/resume)");
-        RegisterHotkey(hotkeys, HotkeyQuit, HotkeyModifiers.Control | HotkeyModifiers.Alt, (uint)'Q', "Ctrl+Alt+Q (quit)");
+        using var input = new InputLayer(host, options, RequestQuit, Console.WriteLine);
+        Console.WriteLine($"adrt: {options.Describe()}");
+        input.RegisterHotkeys(hotkeys);
 
-        ConsoleCancelEventHandler onCancel = (_, args) =>
+        ConsoleCancelEventHandler onCancel = (_, cancelArgs) =>
         {
-            args.Cancel = true;
+            cancelArgs.Cancel = true;
             RequestQuit();
         };
 
@@ -77,7 +89,7 @@ internal static class Program
 
         try
         {
-            MessageLoop(host, pump);
+            MessageLoop(host, pump, input);
         }
         finally
         {
@@ -88,7 +100,7 @@ internal static class Program
         }
     }
 
-    private static void MessageLoop(TilingHost host, WindowEventPump pump)
+    private static void MessageLoop(TilingHost host, WindowEventPump pump, InputLayer input)
     {
         // Wait on the pump's own coalescing signal (it is poked on every window
         // event and every 50 ms) plus the quit handle, with a 40 ms safety
@@ -108,13 +120,18 @@ internal static class Program
             if (result == 1) return; // quit handle
             if (result == 0 || result == NativeMethods.WAIT_TIMEOUT) host.Tick();
 
+            // Session lock, drag state and the border are polled on every wake,
+            // including a hotkey wake; none of them plans, so this stays off the
+            // drain's critical path.
+            input.Tick();
+
             while (NativeMethods.PeekMessage(out NativeMethods.MSG message, 0, 0, 0, NativeMethods.PM_REMOVE))
             {
                 if (message.message == NativeMethods.WM_QUIT) return;
 
                 if (message.message == NativeMethods.WM_HOTKEY)
                 {
-                    HandleHotkey(host, message.wParam.ToInt32());
+                    _ = input.HandleHotkey(message.wParam.ToInt32());
                     continue;
                 }
 
@@ -122,38 +139,6 @@ internal static class Program
                 NativeMethods.DispatchMessage(ref message);
             }
         }
-    }
-
-    private static void HandleHotkey(TilingHost host, int id)
-    {
-        switch (id)
-        {
-            case HotkeyPause:
-                host.TogglePause();
-                break;
-            case HotkeyQuit:
-                RequestQuit();
-                break;
-            default:
-                break;
-        }
-    }
-
-    private static void RegisterHotkey(
-        HotkeyManager hotkeys,
-        int id,
-        HotkeyModifiers modifiers,
-        uint virtualKey,
-        string label)
-    {
-        HotkeyRegistration registration = hotkeys.Register(
-            id,
-            modifiers | HotkeyModifiers.NoRepeat,
-            virtualKey);
-
-        Console.WriteLine(registration.Registered
-            ? $"adrt: {label} registered."
-            : $"adrt: {label} unavailable ({registration.Error}); continuing without it.");
     }
 
     private static void RequestQuit() => QuitEvent.Set();

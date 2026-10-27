@@ -8,10 +8,18 @@
     <RootNamespace>Adrt.Windows</RootNamespace>
     <AssemblyName>Adrt.Windows</AssemblyName>
     <Version>0.2.0</Version>
+    <!-- The tray uses WinForms NotifyIcon; the settings window itself is WPF and
+         lives in the Adrt.Settings project. Keep the WinForms implicit usings off:
+         System.Drawing.Size and System.Windows.Forms.Screen would collide with the
+         core's Size/Screen types in Host/. Tray files import them explicitly. -->
+    <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
 
   <ItemGroup>
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
     <ProjectReference Include="..\Adrt.Core\Adrt.Core.csproj" />
+    <ProjectReference Include="..\Adrt.Settings\Adrt.Settings.csproj" />
   </ItemGroup>
 
 </Project>

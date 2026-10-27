@@ -1,0 +1,5 @@
+# Scenarios that must pass on every smoke run (`scripts/windows/vm.sh smoke`).
+# One scenario name per line; `#` starts a comment. Full-suite-only scenarios
+# belong in full-only.list with a reason.
+T00-self-test
+T01-pair

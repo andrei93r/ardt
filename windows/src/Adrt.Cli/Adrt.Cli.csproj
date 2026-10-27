@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- The client only runs on Windows (named pipes + the user SID), but it
+         must still compile on the Linux dev box and in Linux CI. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RootNamespace>Adrt.Cli</RootNamespace>
+    <AssemblyName>adrt-cli</AssemblyName>
+    <Version>0.2.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The trigger table is the wire contract; the client only reads it to
+         print names/signatures, never to implement a trigger. -->
+    <ProjectReference Include="..\Adrt.Core\Adrt.Core.csproj" />
+  </ItemGroup>
+
+</Project>
