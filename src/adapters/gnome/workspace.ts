@@ -221,9 +221,8 @@ export class WorkspaceController {
     const workspace = manager.get_workspace_by_index(workspaceId);
     if (workspace === null) return;
     const remaining = workspace.list_windows().filter((win: MetaWindow) => this.host.hasWindow(win.get_id()));
-    if (remaining.length > 0) return;
 
-    if (manager.get_active_workspace_index() === workspaceId) {
+    if (remaining.length === 0 && manager.get_active_workspace_index() === workspaceId) {
       // "Done" takes you back to the left — the nearest left workspace that
       // still exists and holds windows. If the left one was removed (or is
       // empty), fall forward to the right instead.
@@ -236,6 +235,13 @@ export class WorkspaceController {
         this.host.activateWorkspace(target);
       }
     }
+    // §5: reaping is a property, not a "no tracked windows" event. A close can
+    // leave only minimized windows behind — visually empty, and the pure plan
+    // relocates them and removes the workspace. Always arm the settle passes;
+    // when visible windows remain `reapPlan` is a cheap no-op. Returning early
+    // on any remaining window left the workspace until the safety-net scan,
+    // which backs off to a minute (the reported "delete the empty desktop"
+    // delay).
     this.schedulePrune();
   }
 

@@ -166,3 +166,8 @@ A172-helper-window-no-highlight
 #   window — the scenario reads the journal's event order and needs a focus
 #   change plus its layout pass, which the smoke's fast pass does not guarantee.
 A173-focus-border-after-placement
+
+# reason: proving the close path reaps promptly, rather than the safety-net scan
+#   doing it later, needs the scan interval parked at 60 s and a bounded poll;
+#   the smoke's fast pass cannot distinguish the two triggers.
+A174-close-last-visible-reaps-fast

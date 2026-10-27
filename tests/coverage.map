@@ -51,11 +51,11 @@ security-popups | A134-popup-never-tracked
 sticky-windows | A72-sticky-window-untiled
 
 # --------------------------------------------------------- minimize and reap
-minimize-and-reap | A35-minimize-removes-workspace A43-close-last-window-removes-workspace A62-minimize-onto-pair-stays-minimized A93-empty-workspace-reaped A115-look-empty-workspace-is-free A116-escape-clamped-own-workspace
+minimize-and-reap | A35-minimize-removes-workspace A43-close-last-window-removes-workspace A62-minimize-onto-pair-stays-minimized A93-empty-workspace-reaped A115-look-empty-workspace-is-free A116-escape-clamped-own-workspace A174-close-last-visible-reaps-fast
 prune-safety | A51-prune-safety A43-close-last-window-removes-workspace A93-empty-workspace-reaped | full-only: no single prune/reap golden path; the behaviour is asserted through A35/A93 which are full-only.
 
 # -------------------------------------------------------------- workspaces
-workspaces | A12-workspace-switch A14-monitor-change A27-session-unlock A35-minimize-removes-workspace A43-close-last-window-removes-workspace A46-finish-focus-nearest-left-or-right A47-border-hides-during-workspace-switch A54-overview-move-onto-pair A55-overview-move-pair-member A60-stuck-switch-watchdog A64-vertical-workspaces A76-workspace-runaway A93-empty-workspace-reaped A96-reorder-is-honoured-and-an-empty-workspace-is-pruned A97-drop-onto-single-maximised-splits A115-look-empty-workspace-is-free A116-escape-clamped-own-workspace A117-arrival-side-rule A128-switch-suppression-clears
+workspaces | A12-workspace-switch A14-monitor-change A27-session-unlock A35-minimize-removes-workspace A43-close-last-window-removes-workspace A46-finish-focus-nearest-left-or-right A47-border-hides-during-workspace-switch A54-overview-move-onto-pair A55-overview-move-pair-member A60-stuck-switch-watchdog A64-vertical-workspaces A76-workspace-runaway A93-empty-workspace-reaped A96-reorder-is-honoured-and-an-empty-workspace-is-pruned A97-drop-onto-single-maximised-splits A115-look-empty-workspace-is-free A116-escape-clamped-own-workspace A117-arrival-side-rule A128-switch-suppression-clears A174-close-last-visible-reaps-fast
 
 # ---------------------------------------------------------------- overview
 overview | A37-overview-border A47-border-hides-during-workspace-switch A54-overview-move-onto-pair A55-overview-move-pair-member A74-overview-drop-is-a-move A75-overview-patterns A94-overview-drop-onto-full-floats A97-drop-onto-single-maximised-splits

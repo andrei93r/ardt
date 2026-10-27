@@ -6,6 +6,20 @@ code changes, MINOR for features, PATCH for fixes.
 
 ## [Unreleased]
 
+### Faster empty-workspace reaping
+
+- **Bug:** a **workspace that looked empty lingered until the next safety-net
+  scan**. Closing the last visible window left the workspace holding only a
+  minimized window; `switchAwayIfEmpty` counted that as occupied and returned
+  before arming the reaper, so the workspace stayed until the periodic scan —
+  whose backoff reaches a minute. Recording `rec-20261026-233022` caught it: the
+  Chrome pair on workspace 0 closed at 7.6 s, and the workspace was still there
+  when the user came back to it, only being reaped at 12.6 s when the scan tick
+  happened to run. Every close now arms the normal settle prune; the pure
+  `reapPlan` decides whether the workspace is empty, holds only minimized
+  windows (relocated first), or is pinned by a float. A174 pins the close path
+  with the safety-net scan parked at 60 s.
+
 ### Recording shortcut and the core determinism gate
 
 - **Bug:** a **tiled pair jittered by a pixel or two, forever**. The compositor
