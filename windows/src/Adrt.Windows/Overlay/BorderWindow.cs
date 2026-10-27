@@ -79,6 +79,15 @@ internal sealed class BorderWindow : IDisposable
             return;
         }
 
+        // Drop overlays for monitors that are no longer in the topology.
+        var live = new HashSet<nint>(monitors.Select(monitor => monitor.Handle));
+        foreach (nint handle in _surfaces.Keys.ToArray())
+        {
+            if (live.Contains(handle)) continue;
+            _surfaces[handle].Dispose();
+            _surfaces.Remove(handle);
+        }
+
         foreach ((nint handle, MonitorSurface surface) in _surfaces)
         {
             if (handle != target.Handle) surface.Hide();
@@ -158,6 +167,9 @@ internal sealed class BorderWindow : IDisposable
                 return OverlayNativeMethods.MA_NOACTIVATE;
             case OverlayNativeMethods.WM_ERASEBKGND:
                 return 1;
+            case OverlayNativeMethods.WM_PAINT:
+                _ = OverlayNativeMethods.ValidateRect(hWnd, 0);
+                return 0;
             default:
                 return OverlayNativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
         }
@@ -179,6 +191,7 @@ internal sealed class BorderWindow : IDisposable
         private int _height;
         private Rect _lastFrame;
         private bool _hasFrame;
+        private bool _shown;
         private bool _updateFailureLogged;
 
         public MonitorSurface(Action<string>? log)
@@ -209,7 +222,7 @@ internal sealed class BorderWindow : IDisposable
             if (_hasFrame && frame == _lastFrame)
             {
                 // Still ensure the window is mapped: Hide() may have run since.
-                OverlayNativeMethods.ShowWindow(_handle, OverlayNativeMethods.SW_SHOWNOACTIVATE);
+                Show();
                 return;
             }
 
@@ -228,12 +241,14 @@ internal sealed class BorderWindow : IDisposable
             Publish();
             _lastFrame = frame;
             _hasFrame = true;
-            OverlayNativeMethods.ShowWindow(_handle, OverlayNativeMethods.SW_SHOWNOACTIVATE);
+            Show();
         }
 
         public void Hide()
         {
-            if (_handle != 0) OverlayNativeMethods.ShowWindow(_handle, OverlayNativeMethods.SW_HIDE);
+            if (_handle == 0 || !_shown) return;
+            _ = OverlayNativeMethods.ShowWindow(_handle, OverlayNativeMethods.SW_HIDE);
+            _shown = false;
         }
 
         public void Dispose()
@@ -323,7 +338,14 @@ internal sealed class BorderWindow : IDisposable
                 y,
                 width,
                 height,
-                OverlayNativeMethods.SWP_NOACTIVATE | OverlayNativeMethods.SWP_SHOWWINDOW);
+                OverlayNativeMethods.SWP_NOACTIVATE);
+        }
+
+        private void Show()
+        {
+            if (_handle == 0 || _shown) return;
+            _ = OverlayNativeMethods.ShowWindow(_handle, OverlayNativeMethods.SW_SHOWNOACTIVATE);
+            _shown = true;
         }
 
         private void PaintBorder(int left, int top, int right, int bottom)
@@ -413,6 +435,7 @@ internal sealed class BorderWindow : IDisposable
             _width = 0;
             _height = 0;
             _hasFrame = false;
+            _shown = false;
         }
 
         private static int Round(double value) => (int)Math.Round(value, MidpointRounding.AwayFromZero);

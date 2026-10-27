@@ -99,14 +99,18 @@ internal sealed class WindowCatalog
 
     /// <summary>
     /// The focused window's pair partner on the same monitor: the other tiled,
-    /// non-minimized window. Null when the focused window is alone.
+    /// visible window. Null when the focused window is alone (or the other one is
+    /// maximized/minimized/floating, so it is not a half of the pair).
     /// </summary>
     public MonitoredWindow? SiblingOf(MonitoredWindow focused) =>
         _windows
             .Where(window =>
                 window.Handle != focused.Handle &&
                 window.Monitor.Index == focused.Monitor.Index &&
-                !window.Surface.Flags.Minimized)
+                window.Surface.Layer == Layer.Tiled &&
+                !window.Surface.Flags.Minimized &&
+                !window.Surface.Flags.Maximized &&
+                !window.Surface.Flags.Floating)
             .OrderBy(window => Math.Abs(window.Frame.X - focused.Frame.X) +
                                Math.Abs(window.Frame.Y - focused.Frame.Y))
             .ThenBy(window => window.Surface.Id)
@@ -119,11 +123,28 @@ internal sealed class WindowCatalog
     /// </summary>
     public static int SlotOf(Rect frame, MonitorInfo monitor)
     {
-        Rect area = monitor.WorkArea;
         bool vertical = monitor.Bounds.Height > monitor.Bounds.Width;
+        return SlotOf(frame, monitor, vertical);
+    }
+
+    /// <summary>Infer the half along an explicit axis (side-by-side or stacked pair).</summary>
+    public static int SlotOf(Rect frame, MonitorInfo monitor, bool vertical)
+    {
+        Rect area = monitor.WorkArea;
         double centre = vertical ? frame.Y + frame.Height / 2 : frame.X + frame.Width / 2;
         double middle = vertical ? area.Y + area.Height / 2 : area.X + area.Width / 2;
         return centre < middle ? 0 : 1;
+    }
+
+    /// <summary>True when the pair is stacked vertically rather than side by side.</summary>
+    public static bool IsStacked(Rect first, Rect second, MonitorInfo monitor)
+    {
+        const double tolerance = 2;
+        bool xDisjoint = first.Right <= second.X + tolerance || second.Right <= first.X + tolerance;
+        bool yDisjoint = first.Bottom <= second.Y + tolerance || second.Bottom <= first.Y + tolerance;
+        if (xDisjoint && !yDisjoint) return false;
+        if (yDisjoint && !xDisjoint) return true;
+        return monitor.Bounds.Height > monitor.Bounds.Width;
     }
 
     private MonitorInfo? FindMonitor(int index) =>

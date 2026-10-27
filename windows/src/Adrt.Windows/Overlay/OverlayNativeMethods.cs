@@ -39,6 +39,7 @@ internal static class OverlayNativeMethods
     internal const uint WM_NCHITTEST = 0x0084;
     internal const uint WM_MOUSEACTIVATE = 0x0021;
     internal const uint WM_ERASEBKGND = 0x0014;
+    internal const uint WM_PAINT = 0x000F;
     internal const uint WM_WTSSESSION_CHANGE = 0x02B1;
 
     internal const int HTTRANSPARENT = -1;
@@ -206,6 +207,10 @@ internal static class OverlayNativeMethods
 
     [DllImport(User32, EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
     internal static extern nint SetWindowLongPtr(nint hWnd, int index, nint newValue);
+
+    [DllImport(User32, EntryPoint = "ValidateRect", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool ValidateRect(nint hWnd, nint rect);
 
     [DllImport(User32, EntryPoint = "GetModuleHandleW", SetLastError = true, CharSet = CharSet.Unicode)]
     internal static extern nint GetModuleHandle(string? moduleName);

@@ -24,6 +24,7 @@ internal sealed class BorderController : IDisposable
     private IndicatorSuppression? _sessionSuppression;
     private bool _sessionVisible = true;
     private bool _paused;
+    private bool _dragging;
     private int _disposed;
 
     public BorderController(
@@ -95,6 +96,24 @@ internal sealed class BorderController : IDisposable
 
         _paused = paused;
         ApplySuppressions();
+    }
+
+    /// <summary>Hide while the user is dragging a window (§23.1 `drag`).</summary>
+    public void SetDragging(bool dragging)
+    {
+        if (_dragging == dragging) return;
+
+        _dragging = dragging;
+        if (dragging)
+        {
+            _state.Suppress(SuppressionReason.Drag);
+        }
+        else
+        {
+            _state.Unsuppress(SuppressionReason.Drag);
+        }
+
+        Redraw();
     }
 
     /// <summary>

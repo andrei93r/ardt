@@ -121,10 +121,10 @@ internal static class HotkeyTable
         new(3, "FocusDirection", "focus up", HotkeyAction.FocusDirection, WinCtrl, (uint)'K', FocusDirection.Up),
         new(4, "FocusDirection", "focus down", HotkeyAction.FocusDirection, WinCtrl, (uint)'J', FocusDirection.Down),
         new(5, "FocusCycle", "cycle focus", HotkeyAction.FocusCycle, WinCtrl, VkGrave),
-        new(6, "CursorToCentre", "move pointer to the focused window", HotkeyAction.CursorToCentre, WinCtrl, (uint)'C'),
+        new(6, "CursorToCentre", "move pointer to the focused window", HotkeyAction.CursorToCentre, WinCtrl, (uint)'G'),
 
         // Move (core: SwapPair, MoveDirection).
-        new(7, "SwapPair", "swap the pair", HotkeyAction.SwapPair, WinCtrl, (uint)'S'),
+        new(7, "SwapPair", "swap the pair", HotkeyAction.SwapPair, WinCtrl, (uint)'X'),
         new(8, "MoveToOtherHalf", "move window to the other half", HotkeyAction.MoveToOtherHalf, WinCtrl, (uint)'M'),
         new(9, "MoveDirection", "move window left", HotkeyAction.MoveDirection, WinCtrlShift, (uint)'H', FocusDirection.Left),
         new(10, "MoveDirection", "move window right", HotkeyAction.MoveDirection, WinCtrlShift, (uint)'L', FocusDirection.Right),
@@ -141,7 +141,7 @@ internal static class HotkeyTable
 
         // Window (core: ToggleFloat, MaximizeWindow, Undo, QuitFocused).
         new(19, "ToggleFloat", "float or re-tile the focused window", HotkeyAction.ToggleFloat, WinCtrl, (uint)'F'),
-        new(20, "MaximizeWindow", "toggle maximize", HotkeyAction.ToggleMaximize, WinCtrl, 0x0D /* VK_RETURN */),
+        new(20, "MaximizeWindow", "toggle maximize", HotkeyAction.ToggleMaximize, WinCtrl, (uint)'E'),
         new(21, "Undo", "undo the last change", HotkeyAction.Undo, WinCtrl, (uint)'Z'),
         new(22, "QuitFocused", "close the focused window", HotkeyAction.QuitFocused, WinCtrlShift, (uint)'Q'),
 

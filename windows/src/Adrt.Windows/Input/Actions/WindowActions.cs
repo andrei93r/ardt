@@ -8,13 +8,14 @@ namespace Adrt.Windows.Input.Actions;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <see cref="TilingHost"/> deliberately exposes only <c>Start</c>,
-/// <c>TogglePause</c>, <c>RequestRetile</c>, <c>Tick</c> and its monitor list.
-/// Everything else here is built from that surface plus <c>SetWindowPos</c>
-/// (<see cref="GeometryApplier"/>): focus selection is <see cref="Focus"/>,
-/// swap sides are <see cref="PlacementPolicy.SwappedSides"/>, undo validation is
-/// <see cref="Undo"/>, cursor placement is <see cref="Cursor"/>. No action
-/// writes model state itself.
+/// The host owns the state it can decide alone: tiling pause, retile requests,
+/// focus selection and its placement history. Everything else here is built
+/// from that public surface plus <c>SetWindowPos</c>
+/// (<see cref="GeometryApplier"/>): swap sides are
+/// <see cref="PlacementPolicy.SwappedSides"/>, directional move selection is
+/// <see cref="Focus.PickDirectional"/>, undo validation is <see cref="Undo"/>,
+/// inner-edge drag classification is <see cref="Adjust"/>, cursor placement is
+/// <see cref="Cursor"/>. No action writes model state itself.
 /// </para>
 /// <para>
 /// Known gap while W4.6 is open: the host's <see cref="TilerConfig"/> has no
@@ -40,7 +41,7 @@ internal sealed class WindowActions
     private readonly Action<string> _log;
     private readonly double _nudgeStep;
     private readonly ChangeLog _undo = new();
-    private readonly HashSet<nint> _floated = [];
+    private readonly HashSet<int> _floated = [];
     private bool _ratioWarningLogged;
 
     public WindowActions(TilingHost host, WindowCatalog catalog, double nudgeStep, Action<string> log)
@@ -86,62 +87,25 @@ internal sealed class WindowActions
 
     private bool FocusToward(FocusDirection direction)
     {
-        IReadOnlyList<MonitoredWindow> windows = _catalog.Refresh();
-        MonitoredWindow? focused = GetFocused("focus");
-        if (focused is null) return false;
-
-        var candidates = new List<FocusCandidate>(windows.Count);
-        foreach (MonitoredWindow window in windows)
-        {
-            if (window.Handle == focused.Handle || window.Surface.Flags.Minimized) continue;
-            candidates.Add(new FocusCandidate { Id = window.Surface.Id, Rect = window.Frame });
-        }
-
-        int? targetId = Focus.PickDirectional(focused.Frame, candidates, direction);
-        if (targetId is null)
-        {
-            _log(FormattableString.Invariant($"[focus] no window to the {direction.ToString().ToLowerInvariant()}"));
-            return false;
-        }
-
-        MonitoredWindow? target = windows.FirstOrDefault(window => window.Surface.Id == targetId.Value);
-        return target is not null && Activate(target, $"focus {direction.ToString().ToLowerInvariant()}");
+        // The host now owns focus selection (§6/§17): it resolves the foreground
+        // through its own tracker and its slot map, so the input lane does not
+        // duplicate that policy.
+        bool moved = _host.FocusDirection(direction);
+        if (!moved) _log(FormattableString.Invariant($"[focus] no window to the {direction.ToString().ToLowerInvariant()}"));
+        return moved;
     }
 
     private bool FocusCycle()
     {
-        IReadOnlyList<MonitoredWindow> windows = _catalog.Refresh();
-        MonitoredWindow? focused = _catalog.FindFocused();
-        if (windows.Count == 0)
-        {
-            _log("[focus] nothing to cycle");
-            return false;
-        }
-
-        var entries = new List<CycleEntry>(windows.Count);
-        foreach (MonitoredWindow window in windows)
-        {
-            entries.Add(new CycleEntry
-            {
-                Id = window.Surface.Id,
-                Kind = CycleEntryKind.Managed,
-                Slot = window.Slot,
-                Rect = window.Frame,
-                Minimized = window.Surface.Flags.Minimized,
-            });
-        }
-
-        int? next = Focus.CycleOrder(focused?.Surface.Id, entries);
-        if (next is null) return false;
-
-        MonitoredWindow? target = windows.FirstOrDefault(window => window.Surface.Id == next.Value);
-        return target is not null && Activate(target, "cycle focus");
+        bool moved = _host.FocusNext();
+        if (!moved) _log("[focus] nothing to cycle");
+        return moved;
     }
 
     private bool SwapFocused(string reason)
     {
         _catalog.Refresh();
-        MonitoredWindow? focused = GetFocused(reason);
+        MonitoredWindow? focused = GetFocused(reason, requireTiled: true);
         if (focused is null) return false;
 
         MonitoredWindow? sibling = _catalog.SiblingOf(focused);
@@ -157,7 +121,7 @@ internal sealed class WindowActions
     private bool MoveDirection(FocusDirection direction)
     {
         _catalog.Refresh();
-        MonitoredWindow? focused = GetFocused("move");
+        MonitoredWindow? focused = GetFocused("move", requireTiled: true);
         if (focused is null) return false;
 
         MonitoredWindow? sibling = _catalog.SiblingOf(focused);
@@ -206,7 +170,7 @@ internal sealed class WindowActions
     private bool Resize(bool grow)
     {
         _catalog.Refresh();
-        MonitoredWindow? focused = GetFocused("resize");
+        MonitoredWindow? focused = GetFocused("resize", requireTiled: true);
         if (focused is null) return false;
 
         MonitoredWindow? sibling = _catalog.SiblingOf(focused);
@@ -216,7 +180,7 @@ internal sealed class WindowActions
             return false;
         }
 
-        bool vertical = IsStacked(focused.Frame, sibling.Frame, focused.Monitor);
+        bool vertical = WindowCatalog.IsStacked(focused.Frame, sibling.Frame, focused.Monitor);
         bool focusedFirst = vertical
             ? focused.Frame.Y <= sibling.Frame.Y
             : focused.Frame.X <= sibling.Frame.X;
@@ -231,7 +195,7 @@ internal sealed class WindowActions
     private bool ShiftBoundary(FocusDirection direction, double step, string reason)
     {
         _catalog.Refresh();
-        MonitoredWindow? focused = GetFocused(reason);
+        MonitoredWindow? focused = GetFocused(reason, requireTiled: true);
         if (focused is null) return false;
 
         MonitoredWindow? sibling = _catalog.SiblingOf(focused);
@@ -252,7 +216,7 @@ internal sealed class WindowActions
         double step,
         string reason)
     {
-        bool vertical = IsStacked(focused.Frame, sibling.Frame, focused.Monitor);
+        bool vertical = WindowCatalog.IsStacked(focused.Frame, sibling.Frame, focused.Monitor);
         bool focusedFirst = vertical
             ? focused.Frame.Y <= sibling.Frame.Y
             : focused.Frame.X <= sibling.Frame.X;
@@ -339,13 +303,13 @@ internal sealed class WindowActions
         if (focused is null) return false;
 
         bool floating;
-        if (_floated.Remove(focused.Handle))
+        if (_floated.Remove(focused.Surface.Id))
         {
             floating = false;
         }
         else
         {
-            _floated.Add(focused.Handle);
+            _floated.Add(focused.Surface.Id);
             floating = true;
         }
 
@@ -355,6 +319,26 @@ internal sealed class WindowActions
     }
 
     private bool UndoLastChange()
+    {
+        if (_undo.Size > 0)
+        {
+            return UndoCapturedChange();
+        }
+
+        // Nothing captured by an input action: fall back to the host's own
+        // placement history, which restores a retile it applied.
+        if (_host.CanUndo)
+        {
+            bool restored = _host.UndoLast();
+            _log(restored ? "[undo] restored the host's last placement" : "[undo] host could not restore its last placement");
+            return restored;
+        }
+
+        _log("[undo] nothing to undo");
+        return false;
+    }
+
+    private bool UndoCapturedChange()
     {
         Change? change = _undo.Take();
         if (change is null)
@@ -393,23 +377,27 @@ internal sealed class WindowActions
             Win32Window liveWindow = window.Window;
             bool wasMaximized = liveWindow.IsMaximized;
             if (liveWindow.IsMinimized || wasMaximized) liveWindow.Show(InputNativeMethods.SW_RESTORE);
-            targets.Add(new GeometryTarget(window.Handle, instance.Rect));
+            // A maximized window owns its frame; only a restored tile gets its
+            // saved rectangle back (the host's undo applies the same rule).
+            if (!instance.Maximized) targets.Add(new GeometryTarget(window.Handle, instance.Rect));
             if (instance.Maximized) maximizeAfter.Add(window.Handle);
         }
 
-        if (targets.Count == 0)
+        if (targets.Count == 0 && maximizeAfter.Count == 0)
         {
             _log("[undo] rejected: none of the windows still exist");
             return false;
         }
 
-        GeometryApplyResult result = GeometryApplier.ApplyBatch(targets);
+        GeometryApplyResult result = targets.Count > 0
+            ? GeometryApplier.ApplyBatch(targets)
+            : new GeometryApplyResult(0, 0, []);
         foreach (nint handle in maximizeAfter) _ = new Win32Window(handle).Show(InputNativeMethods.SW_MAXIMIZE);
 
         _log(FormattableString.Invariant(
-            $"[undo] restored {result.Applied}/{result.Requested} window(s) from the single undo slot"));
+            $"[undo] restored {result.Applied}/{result.Requested} window(s) and {maximizeAfter.Count} maximize state(s) from the single undo slot"));
         _host.RequestRetile();
-        return result.Applied > 0;
+        return targets.Count == 0 || result.Applied > 0;
     }
 
     private bool CursorToCentre()
@@ -437,28 +425,25 @@ internal sealed class WindowActions
         return ok;
     }
 
-    private bool Activate(MonitoredWindow target, string reason)
-    {
-        bool activated = InputNativeMethods.SetForegroundWindow(target.Handle);
-        if (!activated)
-        {
-            // The foreground lock can refuse a background process; a minimized
-            // window must be restored before it can take focus at all.
-            Win32Window window = target.Window;
-            if (window.IsMinimized) window.Show(InputNativeMethods.SW_RESTORE);
-            activated = InputNativeMethods.SetForegroundWindow(target.Handle);
-        }
-
-        _log(activated
-            ? FormattableString.Invariant($"[focus] {Describe(target.Handle)} ({reason})")
-            : FormattableString.Invariant($"[focus] {Describe(target.Handle)} refused by the foreground lock; {reason} not applied"));
-        return activated;
-    }
-
-    private MonitoredWindow? GetFocused(string action)
+    private MonitoredWindow? GetFocused(string action, bool requireTiled = false)
     {
         MonitoredWindow? focused = _catalog.FindFocused();
-        if (focused is null) _log(FormattableString.Invariant($"[{action}] no focused tileable window"));
+        if (focused is null)
+        {
+            _log(FormattableString.Invariant($"[{action}] no focused tileable window"));
+            return null;
+        }
+
+        if (requireTiled)
+        {
+            SurfaceFlags flags = focused.Surface.Flags;
+            if (flags.Minimized || flags.Maximized || flags.Floating)
+            {
+                _log(FormattableString.Invariant($"[{action}] the focused window is not a tiled half"));
+                return null;
+            }
+        }
+
         return focused;
     }
 
@@ -486,16 +471,6 @@ internal sealed class WindowActions
         if (_ratioWarningLogged) return;
         _ratioWarningLogged = true;
         _log("[nudge] note: TilingHost has no ratio state yet (W4.6); the next drain re-splits the pair at 50%");
-    }
-
-    private static bool IsStacked(Rect first, Rect second, MonitorInfo monitor)
-    {
-        const double tolerance = 2;
-        bool xDisjoint = first.Right <= second.X + tolerance || second.Right <= first.X + tolerance;
-        bool yDisjoint = first.Bottom <= second.Y + tolerance || second.Bottom <= first.Y + tolerance;
-        if (xDisjoint && !yDisjoint) return false;
-        if (yDisjoint && !xDisjoint) return true;
-        return monitor.Bounds.Height > monitor.Bounds.Width;
     }
 
     private bool Malformed(HotkeyBinding binding)

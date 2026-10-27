@@ -51,10 +51,6 @@ internal static class InputNativeMethods
         public RECT rcCaret;
     }
 
-    [DllImport(User32, EntryPoint = "SetForegroundWindow", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static extern bool SetForegroundWindow(nint hWnd);
-
     [DllImport(User32, EntryPoint = "SetCursorPos", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool SetCursorPos(int x, int y);

@@ -114,6 +114,10 @@ check_environment() {
     die "ADRT_VM_ROOT must be an absolute Windows path like C:\\adrt" 2
     return
   fi
+  if [[ ! "$WAIT_SECONDS" =~ ^[0-9]+$ || ! "$POLL_SECONDS" =~ ^[0-9]+$ || ! "$SCENARIO_TIMEOUT_MS" =~ ^[0-9]+$ ]]; then
+    die "ADRT_VM_WAIT_SECONDS, ADRT_VM_POLL_SECONDS and ADRT_SCENARIO_TIMEOUT_MS must be integers" 2
+    return
+  fi
   init_ssh
 }
 
@@ -300,7 +304,7 @@ wait_for_result() {
     if [[ "$answer" == *yes* ]]; then
       if ! scp_from "$remote_result" "$local_result"; then
         die "cannot copy $remote_result"
-        return 4
+        return 2
       fi
       pull_evidence "$id"
 
@@ -491,6 +495,9 @@ EOF
     echo "vm.sh: shot     $local_png"
   else
     echo "vm.sh: warning: screenshot $remote_png was not produced" >&2
+    if [[ "$rc" -eq 0 ]]; then
+      rc=1
+    fi
   fi
 
   return "$rc"

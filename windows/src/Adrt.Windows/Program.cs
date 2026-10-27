@@ -76,7 +76,10 @@ internal static class Program
         using var hotkeys = new HotkeyManager();
         using var input = new InputLayer(host, options, RequestQuit, Console.WriteLine);
         Console.WriteLine($"adrt: {options.Describe()}");
-        input.RegisterHotkeys(hotkeys);
+        IReadOnlyList<HotkeyRegistrationResult> registrations = input.RegisterHotkeys(hotkeys);
+        int accepted = registrations.Count(result => result.Registration.Registered);
+        Console.WriteLine(FormattableString.Invariant(
+            $"adrt: {accepted}/{registrations.Count} default hotkeys active."));
 
         ConsoleCancelEventHandler onCancel = (_, cancelArgs) =>
         {

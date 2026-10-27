@@ -56,11 +56,11 @@ function Resolve-AdrtCli {
     return (Resolve-Path -LiteralPath $configured).Path
   }
 
-  $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\..')).Path
+  $repoRoot = (Resolve-Path -LiteralPath (Join-Path (Join-Path (Join-Path $PSScriptRoot '..') '..') '..')).Path
   $candidates = @(
     'C:\adrt\bin\cli\adrt-cli.exe',
-    (Join-Path $repoRoot 'windows\src\Adrt.Cli\bin\Debug\net10.0-windows\adrt-cli.exe'),
-    (Join-Path $repoRoot 'windows\src\Adrt.Cli\bin\Release\net10.0-windows\adrt-cli.exe')
+    (Join-Path $repoRoot 'windows/src/Adrt.Cli/bin/Debug/net10.0-windows/adrt-cli.exe'),
+    (Join-Path $repoRoot 'windows/src/Adrt.Cli/bin/Release/net10.0-windows/adrt-cli.exe')
   )
 
   foreach ($candidate in $candidates) {
@@ -82,7 +82,13 @@ function Start-AdrtScenario {
     $script:RunId = '{0}-{1}-{2}' -f $Name, (Get-Date -Format 'yyyyMMdd-HHmmss'), $PID
   }
 
-  $script:ResultsDir = Get-AdrtValue -Name 'ADRT_RESULTS_DIR' -Default (Join-Path $env:LOCALAPPDATA 'Adrt\results')
+  $defaultResults = if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+    Join-Path ([IO.Path]::GetTempPath()) 'adrt-results'
+  }
+  else {
+    Join-Path $env:LOCALAPPDATA 'Adrt\results'
+  }
+  $script:ResultsDir = Get-AdrtValue -Name 'ADRT_RESULTS_DIR' -Default $defaultResults
   $script:EvidenceDir = Join-Path $script:ResultsDir ('{0}.evidence' -f $script:RunId)
   New-Item -ItemType Directory -Path $script:ResultsDir -Force | Out-Null
   New-Item -ItemType Directory -Path $script:EvidenceDir -Force | Out-Null
@@ -203,7 +209,13 @@ function Invoke-AdrtCli {
   $json = $null
   $jsonError = $null
   if ($ParseJson -and $stdout.Trim().Length -gt 0) {
-    try { $json = $stdout | ConvertFrom-Json }
+    try {
+      # ConvertFrom-Json turns an empty JSON array into $null on Windows
+      # PowerShell 5.1; keep the empty array so callers can tell "no decisions
+      # yet" from "the command printed nothing".
+      if ($stdout.Trim() -eq '[]') { $json = @() }
+      else { $json = $stdout | ConvertFrom-Json }
+    }
     catch { $jsonError = $_.Exception.Message }
   }
 

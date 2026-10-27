@@ -31,8 +31,14 @@ try {
   $ping = Invoke-AdrtCli -Arguments @('ping') -TimeoutMs 5000 -TranscriptOutput
   Add-AdrtCheck 'ping exits 0' ($ping.ExitCode -eq 0) ('exit={0} {1}' -f $ping.ExitCode, $ping.Stderr.Trim())
   Add-AdrtCheck 'ping answers pong' ($null -ne $ping.Json -and $ping.Json.pong -eq $true) $ping.JsonError
+  $pipePattern = if ([string]::IsNullOrWhiteSpace($env:ADRT_PIPE)) {
+    '^\\\\\.\\pipe\\adrt-'
+  }
+  else {
+    '^\\\\\.\\pipe\\'
+  }
   Add-AdrtCheck 'ping names a per-user pipe' (
-    $null -ne $ping.Json -and $ping.Json.pipe -match '^\\\\\.\\pipe\\adrt-'
+    $null -ne $ping.Json -and $ping.Json.pipe -match $pipePattern
   ) $(if ($null -ne $ping.Json) { [string]$ping.Json.pipe } else { 'no JSON' })
   Add-AdrtCheck 'ping reports the trigger table' (
     $null -ne $ping.Json -and [int]$ping.Json.triggers -eq 85
@@ -72,6 +78,12 @@ try {
   Add-AdrtCheck 'dump-events answers JSON' (
     $events.ExitCode -eq 0 -and $null -ne $events.Json
   ) ('exit={0} {1}' -f $events.ExitCode, $(if ($null -ne $events.Json) { 'parsed' } else { $events.JsonError })) @($eventEvidence)
+
+  $trace = Invoke-AdrtCli -Arguments @('dump-trace', '20') -TimeoutMs 15000
+  $traceEvidence = Save-AdrtEvidence -Name 'dump-trace.json' -Content $trace.Stdout
+  Add-AdrtCheck 'dump-trace answers JSON' (
+    $trace.ExitCode -eq 0 -and $null -ne $trace.Json
+  ) ('exit={0} {1}' -f $trace.ExitCode, $(if ($null -ne $trace.Json) { 'parsed' } else { $trace.JsonError })) @($traceEvidence)
 
   $unknown = Invoke-AdrtCli -Arguments @('trigger', 'NotATrigger', '[]') -TimeoutMs 5000 -Quiet
   Add-AdrtCheck 'unknown trigger is a remote error, not a hang' ($unknown.ExitCode -eq 1) ('exit={0}' -f $unknown.ExitCode)

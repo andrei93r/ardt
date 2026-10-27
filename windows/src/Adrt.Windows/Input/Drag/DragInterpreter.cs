@@ -1,4 +1,5 @@
 using Adrt.Core;
+using Adrt.Windows.Input.Actions;
 
 namespace Adrt.Windows.Input.Drag;
 
@@ -43,14 +44,36 @@ internal sealed class DragInterpreter
     private const double MinRatio = 0.05;
     private const double MaxRatio = 0.95;
 
+    /// <summary>The W3 host config: one workspace, flush half split.</summary>
+    private static readonly TilerConfig DragConfig = new()
+    {
+        GapBase = 0,
+        GapPortrait = 0,
+        GapLandscape = 0,
+        GapLeft = 0,
+        GapRight = 0,
+        GapTop = 0,
+        GapBottom = 0,
+        GapBetween = 0,
+        MinSizePolicy = MinSizePolicy.Respect,
+        PrimaryApps = [],
+        PrimaryAppRatio = 0.5,
+        Ratios = new Dictionary<string, double>(),
+        SwapPairs = [],
+        Rules = [],
+    };
+
+    private readonly WindowCatalog _catalog;
     private readonly Action<string> _log;
     private bool _active;
     private nint _window;
     private Rect _start;
 
-    public DragInterpreter(Action<string> log)
+    public DragInterpreter(WindowCatalog catalog, Action<string> log)
     {
+        ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(log);
+        _catalog = catalog;
         _log = log;
     }
 
@@ -150,7 +173,7 @@ internal sealed class DragInterpreter
         }
         else
         {
-            detail = "move";
+            detail = InterpretMove(end);
         }
 
         var report = new DragReport(_window, mode, _start, end, ratio, detail);
@@ -159,6 +182,97 @@ internal sealed class DragInterpreter
             $"[drag] 0x{_window.ToInt64():X}: {detail}; {_start.X:0},{_start.Y:0} {_start.Width:0}x{_start.Height:0} -> {end.X:0},{end.Y:0} {end.Width:0}x{end.Height:0}"));
         return report;
     }
+
+    private string InterpretMove(Rect dropped)
+    {
+        _catalog.Refresh();
+        MonitoredWindow? dragged = _catalog.Find(_window);
+        if (dragged is null) return "move (window is no longer tracked)";
+
+        MonitoredWindow? sibling = _catalog.SiblingOf(dragged);
+        if (sibling is null) return "move (no pair on this monitor)";
+
+        bool vertical = WindowCatalog.IsStacked(dragged.Frame, sibling.Frame, dragged.Monitor);
+        int startSlot = WindowCatalog.SlotOf(_start, dragged.Monitor, vertical);
+        int endSlot = WindowCatalog.SlotOf(dropped, dragged.Monitor, vertical);
+        bool crossed = endSlot != startSlot && sibling.Slot == endSlot;
+
+        Win?[] slots = startSlot == 0
+            ? [ToWin(dragged), ToWin(sibling)]
+            : [ToWin(sibling), ToWin(dragged)];
+
+        var state = new State
+        {
+            Workspaces =
+            [
+                new Ws
+                {
+                    Id = 0,
+                    Slots = slots,
+                    Minimized = [],
+                    Floats = [],
+                },
+            ],
+            Viewed = 0,
+        };
+
+        var input = new DragInput
+        {
+            State = state,
+            Env = new Env
+            {
+                Screen = ScreenClass.Fixed,
+                Axis = vertical ? Axis.Vertical : Axis.Horizontal,
+            },
+            Id = dragged.Surface.Id,
+            Workspace = dragged.Surface.WorkspaceId,
+            Crossed = crossed ? sibling.Surface.Id : null,
+            Managed = true,
+            SamePlane = true,
+            Screen = dragged.ToScreen(),
+            Config = DragConfig,
+            Dragged = ToTilerWindow(dragged, dropped, startSlot),
+            OthersByWorkspace = new Dictionary<int, IReadOnlyList<TilerWindow>>
+            {
+                [dragged.Surface.WorkspaceId] = [ToTilerWindow(sibling)],
+            },
+            Dropped = dropped,
+        };
+
+        DragOutcome? outcome = Adrt.Core.Drag.DragOutcome(input);
+        return outcome switch
+        {
+            SwapDragOutcome swap => FormattableString.Invariant($"move; crosses the pair -> swap with {swap.With}"),
+            NoneDragOutcome => "move; returns to its own half",
+            SlotDragOutcome slot => FormattableString.Invariant($"move; lands in slot {slot.Slot}"),
+            MaximizeDragOutcome => "move; the drop maximizes",
+            FloatDragOutcome => "move; the drop floats",
+            _ => "move; no landing decision",
+        };
+    }
+
+    private static Win ToWin(MonitoredWindow window) => new()
+    {
+        Id = window.Surface.Id,
+        Minimized = window.Surface.Flags.Minimized,
+        Floating = window.Surface.Flags.Floating,
+        Maximized = window.Surface.Flags.Maximized,
+        Fullscreen = window.Surface.Flags.Fullscreen,
+    };
+
+    private static TilerWindow ToTilerWindow(MonitoredWindow window, Rect? rect = null, int? slot = null) => new()
+    {
+        Id = window.Surface.Id,
+        AppId = window.Surface.AppId,
+        Title = window.Surface.Title,
+        Kind = window.Surface.Kind,
+        Rect = rect ?? window.Surface.Frame,
+        Min = window.Surface.Min,
+        Max = window.Surface.Max,
+        ScreenId = window.Surface.ScreenId,
+        WorkspaceId = window.Surface.WorkspaceId,
+        Slot = slot ?? window.Slot,
+    };
 
     private static MonitorInfo? MonitorOf(Rect frame)
     {

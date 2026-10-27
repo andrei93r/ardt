@@ -27,6 +27,9 @@ internal readonly record struct HotkeyRegistrationResult(
 /// </remarks>
 internal static class HotkeyRegistrar
 {
+    /// <summary><c>ERROR_HOTKEY_ALREADY_REGISTERED</c>; kept local so the input lane does not depend on host internals.</summary>
+    private const int HotkeyAlreadyRegistered = 1409;
+
     /// <summary>Register every default binding on the calling thread.</summary>
     /// <param name="hotkeys">Manager owned by the thread that pumps <c>WM_HOTKEY</c>.</param>
     /// <param name="log">Receives one line per accepted or refused binding.</param>
@@ -56,7 +59,7 @@ internal static class HotkeyRegistrar
                         binding.Modifiers,
                         binding.VirtualKey,
                         false,
-                        NativeMethods.ERROR_HOTKEY_ALREADY_REGISTERED,
+                        HotkeyAlreadyRegistered,
                         "duplicate combination in the default table"),
                     first));
                 continue;

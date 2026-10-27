@@ -52,6 +52,7 @@ public sealed class IpcServer : IDisposable
     };
 
     private readonly object _gate = new();
+    private readonly object _dispatchGate = new();
     private readonly ConcurrentDictionary<NamedPipeServerStream, byte> _connections = new();
     private readonly string _pipeName;
 
@@ -109,13 +110,14 @@ public sealed class IpcServer : IDisposable
             if (_dispatch is not null) throw new InvalidOperationException("IpcServer is already started");
 
             NamedPipeServerStream listener = CreateListener();
+            var cancellation = new CancellationTokenSource();
 
             _dispatch = dispatch;
-            _cancellation = new CancellationTokenSource();
+            _cancellation = cancellation;
             _startedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             _listener = listener;
             _acceptLoop = Task.Run(
-                () => AcceptLoopAsync(listener, dispatch, _cancellation.Token),
+                () => AcceptLoopAsync(listener, dispatch, cancellation.Token),
                 CancellationToken.None);
         }
 
@@ -351,7 +353,15 @@ public sealed class IpcServer : IDisposable
                 return Failure(id, $"unknown trigger: {trigger}");
             }
 
-            JsonNode? result = dispatch(trigger, args);
+            JsonNode? result;
+            // The app's trigger surface is single-threaded (the GNOME adapter
+            // runs on the Shell's main loop); serialise dispatch so two CLI
+            // processes cannot interleave a state mutation. ping stays outside
+            // the gate and is always answered.
+            lock (_dispatchGate)
+            {
+                result = dispatch(trigger, args);
+            }
             return Success(id, result);
         }
         catch (Exception error) when (!IsFatal(error))

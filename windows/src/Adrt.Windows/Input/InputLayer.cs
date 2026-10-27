@@ -61,7 +61,7 @@ internal sealed class InputLayer : IDisposable
         _actions = new WindowActions(host, _catalog, options.NudgeStep, _log);
         _border = new BorderController(options.BorderEnabled, () => _catalog.Screens, _log);
         _sessionWatcher = new SessionLockWatcher(_log);
-        _drag = new DragInterpreter(_log);
+        _drag = new DragInterpreter(_catalog, _log);
 
         _lastPaused = host.IsPaused;
         _session.SetManualPause(_lastPaused);
@@ -133,6 +133,7 @@ internal sealed class InputLayer : IDisposable
         PollSession();
         SyncPause();
         _drag.Poll();
+        _border.SetDragging(_drag.IsDragging);
         UpdateBorder();
 
         _monitorTicks++;
