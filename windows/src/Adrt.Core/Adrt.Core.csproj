@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Adrt.Core</RootNamespace>
+    <AssemblyName>Adrt.Core</AssemblyName>
+    <!-- Pure logic only: no P/Invoke, no UI. See CorePurityTests. -->
+  </PropertyGroup>
+
+</Project>
