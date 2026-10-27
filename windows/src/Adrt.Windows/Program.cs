@@ -21,9 +21,7 @@ internal static class Program
     private const int HotkeyPause = 1;
     private const int HotkeyQuit = 2;
 
-    private static readonly nint TickTimerId = 2;
-
-    private static uint _mainThreadId;
+    private static readonly ManualResetEvent QuitEvent = new(false);
 
     private static int Main()
     {
@@ -68,7 +66,6 @@ internal static class Program
         RegisterHotkey(hotkeys, HotkeyPause, HotkeyModifiers.Control | HotkeyModifiers.Alt, (uint)'P', "Ctrl+Alt+P (pause/resume)");
         RegisterHotkey(hotkeys, HotkeyQuit, HotkeyModifiers.Control | HotkeyModifiers.Alt, (uint)'Q', "Ctrl+Alt+Q (quit)");
 
-        _mainThreadId = NativeMethods.GetCurrentThreadId();
         ConsoleCancelEventHandler onCancel = (_, args) =>
         {
             args.Cancel = true;
@@ -78,18 +75,12 @@ internal static class Program
         Console.CancelKeyPress += onCancel;
         Console.WriteLine("adrt: tiling two windows per monitor; Ctrl+C also quits.");
 
-        if (NativeMethods.SetTimer(0, TickTimerId, TickIntervalMs, 0) == 0)
-        {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "SetTimer failed");
-        }
-
         try
         {
-            MessageLoop(host);
+            MessageLoop(host, pump);
         }
         finally
         {
-            NativeMethods.KillTimer(0, TickTimerId);
             Console.CancelKeyPress -= onCancel;
             hotkeys.UnregisterAll();
             pump.Stop();
@@ -97,29 +88,39 @@ internal static class Program
         }
     }
 
-    private static void MessageLoop(TilingHost host)
+    private static void MessageLoop(TilingHost host, WindowEventPump pump)
     {
+        // Wait on the pump's own coalescing signal (it is poked on every window
+        // event and every 50 ms) plus the quit handle, with a 40 ms safety
+        // timeout. Do not use SetTimer/WM_TIMER: a thread timer is not reliably
+        // delivered to a console message loop, which silently disabled tiling.
+        nint[] handles =
+        [
+            pump.Signaled.SafeWaitHandle.DangerousGetHandle(),
+            QuitEvent.SafeWaitHandle.DangerousGetHandle(),
+        ];
+
         while (true)
         {
-            int result = NativeMethods.GetMessage(out NativeMethods.MSG message, 0, 0, 0);
-            if (result <= 0) return; // 0 = WM_QUIT, -1 = error.
+            uint result = NativeMethods.MsgWaitForMultipleObjectsEx(
+                (uint)handles.Length, handles, TickIntervalMs, NativeMethods.QS_ALLINPUT, 0);
 
-            if (message.message == NativeMethods.WM_HOTKEY)
+            if (result == 1) return; // quit handle
+            if (result == 0 || result == NativeMethods.WAIT_TIMEOUT) host.Tick();
+
+            while (NativeMethods.PeekMessage(out NativeMethods.MSG message, 0, 0, 0, NativeMethods.PM_REMOVE))
             {
-                HandleHotkey(host, message.wParam.ToInt32());
-                continue;
-            }
+                if (message.message == NativeMethods.WM_QUIT) return;
 
-            if (message.message == NativeMethods.WM_TIMER &&
-                message.hwnd == 0 &&
-                message.wParam == TickTimerId)
-            {
-                host.Tick();
-                continue;
-            }
+                if (message.message == NativeMethods.WM_HOTKEY)
+                {
+                    HandleHotkey(host, message.wParam.ToInt32());
+                    continue;
+                }
 
-            NativeMethods.TranslateMessage(ref message);
-            NativeMethods.DispatchMessage(ref message);
+                NativeMethods.TranslateMessage(ref message);
+                NativeMethods.DispatchMessage(ref message);
+            }
         }
     }
 
@@ -155,9 +156,5 @@ internal static class Program
             : $"adrt: {label} unavailable ({registration.Error}); continuing without it.");
     }
 
-    private static void RequestQuit()
-    {
-        uint threadId = Volatile.Read(ref _mainThreadId);
-        if (threadId != 0) NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_QUIT, 0, 0);
-    }
+    private static void RequestQuit() => QuitEvent.Set();
 }

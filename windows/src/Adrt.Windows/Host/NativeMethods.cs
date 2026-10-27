@@ -138,7 +138,7 @@ internal static class NativeMethods
         public POINT pt;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     internal struct MONITORINFOEX
     {
         public uint cbSize;
@@ -280,6 +280,19 @@ internal static class NativeMethods
 
     [DllImport(User32, EntryPoint = "UnregisterHotKey", SetLastError = true)]
     internal static extern bool UnregisterHotKey(nint hWnd, int id);
+
+    internal const uint QS_ALLINPUT = 0x04FF;
+    internal const uint PM_REMOVE = 0x0001;
+    internal const uint WAIT_TIMEOUT = 0x00000102;
+
+    [DllImport(User32, EntryPoint = "MsgWaitForMultipleObjectsEx", SetLastError = true)]
+    internal static extern uint MsgWaitForMultipleObjectsEx(
+        uint nCount, nint[] pHandles, uint dwMilliseconds, uint dwWakeMask, uint dwFlags);
+
+    [DllImport(User32, EntryPoint = "PeekMessageW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool PeekMessage(
+        out MSG lpMsg, nint hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
 
     [DllImport(User32, EntryPoint = "GetMessageW", SetLastError = true)]
     internal static extern int GetMessage(out MSG lpMsg, nint hWnd, uint wMsgFilterMin, uint wMsgFilterMax);

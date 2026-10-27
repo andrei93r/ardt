@@ -120,6 +120,7 @@ public sealed class TilingHost
 
         IReadOnlyList<Surface> surfaces = _tracker.Snapshot(screenByMonitor);
         List<TilerWindow> windows = SelectWindows(surfaces);
+        _log(Inv($"[debug] monitors={screens.Count} tracked={_tracker.TrackedCount} surfaces={surfaces.Count} windows={windows.Count}"));
         if (windows.Count == 0) return false;
 
         IReadOnlyList<WorkspacePlan> plans = Tiler.LayoutAll(new TilerInput
@@ -132,6 +133,7 @@ public sealed class TilingHost
         var placements = new List<Placement>();
         foreach (WorkspacePlan plan in plans) placements.AddRange(plan.Plan.Placements);
 
+        _log(Inv($"[debug] plans={plans.Count} placements={placements.Count}"));
         return Apply(placements);
     }
 
