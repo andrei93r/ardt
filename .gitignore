@@ -54,3 +54,9 @@ Thumbs.db
 
 # generated test cases (regenerate with scripts/gen-core-cases.py)
 tests/generated/
+
+## .NET / Windows port build output
+windows/**/bin/
+windows/**/obj/
+*.user
+*.suo
