@@ -5,6 +5,10 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <RootNamespace>Adrt.Core.Tests</RootNamespace>
+    <!-- xunit.v3 is a Microsoft.Testing.Platform app; let `dotnet test` drive it. -->
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    <!-- The ported tests pass literal arrays to helpers on every case, on purpose. -->
+    <NoWarn>$(NoWarn);CA1861</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,6 +19,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Adrt.Core\Adrt.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Read-only copies of the GNOME sources the settings-descriptor drift test parses. -->
+    <EmbeddedResource Include="..\..\..\packages\gnome\schemas\org.gnome.shell.extensions.adrt.gschema.xml" LogicalName="adrt-schema.xml" />
+    <EmbeddedResource Include="..\..\..\src\adapters\gnome\prefs.ts" LogicalName="adrt-prefs.ts" />
   </ItemGroup>
 
 </Project>

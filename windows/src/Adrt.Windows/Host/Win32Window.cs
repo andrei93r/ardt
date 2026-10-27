@@ -118,6 +118,9 @@ public readonly record struct Win32Window(nint Handle)
     /// <summary>True when the window is minimized.</summary>
     public bool IsMinimized => Handle != 0 && NativeMethods.IsIconic(Handle);
 
+    /// <summary>True when the window is maximized (<c>WS_MAXIMIZE</c>).</summary>
+    public bool IsMaximized => (Style & NativeMethods.WS_MAXIMIZE) != 0;
+
     /// <summary>True when the extended styles carry <c>WS_EX_TOPMOST</c>.</summary>
     public bool IsTopmost => (ExtendedStyle & NativeMethods.WS_EX_TOPMOST) != 0;
 

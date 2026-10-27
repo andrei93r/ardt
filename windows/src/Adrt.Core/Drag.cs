@@ -134,18 +134,18 @@ public static class Drag
         switch (decision)
         {
             case SlotDropResult slot:
-            {
-                // The free slot wins: the resident takes the other side of the pair.
-                var partnerSlot = slot.Slot == 0 ? 1 : 0;
-                var list = Others(slot.Workspace)
-                    .Select((w, index) => index == 0 ? w with { Slot = partnerSlot } : w);
-                return new SlotDragOutcome
                 {
-                    Workspace = slot.Workspace,
-                    Slot = slot.Slot,
-                    Rect = Result(list.Append(Dragged(slot.Slot)).ToList()),
-                };
-            }
+                    // The free slot wins: the resident takes the other side of the pair.
+                    var partnerSlot = slot.Slot == 0 ? 1 : 0;
+                    var list = Others(slot.Workspace)
+                        .Select((w, index) => index == 0 ? w with { Slot = partnerSlot } : w);
+                    return new SlotDragOutcome
+                    {
+                        Workspace = slot.Workspace,
+                        Slot = slot.Slot,
+                        Rect = Result(list.Append(Dragged(slot.Slot)).ToList()),
+                    };
+                }
             case MaximizeDropResult maximize:
                 return new MaximizeDragOutcome
                 {

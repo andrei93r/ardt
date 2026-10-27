@@ -35,6 +35,7 @@ internal static class NativeMethods
 
     // Window styles.
     internal const int WS_POPUP = unchecked((int)0x80000000);
+    internal const int WS_MAXIMIZE = 0x01000000;
     internal const int WS_EX_TOPMOST = 0x00000008;
     internal const int WS_EX_TOOLWINDOW = 0x00000080;
     internal const int WS_EX_APPWINDOW = 0x00040000;
@@ -173,6 +174,10 @@ internal static class NativeMethods
         nint lprcMonitor,
         nint dwData);
 
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal delegate bool EnumWindowsProc(nint hWnd, nint lParam);
+
     // ---------------------------------------------------------------------
     // user32.dll — messages, hooks, windows.
     // ---------------------------------------------------------------------
@@ -252,6 +257,10 @@ internal static class NativeMethods
 
     [DllImport(User32, EntryPoint = "GetWindowRect", SetLastError = true)]
     internal static extern bool GetWindowRect(nint hWnd, out RECT lpRect);
+
+    [DllImport(User32, EntryPoint = "EnumWindows", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool EnumWindows(nint lpEnumFunc, nint lParam);
 
     [DllImport(User32, EntryPoint = "EnumDisplayMonitors", SetLastError = true)]
     internal static extern bool EnumDisplayMonitors(

@@ -1,2 +1,6 @@
 <Solution>
+  <Project Path="src/Adrt.Core/Adrt.Core.csproj" />
+  <Project Path="src/Adrt.Windows/Adrt.Windows.csproj" />
+  <Project Path="tests/Adrt.Architecture.Tests/Adrt.Architecture.Tests.csproj" />
+  <Project Path="tests/Adrt.Core.Tests/Adrt.Core.Tests.csproj" />
 </Solution>

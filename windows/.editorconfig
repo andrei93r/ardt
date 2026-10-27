@@ -1,0 +1,14 @@
+# C# port style. The repository root uses 2-space indentation for the
+# TypeScript/GSettings sources; .NET code follows the usual 4-space convention.
+
+[*.cs]
+indent_style = space
+indent_size = 4
+tab_width = 4
+dotnet_sort_system_directives_first = true
+csharp_new_line_before_open_brace = all
+csharp_style_namespace_declarations = file_scoped:suggestion
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+dotnet_style_qualification_for_method = false:suggestion
+dotnet_style_qualification_for_event = false:suggestion

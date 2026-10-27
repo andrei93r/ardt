@@ -261,17 +261,17 @@ public static class Topology
             case Arrangement.Single:
                 return new[] { (0, 0) };
             case Arrangement.Row:
-            {
-                var cells = new List<(int Column, int Row)>(Math.Max(0, n));
-                for (var i = 0; i < n; i++) cells.Add((i, 0));
-                return cells;
-            }
+                {
+                    var cells = new List<(int Column, int Row)>(Math.Max(0, n));
+                    for (var i = 0; i < n; i++) cells.Add((i, 0));
+                    return cells;
+                }
             case Arrangement.Column:
-            {
-                var cells = new List<(int Column, int Row)>(Math.Max(0, n));
-                for (var i = 0; i < n; i++) cells.Add((0, i));
-                return cells;
-            }
+                {
+                    var cells = new List<(int Column, int Row)>(Math.Max(0, n));
+                    for (var i = 0; i < n; i++) cells.Add((0, i));
+                    return cells;
+                }
             case Arrangement.L:
                 return new[] { (0, 0), (1, 0), (0, 1) };
             case Arrangement.Grid:

@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- xunit.v3 is a Microsoft.Testing.Platform app; let `dotnet test` drive it. -->
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RootNamespace>Adrt.Architecture.Tests</RootNamespace>
+    <AssemblyName>Adrt.Architecture.Tests</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit.v3" Version="2.0.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Adrt.Core\Adrt.Core.csproj" />
+    <!--
+      The host targets net10.0-windows and this test project targets net10.0, so
+      it cannot be a compile-time reference (NU1201). Build it as a dependency and
+      copy the output next to the tests; the tests only read its metadata. This is
+      why EnableWindowsTargeting is on above.
+    -->
+    <ProjectReference Include="..\..\src\Adrt.Windows\Adrt.Windows.csproj"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

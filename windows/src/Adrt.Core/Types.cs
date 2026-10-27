@@ -108,11 +108,14 @@ public static class Types
         var width = Math.Max(0, Math.Min(rect.Width, area.Width));
         var height = Math.Max(0, Math.Min(rect.Height, area.Height));
         return new Rect(
-            Math.Round(Clamp(rect.X, area.X, area.X + area.Width - width)),
-            Math.Round(Clamp(rect.Y, area.Y, area.Y + area.Height - height)),
-            Math.Round(width),
-            Math.Round(height));
+            JsRound(Clamp(rect.X, area.X, area.X + area.Width - width)),
+            JsRound(Clamp(rect.Y, area.Y, area.Y + area.Height - height)),
+            JsRound(width),
+            JsRound(height));
     }
+
+    /// <summary>JS <c>Math.round</c>: half-up (toward +Infinity), not half-to-even.</summary>
+    private static double JsRound(double value) => Math.Floor(value + 0.5);
 
     /// <summary>Snap a logical-pixel value to the monitor scale grid (§25).</summary>
     /// <remarks>

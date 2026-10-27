@@ -602,72 +602,72 @@ public static class Replay
             switch (evt.Event)
             {
                 case "window-opened":
-                {
-                    if (id is null) break;
-                    UpsertWindow(runtime, id.Value, evt);
-                    var placement = PlacementPolicy.RouteNewWindow(
-                        StateOf(runtime),
-                        EnvOf(env),
-                        ToWin(runtime.Windows.GetValueOrDefault(id.Value), id.Value),
-                        ReadDirection(evt),
-                        ReadInt(evt, "workspace"),
-                        IsTrue(evt, "doesNotFit"));
-                    var preView = runtime.Viewed;
-                    ApplyPlacement(runtime, placement, id.Value);
-                    decisions.Add(
-                        PlacementDecision(evt, "routeNewWindow", id.Value, placement, runtime.Viewed != preView ? runtime.Viewed : null));
-                    Reap(runtime, evt, decisions);
-                    break;
-                }
+                    {
+                        if (id is null) break;
+                        UpsertWindow(runtime, id.Value, evt);
+                        var placement = PlacementPolicy.RouteNewWindow(
+                            StateOf(runtime),
+                            EnvOf(env),
+                            ToWin(runtime.Windows.GetValueOrDefault(id.Value), id.Value),
+                            ReadDirection(evt),
+                            ReadInt(evt, "workspace"),
+                            IsTrue(evt, "doesNotFit"));
+                        var preView = runtime.Viewed;
+                        ApplyPlacement(runtime, placement, id.Value);
+                        decisions.Add(
+                            PlacementDecision(evt, "routeNewWindow", id.Value, placement, runtime.Viewed != preView ? runtime.Viewed : null));
+                        Reap(runtime, evt, decisions);
+                        break;
+                    }
                 case "window-closed":
-                {
-                    if (id is null) break;
-                    TakeWin(runtime, id.Value);
-                    runtime.Windows.Remove(id.Value);
-                    Reap(runtime, evt, decisions);
-                    break;
-                }
+                    {
+                        if (id is null) break;
+                        TakeWin(runtime, id.Value);
+                        runtime.Windows.Remove(id.Value);
+                        Reap(runtime, evt, decisions);
+                        break;
+                    }
                 case "window-unmaximized":
-                {
-                    if (id is null) break;
-                    var placement = PlacementPolicy.UnmaximizeWindow(
-                        StateOf(runtime),
-                        EnvOf(env),
-                        ReadInt(evt, "workspace") ?? runtime.Viewed,
-                        id.Value);
-                    var preView = runtime.Viewed;
-                    ApplyPlacement(runtime, placement, id.Value);
-                    decisions.Add(
-                        PlacementDecision(evt, "unmaximizeWindow", id.Value, placement, runtime.Viewed != preView ? runtime.Viewed : null));
-                    Reap(runtime, evt, decisions);
-                    break;
-                }
+                    {
+                        if (id is null) break;
+                        var placement = PlacementPolicy.UnmaximizeWindow(
+                            StateOf(runtime),
+                            EnvOf(env),
+                            ReadInt(evt, "workspace") ?? runtime.Viewed,
+                            id.Value);
+                        var preView = runtime.Viewed;
+                        ApplyPlacement(runtime, placement, id.Value);
+                        decisions.Add(
+                            PlacementDecision(evt, "unmaximizeWindow", id.Value, placement, runtime.Viewed != preView ? runtime.Viewed : null));
+                        Reap(runtime, evt, decisions);
+                        break;
+                    }
                 case "window-maximized":
-                {
-                    if (id is null) break;
-                    var placement = PlacementPolicy.MaximizeWindow(
-                        StateOf(runtime),
-                        EnvOf(env),
-                        ReadInt(evt, "workspace") ?? runtime.Viewed);
-                    var preView = runtime.Viewed;
-                    ApplyPlacement(runtime, placement, id.Value);
-                    decisions.Add(
-                        PlacementDecision(evt, "maximizeWindow", id.Value, placement, runtime.Viewed != preView ? runtime.Viewed : null));
-                    Reap(runtime, evt, decisions);
-                    break;
-                }
+                    {
+                        if (id is null) break;
+                        var placement = PlacementPolicy.MaximizeWindow(
+                            StateOf(runtime),
+                            EnvOf(env),
+                            ReadInt(evt, "workspace") ?? runtime.Viewed);
+                        var preView = runtime.Viewed;
+                        ApplyPlacement(runtime, placement, id.Value);
+                        decisions.Add(
+                            PlacementDecision(evt, "maximizeWindow", id.Value, placement, runtime.Viewed != preView ? runtime.Viewed : null));
+                        Reap(runtime, evt, decisions);
+                        break;
+                    }
                 case "window-minimized":
-                {
-                    if (id is null) break;
-                    MinimizeInPlace(runtime, id.Value);
-                    Reap(runtime, evt, decisions);
-                    break;
-                }
+                    {
+                        if (id is null) break;
+                        MinimizeInPlace(runtime, id.Value);
+                        Reap(runtime, evt, decisions);
+                        break;
+                    }
                 case "layout":
-                {
-                    Layout(runtime, evt, env, config, decisions);
-                    break;
-                }
+                    {
+                        Layout(runtime, evt, env, config, decisions);
+                        break;
+                    }
                 default:
                     // Unknown events are deterministically ignored.
                     break;
