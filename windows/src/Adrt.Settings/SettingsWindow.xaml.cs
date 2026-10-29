@@ -24,6 +24,9 @@ public partial class SettingsWindow : Window
     private readonly SettingsStore _store;
     private readonly List<SettingRow> _rows = [];
     private readonly List<(GroupBox Box, List<SettingRow> Rows)> _groups = [];
+    private readonly RulesPage _rules;
+    private readonly AppsPage _apps;
+    private bool _navigating;
 
     /// <summary>Create a window over the per-user store.</summary>
     public SettingsWindow()
@@ -40,6 +43,12 @@ public partial class SettingsWindow : Window
 
         PathText.Text = store.FilePath;
         PathText.ToolTip = store.FilePath;
+
+        _rules = new RulesPage(store, SetStatus);
+        _apps = new AppsPage(store, SetStatus);
+        RulesHost.Content = _rules;
+        AppsHost.Content = _apps;
+        Pages.SelectionChanged += OnPageChanged;
 
         BuildRows();
 
@@ -58,10 +67,64 @@ public partial class SettingsWindow : Window
         }
 
         PreviewKeyDown += OnPreviewKeyDown;
+
+        // Keep every row in step when a page or an import writes through the
+        // same store. A row's own edit is already reflected, so this is cheap.
+        _store.Changed += OnStoreChanged;
     }
 
     /// <summary>The store this window edits.</summary>
     public SettingsStore Store => _store;
+
+    /// <summary>The tab currently shown.</summary>
+    public SettingsPage CurrentPage => (SettingsPage)Pages.SelectedIndex;
+
+    /// <summary>
+    /// Select a tab. <see cref="SettingsWindowHost.Show"/> uses this so the tray
+    /// can open the window directly on Rules or Apps.
+    /// </summary>
+    public void ShowPage(SettingsPage page)
+    {
+        if (page is < SettingsPage.Settings or > SettingsPage.Apps) return;
+        _navigating = true;
+        try
+        {
+            Pages.SelectedIndex = (int)page;
+            ReloadPage(page);
+        }
+        finally
+        {
+            _navigating = false;
+        }
+    }
+
+    private void OnPageChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_navigating || e.Source != Pages) return;
+        ReloadPage(CurrentPage);
+    }
+
+    private void ReloadPage(SettingsPage page)
+    {
+        // Re-read the page's source so a window that stayed open in the
+        // background reflects edits made by another process.
+        switch (page)
+        {
+            case SettingsPage.Rules:
+                _rules.Reload();
+                break;
+            case SettingsPage.Apps:
+                _apps.Reload();
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void OnStoreChanged(object? sender, SettingsChangedEventArgs e)
+    {
+        foreach (SettingRow row in _rows) row.Reload();
+    }
 
     private void BuildRows()
     {
@@ -168,6 +231,7 @@ public partial class SettingsWindow : Window
     {
         IReadOnlyList<string> errors = _store.Reload();
         foreach (SettingRow row in _rows) row.Reload();
+        _rules.Reload();
 
         SetStatus(
             errors.Count == 0
@@ -189,6 +253,7 @@ public partial class SettingsWindow : Window
 
         _store.ResetAll();
         foreach (SettingRow row in _rows) row.Reload();
+        _rules.Reload();
 
         bool saved = _store.TrySave(out string error);
         SetStatus(
@@ -202,6 +267,7 @@ public partial class SettingsWindow : Window
     {
         if (e.Key == Key.F && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
         {
+            Pages.SelectedIndex = (int)SettingsPage.Settings;
             SearchBox.Focus();
             SearchBox.SelectAll();
             e.Handled = true;

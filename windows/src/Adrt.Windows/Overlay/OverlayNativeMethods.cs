@@ -212,7 +212,7 @@ internal static class OverlayNativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool ValidateRect(nint hWnd, nint rect);
 
-    [DllImport(User32, EntryPoint = "GetModuleHandleW", SetLastError = true, CharSet = CharSet.Unicode)]
+    [DllImport("kernel32.dll", EntryPoint = "GetModuleHandleW", SetLastError = true, CharSet = CharSet.Unicode)]
     internal static extern nint GetModuleHandle(string? moduleName);
 
     [DllImport(Gdi32, EntryPoint = "CreateCompatibleDC", SetLastError = true)]

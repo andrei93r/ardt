@@ -40,7 +40,14 @@ public static class SettingsWindowHost
     /// </summary>
     /// <param name="store">The store to edit; null creates the per-user store.</param>
     /// <param name="log">Optional one-line diagnostics sink.</param>
-    public static void Show(SettingsStore? store = null, Action<string>? log = null)
+    /// <param name="page">
+    /// The tab to select; null selects the main Settings tab, so a plain
+    /// <c>Show()</c> from a tray handler never strands the user on a sub-page.
+    /// </param>
+    public static void Show(
+        SettingsStore? store = null,
+        Action<string>? log = null,
+        SettingsPage? page = null)
     {
         EnsureStarted(store, log);
 
@@ -54,6 +61,7 @@ public static class SettingsWindowHost
         void Open()
         {
             if (_window is null) return;
+            _window.ShowPage(page ?? SettingsPage.Settings);
             if (!_window.IsVisible) _window.Show();
             if (_window.WindowState == WindowState.Minimized) _window.WindowState = WindowState.Normal;
             _window.Activate();

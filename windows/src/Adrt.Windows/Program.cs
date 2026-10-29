@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.Versioning;
+using Adrt.Settings;
 using Adrt.Windows.Input;
 
 namespace Adrt.Windows;
@@ -73,6 +74,21 @@ internal static class Program
         var host = new TilingHost(pump, Console.WriteLine);
         host.Start();
 
+        var dispatch = new TriggerDispatch(host, RequestQuit, Console.WriteLine);
+        using var ipc = new IpcServer().Start(dispatch.Invoke);
+
+        using var tray = new TrayShell(log: Console.WriteLine);
+        tray.PauseResumeRequested += (_, e) =>
+        {
+            if (host.IsPaused != e.Paused) host.TogglePause();
+        };
+        tray.SettingsRequested += (_, _) => SettingsWindowHost.Show(log: Console.WriteLine);
+        tray.AppsRequested += (_, _) =>
+            SettingsWindowHost.Show(log: Console.WriteLine, page: SettingsPage.Apps);
+        tray.QuitRequested += (_, _) => RequestQuit();
+        tray.Start();
+        Console.WriteLine("adrt: ipc pipe and tray started.");
+
         using var hotkeys = new HotkeyManager();
         using var input = new InputLayer(host, options, RequestQuit, Console.WriteLine);
         Console.WriteLine($"adrt: {options.Describe()}");
@@ -97,6 +113,8 @@ internal static class Program
         finally
         {
             Console.CancelKeyPress -= onCancel;
+            tray.Stop();
+            ipc.Stop();
             hotkeys.UnregisterAll();
             pump.Stop();
             Console.WriteLine("adrt: stopped.");

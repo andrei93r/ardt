@@ -63,6 +63,9 @@ public sealed class TrayShell : IDisposable
     /// <summary>Raised when Settings is chosen. With no handler the built-in window opens.</summary>
     public event EventHandler? SettingsRequested;
 
+    /// <summary>Raised when Apps is chosen. With no handler the built-in window opens on Apps.</summary>
+    public event EventHandler? AppsRequested;
+
     /// <summary>Raised when Quit is chosen; the host decides how to end its message loop.</summary>
     public event EventHandler? QuitRequested;
 
@@ -101,11 +104,14 @@ public sealed class TrayShell : IDisposable
             pause.Click += OnPauseResumeClicked;
             var settings = new ToolStripMenuItem("Settings…");
             settings.Click += OnSettingsClicked;
+            var apps = new ToolStripMenuItem("Apps…");
+            apps.Click += OnAppsClicked;
             var quit = new ToolStripMenuItem("Quit adrt");
             quit.Click += OnQuitClicked;
 
             menu.Items.Add(pause);
             menu.Items.Add(settings);
+            menu.Items.Add(apps);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(quit);
 
@@ -196,7 +202,19 @@ public sealed class TrayShell : IDisposable
 
         // The tray is useful on its own: with no subscriber, open the bundled
         // preferences window (it owns its own STA thread).
-        SettingsWindowHost.Show(log: _log);
+        SettingsWindowHost.Show(page: SettingsPage.Settings, log: _log);
+    }
+
+    private void OnAppsClicked(object? sender, EventArgs e)
+    {
+        EventHandler? handler = AppsRequested;
+        if (handler is not null)
+        {
+            handler(this, EventArgs.Empty);
+            return;
+        }
+
+        SettingsWindowHost.Show(page: SettingsPage.Apps, log: _log);
     }
 
     private void OnQuitClicked(object? sender, EventArgs e)

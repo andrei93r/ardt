@@ -73,10 +73,22 @@
             </Grid>
         </Border>
 
-        <ScrollViewer VerticalScrollBarVisibility="Auto"
-                      HorizontalScrollBarVisibility="Disabled"
-                      Padding="16,12">
-            <StackPanel x:Name="RowsPanel" />
-        </ScrollViewer>
+        <TabControl x:Name="Pages"
+                    Margin="0"
+                    Padding="0">
+            <TabItem Header="Settings">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Padding="16,12">
+                    <StackPanel x:Name="RowsPanel" />
+                </ScrollViewer>
+            </TabItem>
+            <TabItem Header="Rules">
+                <ContentControl x:Name="RulesHost" />
+            </TabItem>
+            <TabItem Header="Apps">
+                <ContentControl x:Name="AppsHost" />
+            </TabItem>
+        </TabControl>
     </DockPanel>
 </Window>
