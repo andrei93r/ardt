@@ -74,7 +74,9 @@ internal static class Program
         var host = new TilingHost(pump, Console.WriteLine);
         host.Start();
 
-        var dispatch = new TriggerDispatch(host, RequestQuit, Console.WriteLine);
+        var dispatch = new TriggerDispatch(host, RequestQuit, options.NudgeStep, Console.WriteLine);
+        Console.WriteLine(FormattableString.Invariant(
+            $"adrt: ipc trigger coverage {dispatch.SupportedCount}/{dispatch.TriggerCount}."));
         using var ipc = new IpcServer().Start(dispatch.Invoke);
 
         using var tray = new TrayShell(log: Console.WriteLine);
