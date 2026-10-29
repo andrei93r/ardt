@@ -15,8 +15,13 @@ namespace Adrt.Windows;
 internal static class WindowClamp
 {
     /// <summary>Compute the pulled-back rectangle for a window, or false when it is inside.</summary>
+    /// <param name="window">Live window to inspect.</param>
+    /// <param name="monitor">Monitor the window is on.</param>
+    /// <param name="settling">The host just moved this window and its frame is an intermediate step.</param>
+    /// <param name="stubborn">The app refused geometry recently and is inside its cooldown.</param>
+    /// <param name="target">Receives the repaired rectangle.</param>
     public static bool TryTarget(
-        Win32Window window, MonitorInfo? monitor, bool settling, out Rect target)
+        Win32Window window, MonitorInfo? monitor, bool settling, bool stubborn, out Rect target)
     {
         target = default;
         if (monitor is null) return false;
@@ -32,7 +37,7 @@ internal static class WindowClamp
             Fullscreen = CoversMonitor(frame, monitor.Bounds),
             Minimized = window.IsMinimized,
             Maximized = window.IsMaximized,
-            Stubborn = false,
+            Stubborn = stubborn,
             Settling = settling,
             Frame = frame,
         };

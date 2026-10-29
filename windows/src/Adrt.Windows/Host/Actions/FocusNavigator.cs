@@ -9,33 +9,53 @@ namespace Adrt.Windows;
 /// <remarks>
 /// The cycle is scoped to the focused window's screen, matching the model; a
 /// directional move may reach another monitor (the core's candidate pass is
-/// what decides), but never another workspace — there is one in this stage.
+/// what decides), but never another workspace — only the active desktop has
+/// visible surfaces. Floats are represented as <see cref="CycleEntryKind.Float"/>
+/// so they cycle after the managed halves, left to right.
 /// </remarks>
 [SupportedOSPlatform("windows")]
 internal static class FocusNavigator
 {
-    /// <summary>Next id in the cycle, or null when there is nowhere to go.</summary>
-    public static int? Next(
+    /// <summary>The cycle entries for the current window's screen, including floats.</summary>
+    public static IReadOnlyList<CycleEntry> Entries(
         Surface current,
         IReadOnlyList<Surface> surfaces,
-        IReadOnlyDictionary<int, int> slots)
+        IReadOnlyDictionary<int, int> slots,
+        IReadOnlySet<int> floats)
     {
         var entries = new List<CycleEntry>(surfaces.Count);
         foreach (Surface surface in surfaces)
         {
             if (surface.ScreenId != current.ScreenId) continue;
 
+            bool floating = floats.Contains(surface.Id);
             entries.Add(new CycleEntry
             {
                 Id = surface.Id,
-                Kind = CycleEntryKind.Managed,
-                Slot = slots.TryGetValue(surface.Id, out int slot) ? slot : 0,
+                Kind = floating ? CycleEntryKind.Float : CycleEntryKind.Managed,
+                Slot = floating ? null : slots.TryGetValue(surface.Id, out int slot) ? slot : 0,
                 Rect = surface.Frame,
+                Z = surface.ZPosition,
                 Minimized = surface.Flags.Minimized,
             });
         }
 
-        return Focus.CycleOrder(current.Id, entries);
+        return entries;
+    }
+
+    /// <summary>
+    /// Next id in the cycle, using an optional lap snapshot from the core's
+    /// <see cref="Focus.CycleSequence"/> so raising a float cannot reorder the lap.
+    /// </summary>
+    public static int? Next(
+        Surface current,
+        IReadOnlyList<Surface> surfaces,
+        IReadOnlyDictionary<int, int> slots,
+        IReadOnlySet<int> floats,
+        IReadOnlyList<int>? order = null)
+    {
+        IReadOnlyList<CycleEntry> entries = Entries(current, surfaces, slots, floats);
+        return Focus.CycleOrder(current.Id, entries, order);
     }
 
     /// <summary>Nearest non-minimized surface in <paramref name="direction"/>.</summary>

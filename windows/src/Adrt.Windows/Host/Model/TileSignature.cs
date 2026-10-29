@@ -22,7 +22,7 @@ internal static class TileSignature
         foreach (Surface surface in surfaces)
         {
             builder.Append(FormattableString.Invariant(
-                $"{surface.Id}:{surface.ScreenId}:{(surface.Flags.Minimized ? 'm' : '-')}"));
+                $"{surface.Id}:{surface.ScreenId}:{surface.WorkspaceId}:{(surface.Flags.Minimized ? 'm' : '-')}"));
             builder.Append(surface.Flags.Maximized ? 'M' : '-');
             builder.Append(surface.Flags.Floating ? 'f' : '-');
             builder.Append('|');

@@ -4,10 +4,11 @@ namespace Adrt.Windows;
 
 /// <summary>A window a placement batch moved, with the rectangle it had before.</summary>
 /// <param name="SurfaceId">Stable tracker id.</param>
+/// <param name="Workspace">Workspace the window was in before the batch.</param>
 /// <param name="Slot">Screen-scoped slot the window held before the batch, or null.</param>
 /// <param name="Rect">Visible frame before the batch, physical pixels.</param>
 /// <param name="Maximized">Whether the window was maximized before the batch.</param>
-internal readonly record struct PlacedWindow(int SurfaceId, int? Slot, Rect Rect, bool Maximized);
+internal readonly record struct PlacedWindow(int SurfaceId, int Workspace, int? Slot, Rect Rect, bool Maximized);
 
 /// <summary>
 /// The single undo slot for placement batches (§13), backed by the core
@@ -38,7 +39,7 @@ internal sealed class PlacementHistory
             instances.Add(new InstanceConfig
             {
                 Id = window.SurfaceId,
-                Workspace = WindowTracker.SingleWorkspaceId,
+                Workspace = window.Workspace,
                 Slot = window.Slot,
                 Rect = window.Rect,
                 Maximized = window.Maximized,

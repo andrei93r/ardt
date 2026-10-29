@@ -9,6 +9,53 @@ using System.Runtime.Versioning;
 namespace Adrt.Windows;
 
 /// <summary>
+/// The host's virtual-desktop abstraction. The real implementation wraps the
+/// documented COM manager; a single-desktop or test implementation can return
+/// <see cref="IsSupported"/> = false without the host changing.
+/// </summary>
+internal interface IVirtualDesktopHost
+{
+    /// <summary>True when the documented COM surface is available.</summary>
+    bool IsSupported { get; }
+
+    /// <summary>The desktop id inferred at the last <see cref="Refresh"/>, if known.</summary>
+    Guid? CurrentDesktopId { get; }
+
+    /// <summary>The workspace id mapped to the current desktop (0 when unsupported).</summary>
+    int ActiveWorkspace { get; }
+
+    /// <summary>Number of desktops observed this session.</summary>
+    int WorkspaceCount { get; }
+
+    /// <summary>Re-read the current desktop id without throwing.</summary>
+    void Refresh();
+
+    /// <summary>Read a window's desktop id.</summary>
+    bool TryGetWindowDesktopId(nint hwnd, out Guid desktopId);
+
+    /// <summary>Assign (or look up) the workspace id for a desktop.</summary>
+    int WorkspaceForDesktop(Guid desktopId);
+
+    /// <summary>The workspace id of a window, or false when unavailable.</summary>
+    bool TryGetWorkspaceForWindow(nint hwnd, out int workspaceId);
+
+    /// <summary>The desktop mapped to a workspace id.</summary>
+    bool TryGetDesktopForWorkspace(int workspaceId, out Guid desktopId);
+
+    /// <summary>Move a window to a workspace's desktop.</summary>
+    bool TryMoveToWorkspace(nint hwnd, int workspaceId);
+
+    /// <summary>Move a window to an explicit desktop id.</summary>
+    bool TryMoveToDesktop(nint hwnd, Guid desktopId);
+
+    /// <summary>Whether a window is on the desktop the user is looking at.</summary>
+    bool IsOnCurrentDesktop(nint hwnd);
+
+    /// <summary>Drop a reaped workspace and shift ids to its right down one.</summary>
+    bool ForgetWorkspace(int workspaceId);
+}
+
+/// <summary>
 /// The documented Windows virtual-desktop surface, wrapped for the tiling host.
 /// </summary>
 /// <remarks>
@@ -33,7 +80,7 @@ namespace Adrt.Windows;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
-internal sealed class VirtualDesktops
+internal sealed class VirtualDesktops : IVirtualDesktopHost
 {
     private const string ClsidVirtualDesktopManager = "AA509086-5CA9-4C25-8F95-589D3C07B48A";
     private const string IidVirtualDesktopManager = "A5CD92FF-29BE-454C-8D04-D82879FB3F1B";
@@ -41,8 +88,11 @@ internal sealed class VirtualDesktops
     private static readonly Guid Clsid = new(ClsidVirtualDesktopManager);
 
     private readonly Action<string>? _log;
+    private readonly Dictionary<Guid, int> _workspaceByDesktop = [];
+    private readonly Dictionary<int, Guid> _desktopByWorkspace = [];
     private IVirtualDesktopManager? _manager;
     private Guid? _currentDesktopId;
+    private int _nextWorkspace;
     private bool _creationAttempted;
     private bool _unavailableLogged;
     private bool _callFailureLogged;
@@ -75,6 +125,16 @@ internal sealed class VirtualDesktops
     public Guid? CurrentDesktopId => _currentDesktopId;
 
     /// <summary>
+    /// The workspace id mapped to the current desktop, or 0 in single-desktop
+    /// mode / before the first probe succeeded.
+    /// </summary>
+    public int ActiveWorkspace =>
+        _currentDesktopId is { } desktopId ? WorkspaceForDesktop(desktopId) : 0;
+
+    /// <summary>Number of desktops observed this session (workspace ids 0..n-1).</summary>
+    public int WorkspaceCount => _desktopByWorkspace.Count;
+
+    /// <summary>
     /// Re-read the current desktop id. Safe to call on every host tick: it logs
     /// nothing on success and never throws.
     /// </summary>
@@ -85,12 +145,103 @@ internal sealed class VirtualDesktops
         try
         {
             Guid? current = QueryCurrentDesktopId();
-            if (current is { } desktopId) _currentDesktopId = desktopId;
+            if (current is { } desktopId)
+            {
+                _currentDesktopId = desktopId;
+                _ = WorkspaceForDesktop(desktopId);
+            }
         }
         catch (Exception error)
         {
             MarkUnavailable(error.Message, error.HResult);
         }
+    }
+
+    /// <summary>Read one window's desktop id. False when the handle is stale or COM refuses.</summary>
+    public bool TryGetWindowDesktopId(nint hwnd, out Guid desktopId)
+    {
+        desktopId = Guid.Empty;
+        if (hwnd == 0) return false;
+        if (!EnsureManager()) return false;
+
+        IVirtualDesktopManager? manager = _manager;
+        if (manager is null || !IsWindow(hwnd)) return false;
+
+        try
+        {
+            int hr = manager.GetWindowDesktopId(hwnd, out desktopId);
+            if (hr >= 0 && desktopId != Guid.Empty) return true;
+
+            if (hr < 0) NoteCallFailure(nameof(IVirtualDesktopManager.GetWindowDesktopId), hr);
+            desktopId = Guid.Empty;
+            return false;
+        }
+        catch (Exception error)
+        {
+            desktopId = Guid.Empty;
+            MarkUnavailable(error.Message, error.HResult);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Assign a workspace id to a desktop the first time it is seen. The host's
+    /// workspace ids are therefore stable for the session and contiguous.
+    /// </summary>
+    public int WorkspaceForDesktop(Guid desktopId)
+    {
+        if (desktopId == Guid.Empty) return 0;
+        if (_workspaceByDesktop.TryGetValue(desktopId, out int workspaceId)) return workspaceId;
+
+        while (_desktopByWorkspace.ContainsKey(_nextWorkspace)) _nextWorkspace++;
+        workspaceId = _nextWorkspace++;
+        _workspaceByDesktop[desktopId] = workspaceId;
+        _desktopByWorkspace[workspaceId] = desktopId;
+        Log(FormattableString.Invariant($"[desktops] mapped desktop {desktopId} to workspace {workspaceId}."));
+        return workspaceId;
+    }
+
+    /// <summary>The workspace id of a window, when virtual desktops are supported.</summary>
+    public bool TryGetWorkspaceForWindow(nint hwnd, out int workspaceId)
+    {
+        workspaceId = 0;
+        if (!TryGetWindowDesktopId(hwnd, out Guid desktopId)) return false;
+
+        workspaceId = WorkspaceForDesktop(desktopId);
+        return true;
+    }
+
+    /// <summary>The desktop mapped to a workspace id, if that workspace has been seen.</summary>
+    public bool TryGetDesktopForWorkspace(int workspaceId, out Guid desktopId) =>
+        _desktopByWorkspace.TryGetValue(workspaceId, out desktopId);
+
+    /// <summary>Move a window to a workspace's desktop. False when the workspace is not mapped.</summary>
+    public bool TryMoveToWorkspace(nint hwnd, int workspaceId) =>
+        TryGetDesktopForWorkspace(workspaceId, out Guid desktopId) && TryMoveToDesktop(hwnd, desktopId);
+
+    /// <summary>
+    /// Drop a reaped workspace and shift the workspaces to its right down one,
+    /// so ids stay contiguous with <see cref="Adrt.Core.Tiler.RemapRatiosAfterReap"/>.
+    /// </summary>
+    public bool ForgetWorkspace(int workspaceId)
+    {
+        if (!_desktopByWorkspace.TryGetValue(workspaceId, out Guid desktopId)) return false;
+
+        _desktopByWorkspace.Remove(workspaceId);
+        _workspaceByDesktop.Remove(desktopId);
+
+        var remaining = _desktopByWorkspace.OrderBy(pair => pair.Key).ToArray();
+        _desktopByWorkspace.Clear();
+        _workspaceByDesktop.Clear();
+        foreach (var (id, desktop) in remaining)
+        {
+            int shifted = id > workspaceId ? id - 1 : id;
+            _desktopByWorkspace[shifted] = desktop;
+            _workspaceByDesktop[desktop] = shifted;
+        }
+
+        _nextWorkspace = _desktopByWorkspace.Count;
+        return true;
     }
 
     /// <summary>Move one top-level window to <paramref name="desktopId"/>.</summary>
@@ -167,6 +318,15 @@ internal sealed class VirtualDesktops
                 return false;
             }
 
+            // Activation alone is not enough: an interface whose vtable moved
+            // (an unrecognised build) activates but fails its calls. Probe with
+            // a live top-level window before declaring the service usable.
+            if (!Probe(_manager))
+            {
+                MarkUnavailable("IVirtualDesktopManager probe failed", 0);
+                return false;
+            }
+
             Log("[desktops] IVirtualDesktopManager available.");
             return true;
         }
@@ -178,6 +338,33 @@ internal sealed class VirtualDesktops
             MarkUnavailable(error.Message, error.HResult);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Exercise both documented readers on a live window. A COM class whose
+    /// GUID resolves but whose layout no longer matches fails here and degrades
+    /// the host instead of failing mid-drain.
+    /// </summary>
+    private bool Probe(IVirtualDesktopManager manager)
+    {
+        nint anchor = GetForegroundWindow();
+        if (anchor == 0) return true;
+
+        int hr = manager.IsWindowOnCurrentVirtualDesktop(anchor, out _);
+        if (hr < 0)
+        {
+            NoteCallFailure(nameof(IVirtualDesktopManager.IsWindowOnCurrentVirtualDesktop), hr);
+            return false;
+        }
+
+        hr = manager.GetWindowDesktopId(anchor, out Guid desktopId);
+        if (hr < 0)
+        {
+            NoteCallFailure(nameof(IVirtualDesktopManager.GetWindowDesktopId), hr);
+            return false;
+        }
+
+        return desktopId != Guid.Empty;
     }
 
     /// <summary>Read the current desktop id from the foreground or first visible window.</summary>

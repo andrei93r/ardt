@@ -70,6 +70,9 @@ internal sealed class FloatState
     /// <summary>A snapshot of the floating surface ids.</summary>
     public IReadOnlyCollection<int> Ids => _floating;
 
+    /// <summary>The floating set for focus ordering and plan exclusion.</summary>
+    public IReadOnlySet<int> Floating => _floating;
+
     /// <summary>Load the saved records. Call once from <see cref="TilingHost.Start"/>.</summary>
     public void Load()
     {
@@ -109,6 +112,7 @@ internal sealed class FloatState
 
         var byId = new Dictionary<int, Surface>(surfaces.Count);
         foreach (Surface surface in surfaces) byId[surface.Id] = surface;
+        int loaded = _records.Count;
 
         var restored = new Dictionary<int, PersistedFloat>();
         var taken = new HashSet<int>();
@@ -151,7 +155,7 @@ internal sealed class FloatState
             _records[id] = record;
         }
 
-        if (restored.Count > 0) Save();
+        if (loaded > 0) Save();
     }
 
     /// <summary>Toggle one window's float state and persist the new value.</summary>
@@ -214,7 +218,7 @@ internal sealed class FloatState
             string? directory = Path.GetDirectoryName(FilePath);
             if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
 
-            Array records = _records.Values.OrderBy(record => record.SurfaceId).ToArray();
+            PersistedFloat[] records = _records.Values.OrderBy(record => record.SurfaceId).ToArray();
             string text = JsonSerializer.Serialize(records, JsonOptions);
             string temporary = FilePath + ".tmp";
             File.WriteAllText(temporary, text);
