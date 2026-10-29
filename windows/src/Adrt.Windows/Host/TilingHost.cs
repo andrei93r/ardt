@@ -63,6 +63,8 @@ public sealed class TilingHost
     private readonly PlacementHistory _history = new();
     private readonly FloatState _floats;
     private readonly RatioStore _ratios;
+    private readonly VirtualDesktops _desktops;
+    private readonly Adaptation _adaptation = new();
     private readonly Action<string> _log;
     private readonly Dictionary<nint, long> _selfMovedAt = [];
     private readonly Dictionary<int, int> _slots = [];
@@ -84,6 +86,7 @@ public sealed class TilingHost
         _log = log ?? Console.WriteLine;
         _floats = new FloatState(_log);
         _ratios = new RatioStore(_log);
+        _desktops = new VirtualDesktops(_log);
         _configuration = DefaultConfiguration with { Ratios = _ratios.Snapshot() };
         _lastSweepAt = Stopwatch.GetTimestamp();
     }
@@ -96,6 +99,47 @@ public sealed class TilingHost
 
     /// <summary>True when there is a placement batch that <see cref="UndoLast"/> can revert.</summary>
     public bool CanUndo => _history.Size > 0;
+
+    /// <summary>
+    /// True when the documented Windows virtual-desktop API is available. False
+    /// means the host keeps the legal single-desktop default and
+    /// <see cref="TryMoveWorkspaceToDesktop"/> always returns false.
+    /// </summary>
+    public bool VirtualDesktopsSupported => _desktops.IsSupported;
+
+    /// <summary>
+    /// Move every tracked window of <paramref name="workspaceId"/> to
+    /// <paramref name="desktopId"/>. The desktop id must come from Windows; the
+    /// host never invents one.
+    /// </summary>
+    /// <returns>True when at least one window was moved; false when unsupported, the id is empty, or no window moved.</returns>
+    public bool TryMoveWorkspaceToDesktop(int workspaceId, Guid desktopId)
+    {
+        if (!_desktops.IsSupported)
+        {
+            _log("[desktops] not supported; workspace stays on the single desktop");
+            return false;
+        }
+
+        if (workspaceId < 0 || desktopId == Guid.Empty)
+        {
+            _log(Inv($"[desktops] invalid request ws={workspaceId} desktop={desktopId}"));
+            return false;
+        }
+
+        IReadOnlyList<Surface> surfaces = SnapshotSurfaces();
+        int moved = 0;
+        foreach (Surface surface in surfaces)
+        {
+            if (surface.WorkspaceId != workspaceId) continue;
+            if (!_tracker.TryGetHandle(surface.Id, out nint handle)) continue;
+            if (_desktops.TryMoveToDesktop(handle, desktopId)) moved++;
+        }
+
+        _log(Inv(
+            $"[desktops] workspace {workspaceId} -> {desktopId}: moved {moved} window(s)"));
+        return moved > 0;
+    }
 
     /// <summary>Seed the tracker with the windows already on screen and read the topology.</summary>
     public void Start()
@@ -531,6 +575,7 @@ public sealed class TilingHost
 
         var targets = new List<GeometryTarget>(placements.Count);
         var before = new List<PlacedWindow>(placements.Count);
+        var requestedByWindow = new Dictionary<nint, Placement>(placements.Count);
         foreach (Placement placement in placements)
         {
             if (placement.Layer != Layer.Tiled) continue;
@@ -549,6 +594,7 @@ public sealed class TilingHost
             if (Near(current, placement.Rect)) continue;
 
             targets.Add(new GeometryTarget(handle, placement.Rect));
+            requestedByWindow[handle] = placement;
             before.Add(new PlacedWindow(
                 placement.SurfaceId,
                 previousSlots[placement.SurfaceId],
@@ -574,7 +620,75 @@ public sealed class TilingHost
         _log(Inv(
             $"[tile] applied {result.Applied}/{result.Requested}, ",
             $"{result.Mismatches.Count} mismatch(es)"));
+
+        bool moved = result.Applied > 0;
+        moved |= AdaptMismatches(result.Mismatches, requestedByWindow, surfaces, now);
+        return moved;
+    }
+
+    /// <summary>
+    /// §10: feed the read-back mismatches to the refusal ladder. A window that
+    /// refused its tile may propose the next rung (<see cref="AdaptationResult.Next"/>),
+    /// applied as one follow-up batch; an app at the bottom of the ladder is left
+    /// alone while its cooldown runs.
+    /// </summary>
+    private bool AdaptMismatches(
+        IReadOnlyList<GeometryMismatch> mismatches,
+        IReadOnlyDictionary<nint, Placement> requestedByWindow,
+        IReadOnlyList<Surface> surfaces,
+        long now)
+    {
+        if (mismatches.Count == 0) return false;
+
+        var surfaceById = new Dictionary<int, Surface>(surfaces.Count);
+        foreach (Surface surface in surfaces) surfaceById[surface.Id] = surface;
+
+        var retries = new List<GeometryTarget>(mismatches.Count);
+        foreach (GeometryMismatch mismatch in mismatches)
+        {
+            if (!requestedByWindow.TryGetValue(mismatch.Window, out Placement? placement)) continue;
+            if (!surfaceById.TryGetValue(placement.SurfaceId, out Surface? surface)) continue;
+            if (!TryAdaptationArea(surface.ScreenId, out Rect area, out SplitAxis axis)) continue;
+
+            AdaptationResult adaptation = _adaptation.Observe(
+                placement.Rect, mismatch.Actual, surface.AppId, now, area, axis);
+
+            if (adaptation.ShouldRetry && adaptation.Next is RefusalStep step)
+            {
+                retries.Add(new GeometryTarget(mismatch.Window, step.Rect));
+            }
+            else if (adaptation.CoolingDown)
+            {
+                _log(Inv($"[adapt] {StubbornCooldown.KeyFor(surface)} cooling down"));
+            }
+        }
+
+        if (retries.Count == 0) return false;
+
+        GeometryApplyResult result = GeometryApplier.ApplyBatch(retries);
+        foreach (GeometryTarget target in retries) _selfMovedAt[target.Window] = now;
+        _log(Inv($"[adapt] retried {retries.Count} window(s), applied {result.Applied}"));
         return result.Applied > 0;
+    }
+
+    /// <summary>The work area and split axis a surface's tile belongs to.</summary>
+    private bool TryAdaptationArea(int screenId, out Rect area, out SplitAxis axis)
+    {
+        foreach (MonitorInfo monitor in _monitors)
+        {
+            if (monitor.Index != screenId) continue;
+
+            area = monitor.WorkArea;
+            axis = _configuration.WorkspaceAxis
+                ?? (monitor.Bounds.Height > monitor.Bounds.Width
+                    ? SplitAxis.Vertical
+                    : SplitAxis.Horizontal);
+            return true;
+        }
+
+        area = default;
+        axis = SplitAxis.Horizontal;
+        return false;
     }
 
     /// <summary>
@@ -631,6 +745,9 @@ public sealed class TilingHost
         long now = Stopwatch.GetTimestamp();
         if (Stopwatch.GetElapsedTime(_lastSweepAt, now) < SelfHealInterval) return false;
         _lastSweepAt = now;
+
+        _desktops.Refresh();
+        _adaptation.Expire(now);
 
         IReadOnlyList<Surface> surfaces = _tracker.Snapshot(ScreenMap());
         PruneState(surfaces);

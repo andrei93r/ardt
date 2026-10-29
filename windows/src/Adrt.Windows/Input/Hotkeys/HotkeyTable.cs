@@ -54,6 +54,11 @@ internal enum HotkeyAction
     Quit,
 }
 
+/// <summary>A secondary key combination tried when the primary is refused.</summary>
+/// <param name="Modifiers">Modifiers; <c>MOD_NOREPEAT</c> is added by the registrar.</param>
+/// <param name="VirtualKey">Virtual-key code.</param>
+internal sealed record HotkeyFallback(HotkeyModifiers Modifiers, uint VirtualKey);
+
 /// <summary>
 /// One default binding: the core trigger it drives, a human label, and the
 /// Windows key combination.
@@ -66,6 +71,7 @@ internal enum HotkeyAction
 /// <param name="VirtualKey">Virtual-key code.</param>
 /// <param name="Direction">Direction for focus/move/nudge bindings.</param>
 /// <param name="Grow">True for the grow half of <see cref="HotkeyAction.ResizeFocused"/>.</param>
+/// <param name="Fallbacks">Alternatives tried in order when the primary is refused (empty when none).</param>
 internal sealed record HotkeyBinding(
     int Id,
     string Trigger,
@@ -74,7 +80,8 @@ internal sealed record HotkeyBinding(
     HotkeyModifiers Modifiers,
     uint VirtualKey,
     FocusDirection? Direction = null,
-    bool Grow = false);
+    bool Grow = false,
+    IReadOnlyList<HotkeyFallback>? Fallbacks = null);
 
 /// <summary>
 /// The Windows default hotkey table.
@@ -95,7 +102,10 @@ internal sealed record HotkeyBinding(
 /// <para>
 /// A binding is data only. <see cref="HotkeyRegistrar"/> validates the table for
 /// duplicates and registers it; a refused combination (reserved by Windows or
-/// taken by another app) is logged and skipped rather than fatal.
+/// taken by another app) is logged and skipped rather than fatal. Rows may list
+/// <see cref="HotkeyBinding.Fallbacks"/>: when the OS refuses the primary, the
+/// registrar tries them in order, so an action survives another app owning its
+/// preferred combination.
 /// </para>
 /// </remarks>
 internal static class HotkeyTable
@@ -104,6 +114,8 @@ internal static class HotkeyTable
     private const HotkeyModifiers WinCtrlShift =
         HotkeyModifiers.Win | HotkeyModifiers.Control | HotkeyModifiers.Shift;
     private const HotkeyModifiers CtrlAlt = HotkeyModifiers.Control | HotkeyModifiers.Alt;
+    private const HotkeyModifiers CtrlAltShift =
+        HotkeyModifiers.Control | HotkeyModifiers.Alt | HotkeyModifiers.Shift;
 
     // OEM virtual-key codes (WinUser.h). Letters use their ASCII code directly.
     private const uint VkGrave = 0xC0;      // `~
@@ -127,7 +139,8 @@ internal static class HotkeyTable
         new(7, "SwapPair", "swap the pair", HotkeyAction.SwapPair, WinCtrl, (uint)'X'),
         new(8, "MoveToOtherHalf", "move window to the other half", HotkeyAction.MoveToOtherHalf, WinCtrl, (uint)'M'),
         new(9, "MoveDirection", "move window left", HotkeyAction.MoveDirection, WinCtrlShift, (uint)'H', FocusDirection.Left),
-        new(10, "MoveDirection", "move window right", HotkeyAction.MoveDirection, WinCtrlShift, (uint)'L', FocusDirection.Right),
+        new(10, "MoveDirection", "move window right", HotkeyAction.MoveDirection, WinCtrlShift, (uint)'L', FocusDirection.Right,
+            Fallbacks: [new(CtrlAltShift, (uint)'L')]),
         new(11, "MoveDirection", "move window up", HotkeyAction.MoveDirection, WinCtrlShift, (uint)'K', FocusDirection.Up),
         new(12, "MoveDirection", "move window down", HotkeyAction.MoveDirection, WinCtrlShift, (uint)'J', FocusDirection.Down),
 
@@ -140,8 +153,10 @@ internal static class HotkeyTable
         new(18, "ResizeFocused", "shrink the focused window", HotkeyAction.ResizeFocused, WinCtrl, VkOemMinus, Grow: false),
 
         // Window (core: ToggleFloat, MaximizeWindow, Undo, QuitFocused).
-        new(19, "ToggleFloat", "float or re-tile the focused window", HotkeyAction.ToggleFloat, WinCtrl, (uint)'F'),
-        new(20, "MaximizeWindow", "toggle maximize", HotkeyAction.ToggleMaximize, WinCtrl, (uint)'E'),
+        new(19, "ToggleFloat", "float or re-tile the focused window", HotkeyAction.ToggleFloat, WinCtrl, (uint)'F',
+            Fallbacks: [new(CtrlAlt, (uint)'F')]),
+        new(20, "MaximizeWindow", "toggle maximize", HotkeyAction.ToggleMaximize, WinCtrl, (uint)'E',
+            Fallbacks: [new(CtrlAlt, (uint)'E')]),
         new(21, "Undo", "undo the last change", HotkeyAction.Undo, WinCtrl, (uint)'Z'),
         new(22, "QuitFocused", "close the focused window", HotkeyAction.QuitFocused, WinCtrlShift, (uint)'Q'),
 
