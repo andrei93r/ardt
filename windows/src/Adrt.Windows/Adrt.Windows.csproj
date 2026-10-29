@@ -13,6 +13,7 @@
          System.Drawing.Size and System.Windows.Forms.Screen would collide with the
          core's Size/Screen types in Host/. Tray files import them explicitly. -->
     <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
 
   <ItemGroup>

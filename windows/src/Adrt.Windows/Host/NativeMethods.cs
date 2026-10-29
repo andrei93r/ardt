@@ -325,6 +325,12 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetMonitorInfo(nint hMonitor, ref MONITORINFOEX lpmi);
 
+    internal const nint DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4;
+
+    [DllImport(User32, EntryPoint = "SetProcessDpiAwarenessContext", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SetProcessDpiAwarenessContext(nint dpiContext);
+
     // ---------------------------------------------------------------------
     // dwmapi.dll.
     // ---------------------------------------------------------------------
