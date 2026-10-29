@@ -59,3 +59,60 @@ virsh -c qemu:///session snapshot-create-as win11 clean "post-install"
 
 This is the baseline the Windows test harness (`scripts/windows/vm.sh`) should
 restore before each scenario run.
+
+## Multi-monitor release gate (orientation matrix)
+
+Not yet run. The domain has been redefined with QXL `heads='2'`; Windows needs
+the QXL-WDDM-DOD driver (or a working inbox QXL path) before the second head
+appears in Display Settings.
+
+Required configuration:
+
+| Display | Resolution | Orientation | Role |
+| --- | --- | --- | --- |
+| DISPLAY1 | 1920×1080 / 2560×1440 / 1920×1200 | landscape | primary |
+| DISPLAY2 | 1080×1920 / 1440×2560 / 1200×1920 | portrait | secondary |
+
+Priority resolution matrix (the ones that matter most):
+
+First, the configurations this laptop has actually remembered
+(`~/.config/monitors.xml`, 9 entries; `rotation=left` means the panel is
+rotated to portrait):
+
+| Local config | Screens |
+| --- | --- |
+| main (most entries) | 2× **Dell S2725DS 2560×1440**, one `rotation=left` (portrait) at x=0, the other landscape at x=1440 |
+| laptop only | **eDP-1 1920×1200** (P14s Gen 4 panel), 100% and 125% in different entries |
+| triple | eDP-1 1920×1200 + 2× 2560×1440 (one portrait, one landscape) |
+
+No remembered 1920×1080 configuration exists locally, so 1080p is added
+explicitly.
+
+1. **2560×1440 (2K, 16:9)** — the main local rig, one landscape + one portrait:
+   landscape 1280/1280; portrait 1440×2560 → stacked 1440×720.
+2. **1920×1200 (16:10)** — the Lenovo P14s Gen 4 panel; landscape 960/960;
+   portrait 1200×1920 → stacked 1200×600. Also at 125% (remembered locally).
+3. **1920×1080 (16:9)** — added by request: landscape 960/960;
+   portrait 1080×1920 → stacked 1080×540.
+
+QXL notes: the device is `ram=64M, vram=64M, vgamem=16M`. 2560×1440 needs
+~15 MB of surface and 1920×1200 ~9 MB, so raise `vgamem` to 32768 before the 2K
+runs; the QXL driver caps a head at 2560×1600, which is why the portrait cases
+are the same mode rotated in Windows (logical bounds swap, physical mode stays
+landscape).
+
+Expected behaviour (the model splits along each screen's own axis):
+
+- landscape pair → left/right, 50/50 inside the work area;
+- portrait pair → **top/bottom**, 50/50 inside the work area;
+- a window moved across the boundary re-pairs on the destination screen, never
+  straddles both;
+- unplug/disable the portrait head → its windows re-home, no orphaned rects and
+  no window left at portrait coordinates;
+- rotate the second head portrait → landscape → the pair re-splits left/right;
+- mixed DPI (100% landscape + 150% portrait) must not shift rects by a pixel
+  (physical-pixel bookkeeping, `DWMWA_EXTENDED_FRAME_BOUNDS`).
+
+Re-run `Adrt.Windows` after each configuration change and confirm
+`[display] 2 screen(s)` plus per-screen `plans=2 placements=4` with four
+windows (two per screen).
