@@ -316,15 +316,19 @@ signed off in the results file.
 
 | Stage | State | Evidence |
 | --- | --- | --- |
-| W0 grounding + VM lab | open | — |
-| W1 scaffold + gates | open | — |
-| W2 core port + fixtures | open | — |
-| W3 platform foundation | open | — |
-| W4 model behaviours | open | — |
-| W5 input + chrome | open | — |
-| W6 prefs + tray | open | — |
-| W7 harness + app matrix | open | — |
-| W8 packaging + beta | open | — |
+| W0 grounding + VM lab | partial | Win11 VM installed and verified (UEFI, Secure Boot, TPM 2.0); snapshot `clean`; no SSH/VmAgent channel yet — `docs/WINDOWS_VM_NOTES.md` |
+| W1 scaffold + gates | done | `Adrt.slnx`, architecture/purity/API tests, CI, format gate; 626 tests green |
+| W2 core port + fixtures | done | 38 modules ported 1:1; 619 tests + 17 documented platform skips |
+| W3 platform foundation | done (single monitor) | live pair tiling verified in the VM: 2 placements, 0 mismatches |
+| W4 model behaviours | mostly done | maximize ladder, undo, clamp, reaping, focus, floats + ratio persistence, refusal adaptation, virtual-desktop service (single-desktop degrade); not live-tested |
+| W5 input + chrome | done | 25 bindings with fallbacks, drag interpretation, DWM focus border, pause/lock; partially VM-exercised |
+| W6 prefs + tray | done | descriptor-driven settings, rules editor, apps registry, tray menu; runtime UI not exercised |
+| W7 harness + app matrix | partial | pipe server + CLI + `vm.sh` + T00/T01; trigger coverage in progress; no VmAgent, no T-suite run, no app matrix |
+| W8 packaging and beta | files done | Inno per-user installer, winget template, release workflow, user guide; not built/installed on Windows |
+
+Remaining work is verification, not architecture: multi-monitor orientation matrix
+(skipped in the VM for now), runtime UI/IPC exercises, the Windows scenario suite,
+and installer drills.
 
 ---
 
