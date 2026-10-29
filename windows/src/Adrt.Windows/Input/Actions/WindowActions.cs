@@ -41,8 +41,6 @@ internal sealed class WindowActions
     private readonly Action<string> _log;
     private readonly double _nudgeStep;
     private readonly ChangeLog _undo = new();
-    private readonly HashSet<int> _floated = [];
-    private bool _ratioWarningLogged;
 
     public WindowActions(TilingHost host, WindowCatalog catalog, double nudgeStep, Action<string> log)
     {
@@ -272,9 +270,20 @@ internal sealed class WindowActions
             new GeometryTarget(second.Handle, secondNext),
         ]);
 
+        // Persist the share the tiler will read on the next drain. The ratio is
+        // keyed on the sorted-first app, matching core Tiler.ResolveRatio.
+        double firstShare = (clamped - origin) / extent;
+        bool firstIsSortedFirst =
+            string.CompareOrdinal(first.Surface.AppId, second.Surface.AppId) <= 0;
+        double stored = firstIsSortedFirst ? firstShare : 1 - firstShare;
+        _host.SetRatio(
+            focused.Surface.WorkspaceId,
+            focused.Surface.ScreenId,
+            vertical ? SplitAxis.Vertical : SplitAxis.Horizontal,
+            stored);
+
         _log(FormattableString.Invariant(
             $"[{reason}] split {boundary:0.#} -> {clamped:0.#} on {(vertical ? "vertical" : "horizontal")} axis; applied {result.Applied}/{result.Requested}"));
-        WarnRatioNotPersisted();
         return result.Applied == result.Requested;
     }
 
@@ -302,19 +311,9 @@ internal sealed class WindowActions
         MonitoredWindow? focused = GetFocused("float");
         if (focused is null) return false;
 
-        bool floating;
-        if (_floated.Remove(focused.Surface.Id))
-        {
-            floating = false;
-        }
-        else
-        {
-            _floated.Add(focused.Surface.Id);
-            floating = true;
-        }
-
+        bool floating = _host.ToggleFloat(focused.Surface.Id);
         _log(FormattableString.Invariant(
-            $"[float] {Describe(focused.Handle)} -> {(floating ? "floating" : "tiled")}; TilingHost has no float state yet (W4.3), so the next retile still tiles it"));
+            $"[float] {Describe(focused.Handle)} -> {(floating ? "floating" : "tiled")}"));
         return true;
     }
 
@@ -464,13 +463,6 @@ internal sealed class WindowActions
         }
 
         _undo.Set(new Change { Instances = instances });
-    }
-
-    private void WarnRatioNotPersisted()
-    {
-        if (_ratioWarningLogged) return;
-        _ratioWarningLogged = true;
-        _log("[nudge] note: TilingHost has no ratio state yet (W4.6); the next drain re-splits the pair at 50%");
     }
 
     private bool Malformed(HotkeyBinding binding)

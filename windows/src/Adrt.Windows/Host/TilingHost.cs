@@ -35,8 +35,11 @@ public sealed class TilingHost
     private const double TolerancePixels = 1.0;
     private const double AssumedRefreshRate = 60;
 
-    /// <summary>Half split, flush to the work area, no ratio memory yet.</summary>
-    private static readonly TilerConfig Configuration = new()
+    /// <summary>
+    /// Base configuration: half split, flush to the work area. The live copy
+    /// (<see cref="_configuration"/>) adds the persisted ratios.
+    /// </summary>
+    private static readonly TilerConfig DefaultConfiguration = new()
     {
         GapBase = 0,
         GapPortrait = 0,
@@ -58,10 +61,13 @@ public sealed class TilingHost
     private readonly WindowTracker _tracker = new();
     private readonly MaximizeLadder _maximize = new();
     private readonly PlacementHistory _history = new();
+    private readonly FloatState _floats;
+    private readonly RatioStore _ratios;
     private readonly Action<string> _log;
     private readonly Dictionary<nint, long> _selfMovedAt = [];
     private readonly Dictionary<int, int> _slots = [];
     private readonly List<MonitorInfo> _monitors = [];
+    private TilerConfig _configuration;
     private nint _userDragging;
     private bool _paused;
     private long _lastSweepAt;
@@ -76,6 +82,9 @@ public sealed class TilingHost
         ArgumentNullException.ThrowIfNull(pump);
         _pump = pump;
         _log = log ?? Console.WriteLine;
+        _floats = new FloatState(_log);
+        _ratios = new RatioStore(_log);
+        _configuration = DefaultConfiguration with { Ratios = _ratios.Snapshot() };
         _lastSweepAt = Stopwatch.GetTimestamp();
     }
 
@@ -93,8 +102,19 @@ public sealed class TilingHost
     {
         _tracker.Seed();
         RefreshTopology();
+
+        // Ratios are keyed by connector, so load them after the first topology
+        // read (and migrate any old index-keyed file). Floats are keyed by the
+        // session-scoped surface id, so re-bind the saved records to live windows.
+        _ratios.Load(ConnectorByIndex());
+        RefreshConfiguration();
+        _floats.Load();
+        _floats.Restore(_tracker.Snapshot(ScreenMap()));
+
         _lastSweepAt = Stopwatch.GetTimestamp();
-        _log("[host] tiling started; one workspace (0) across all screens.");
+        _log(Inv(
+            $"[host] tiling started; one workspace (0) across all screens, ",
+            $"{_floats.Ids.Count} float(s), {_ratios.Snapshot().Count} ratio(s)."));
     }
 
     /// <summary>Pause/resume; resuming requests a fresh plan.</summary>
@@ -107,6 +127,80 @@ public sealed class TilingHost
 
     /// <summary>Force a plan on the next tick (display change, resume, self-heal).</summary>
     public void RequestRetile() => _tracker.RequestRetile();
+
+    /// <summary>
+    /// §6: flip one window between the tiled pair and the floating layer. A
+    /// floating window stays where it is and is excluded from the planner; its
+    /// former sibling fills the screen on the next drain.
+    /// </summary>
+    /// <param name="surfaceId">The tracker's surface id for the window.</param>
+    /// <returns>The new floating state (false when the window is tiled).</returns>
+    public bool ToggleFloat(int surfaceId)
+    {
+        Surface? surface = SurfaceById(surfaceId);
+        if (surface is null)
+        {
+            _log(Inv($"[float] surface {surfaceId} is not tracked; ignored"));
+            return IsFloating(surfaceId);
+        }
+
+        bool floating = _floats.Toggle(surfaceId, surface.AppId, surface.Title);
+        _log(Inv(
+            $"[float] surface {surfaceId} ({surface.AppId}) -> {(floating ? "floating" : "tiled")}"));
+        _tracker.RequestRetile();
+        return floating;
+    }
+
+    /// <summary>True when <paramref name="surfaceId"/> is on the floating layer (§6).</summary>
+    public bool IsFloating(int surfaceId) => _floats.IsFloating(surfaceId);
+
+    /// <summary>
+    /// §10: store the split ratio for a workspace on a screen. The value is the
+    /// sorted-first app's share along <paramref name="axis"/>, clamped to
+    /// 0.05-0.95 and persisted; the next drain lays the pair out with it.
+    /// </summary>
+    /// <returns>True when the stored ratio changed.</returns>
+    public bool SetRatio(int workspaceId, int screenId, SplitAxis axis, double ratio)
+    {
+        if (workspaceId < 0 || screenId < 0 || !double.IsFinite(ratio))
+        {
+            _log(Inv($"[ratio] invalid request ws={workspaceId} screen={screenId} value={ratio:0.###}"));
+            return false;
+        }
+
+        RefreshTopology();
+        if (!TryConnector(screenId, out string connector))
+        {
+            _log(Inv($"[ratio] no screen {screenId}; ignored"));
+            return false;
+        }
+
+        if (!_ratios.Set(connector, workspaceId, axis, ratio)) return false;
+
+        RefreshConfiguration();
+        string key = Tiler.RatioKey(connector, workspaceId, axis);
+        _log(Inv($"[ratio] {key} = {_ratios.Get(connector, workspaceId, axis):0.###}"));
+        _tracker.RequestRetile();
+        return true;
+    }
+
+    /// <summary>
+    /// §10/§5: shift the saved ratios after workspaces are reaped, so a ratio
+    /// keeps its workspace and a stale key is never reused. The single-workspace
+    /// stage never reaps one; this is the hook the workspace layer calls.
+    /// </summary>
+    /// <returns>True when the persisted table changed.</returns>
+    public bool RemapRatiosAfterReap(IReadOnlyList<int> reaped)
+    {
+        ArgumentNullException.ThrowIfNull(reaped);
+        if (reaped.Count == 0) return false;
+        if (!_ratios.RemapAfterReap(reaped)) return false;
+
+        RefreshConfiguration();
+        _log(Inv($"[ratio] remapped after reaping workspace(s) {string.Join(",", reaped)}"));
+        _tracker.RequestRetile();
+        return true;
+    }
 
     /// <summary>Drain events and, once they have been quiet for 50 ms, plan and apply.</summary>
     /// <returns>True when at least one window was moved.</returns>
@@ -322,7 +416,7 @@ public sealed class TilingHost
             {
                 Windows = windows,
                 Screens = screens,
-                Config = Configuration,
+                Config = _configuration,
             });
 
             var placements = new List<Placement>();
@@ -341,15 +435,17 @@ public sealed class TilingHost
     /// <summary>
     /// The windows the planner may move. Classification already dropped floats,
     /// dialogs and above/tool windows; the remaining checks are the W4 guards
-    /// that keep a maximized or minimized window out of a half-tile.
+    /// that keep a maximized or minimized window out of a half-tile, plus the
+    /// host's explicit float set (§6).
     /// </summary>
-    private static List<TilerWindow> SelectWindows(IReadOnlyList<Surface> surfaces)
+    private List<TilerWindow> SelectWindows(IReadOnlyList<Surface> surfaces)
     {
         var windows = new List<TilerWindow>(surfaces.Count);
         foreach (Surface surface in surfaces)
         {
             if (surface.Layer != Layer.Tiled) continue;
             if (Types.NonTileableKinds.Contains(surface.Kind)) continue;
+            if (_floats.IsFloating(surface.Id)) continue;
 
             SurfaceFlags flags = surface.Flags;
             if (flags.Minimized || flags.Maximized || flags.Floating || flags.Fullscreen) continue;
@@ -565,6 +661,12 @@ public sealed class TilingHost
 
         _maximize.Prune(live);
 
+        int forgottenFloats = _floats.ForgetNotIn(live);
+        if (forgottenFloats > 0)
+        {
+            _log(Inv($"[float] forgot {forgottenFloats} window(s) that no longer exist"));
+        }
+
         foreach (nint handle in _selfMovedAt.Keys.ToArray())
         {
             if (!NativeMethods.IsWindow(handle)) _selfMovedAt.Remove(handle);
@@ -585,6 +687,39 @@ public sealed class TilingHost
     {
         RefreshTopology();
         return _tracker.Snapshot(ScreenMap());
+    }
+
+    private Surface? SurfaceById(int surfaceId)
+    {
+        foreach (Surface surface in SnapshotSurfaces())
+        {
+            if (surface.Id == surfaceId) return surface;
+        }
+
+        return null;
+    }
+
+    private void RefreshConfiguration() =>
+        _configuration = DefaultConfiguration with { Ratios = _ratios.Snapshot() };
+
+    private Dictionary<int, string> ConnectorByIndex()
+    {
+        var map = new Dictionary<int, string>(_monitors.Count);
+        foreach (MonitorInfo monitor in _monitors) map[monitor.Index] = monitor.DeviceName;
+        return map;
+    }
+
+    private bool TryConnector(int screenId, out string connector)
+    {
+        foreach (MonitorInfo monitor in _monitors)
+        {
+            if (monitor.Index != screenId) continue;
+            connector = monitor.DeviceName;
+            return true;
+        }
+
+        connector = string.Empty;
+        return false;
     }
 
     /// <summary>

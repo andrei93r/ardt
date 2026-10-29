@@ -102,6 +102,193 @@ internal static class PlacementRefusal
 }
 
 /// <summary>
+/// What the host should do after reading a window's frame back against the tile
+/// it was asked to take.
+/// </summary>
+/// <param name="Accepted">The window took the requested rectangle (within the clamp tolerance).</param>
+/// <param name="Refused">The window read back a different rectangle, so it refused the tile.</param>
+/// <param name="Next">The next target to try, or null when the ladder has no smaller rung.</param>
+/// <param name="SiblingAdapted">True when the sibling can take the remainder instead.</param>
+/// <param name="SiblingExtent">The sibling's new extent along the split axis.</param>
+/// <param name="Escaped">True when the pair cannot exist (the sibling could not adapt either).</param>
+/// <param name="CoolingDown">True while the app is inside its 10 s refusal cooldown.</param>
+internal readonly record struct AdaptationResult(
+    bool Accepted,
+    bool Refused,
+    RefusalStep? Next,
+    bool SiblingAdapted,
+    double SiblingExtent,
+    bool Escaped,
+    bool CoolingDown)
+{
+    /// <summary>True when there is another target the host should apply.</summary>
+    public bool ShouldRetry => Next is not null;
+}
+
+/// <summary>
+/// Host-side driver for the §10 refusal ladder, fed by read-back rather than by
+/// a minimum size.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Windows cannot query another process's minimum size, so the host requests a
+/// tile, reads the frame back, and this helper decides the next move:
+/// </para>
+/// <list type="number">
+///   <item>the read-back matches the request (within
+///   <see cref="Clamp.ClampTolerancePx"/>) — accepted, and the app leaves its
+///   refusal cooldown;</item>
+///   <item>the refusing window keeps the size it insists on and the sibling
+///   takes the remainder, clamped to the sibling's own minimum
+///   (<see cref="PlacementPolicy.RefusalLadder"/>);</item>
+///   <item>the sibling cannot adapt, so the requested tile is stepped down one
+///   rung (full → half → the §16 minimum of one sixth);</item>
+///   <item>there is no smaller rung left, so the app enters the per-app 10 s
+///   cooldown (<see cref="StubbornCooldown"/>) and the host stops fighting it.</item>
+/// </list>
+/// <para>
+/// This is a host helper only: the core stays pure, and the caller owns applying
+/// <see cref="AdaptationResult.Next"/> and the sibling's new extent.
+/// </para>
+/// </remarks>
+internal sealed class Adaptation
+{
+    private readonly StubbornCooldown _cooldown = new();
+
+    /// <summary>How long an app is left alone after its last refusal (§12).</summary>
+    public static TimeSpan CooldownDuration => StubbornCooldown.Duration;
+
+    /// <summary>
+    /// Compare a requested placement with the frame read back.
+    /// </summary>
+    /// <param name="requested">The placement the host asked for.</param>
+    /// <param name="actual">The frame the window reported after the apply.</param>
+    /// <param name="appId">The app whose refusal is remembered; use <see cref="StubbornCooldown.KeyFor"/> for unknown apps.</param>
+    /// <param name="now">A timestamp on the same clock as <see cref="StubbornCooldown"/> (Stopwatch ticks).</param>
+    /// <param name="area">The work area the tile belongs to.</param>
+    /// <param name="axis">The split axis.</param>
+    /// <param name="siblingMinimum">The sibling's minimum extent, or null for a lone window.</param>
+    /// <param name="gap">The between-window gap already removed from the split.</param>
+    public AdaptationResult Observe(
+        Placement requested,
+        Rect actual,
+        string appId,
+        long now,
+        Rect area,
+        SplitAxis axis,
+        double? siblingMinimum = null,
+        double gap = 0)
+    {
+        string key = appId.Length > 0 ? appId : FormattableString.Invariant($"#{requested.SurfaceId}");
+        return ObserveCore(requested.Rect, actual, key, now, area, axis, siblingMinimum, gap);
+    }
+
+    /// <summary>Compare a requested rectangle with the frame read back.</summary>
+    public AdaptationResult Observe(
+        Rect requested,
+        Rect actual,
+        string appId,
+        long now,
+        Rect area,
+        SplitAxis axis,
+        double? siblingMinimum = null,
+        double gap = 0) =>
+        ObserveCore(requested, actual, appId, now, area, axis, siblingMinimum, gap);
+
+    /// <summary>True while the app is inside its 10 s refusal cooldown.</summary>
+    public bool IsCoolingDown(string appId, long now) => _cooldown.IsStubborn(appId, now);
+
+    /// <summary>The app accepted its tile, so it is trusted again.</summary>
+    public void NoteSuccess(string appId) => _cooldown.NoteSuccess(appId);
+
+    /// <summary>Drop expired cooldown entries; true when at least one was released.</summary>
+    public bool Expire(long now) => _cooldown.Expire(now);
+
+    /// <summary>Number of apps currently cooling down (diagnostics).</summary>
+    public int ActiveCooldownCount(long now) => _cooldown.ActiveCount(now);
+
+    private AdaptationResult ObserveCore(
+        Rect requested,
+        Rect actual,
+        string appKey,
+        long now,
+        Rect area,
+        SplitAxis axis,
+        double? siblingMinimum,
+        double gap)
+    {
+        if (Took(requested, actual))
+        {
+            _cooldown.NoteSuccess(appKey);
+            return new AdaptationResult(true, false, null, false, 0, false, false);
+        }
+
+        // A degenerate read is not a refusal: the window has not committed a
+        // frame yet (the same reason Clamp.ShouldClampWindow ignores it).
+        bool cooling = _cooldown.IsStubborn(appKey, now);
+        if (actual.Width <= 0 || actual.Height <= 0)
+        {
+            return new AdaptationResult(false, false, null, false, 0, false, cooling);
+        }
+
+        double areaExtent = PlacementRefusal.Extent(area, axis);
+        if (areaExtent <= 0)
+        {
+            return new AdaptationResult(false, true, null, false, 0, false, cooling);
+        }
+
+        double split = Math.Max(0, areaExtent - Math.Max(0, gap));
+        double keep = Math.Min(PlacementRefusal.Extent(actual, axis), split);
+        bool escaped = false;
+
+        if (siblingMinimum is double minimum && split > 0)
+        {
+            (double sibling, bool siblingEscaped) =
+                PlacementPolicy.RefusalLadder(keep, minimum, split);
+            escaped = siblingEscaped;
+
+            if (!siblingEscaped)
+            {
+                // The refusing window keeps what it insisted on; the sibling
+                // takes the remainder, still flush to its side of the area.
+                double offset = axis == SplitAxis.Horizontal ? actual.X : actual.Y;
+                Rect keepRect = PlacementRefusal.FromOffset(area, axis, offset, keep);
+                var step = new RefusalStep(
+                    keepRect,
+                    PlacementRefusal.StageFor(keepRect, area, axis));
+                return new AdaptationResult(false, true, step, true, sibling, false, cooling);
+            }
+        }
+
+        // The pair cannot exist or there is no sibling: step the requested tile
+        // down one rung. Null means the minimum was already refused.
+        RefusalStep? next = PlacementRefusal.LoneStep(requested, area, axis);
+        if (next is null)
+        {
+            _cooldown.NoteRefusal(appKey, now);
+            return new AdaptationResult(false, true, null, false, 0, escaped, true);
+        }
+
+        return new AdaptationResult(false, true, next, false, 0, escaped, cooling);
+    }
+
+    /// <summary>
+    /// Whether the window took the requested rectangle. The tolerance is the
+    /// clamp's own: a frame includes a small invisible resize border.
+    /// </summary>
+    public static bool Took(Rect requested, Rect actual)
+    {
+        if (requested.Width <= 0 || requested.Height <= 0) return true;
+
+        double tolerance = Clamp.ClampTolerancePx;
+        return Math.Abs(actual.X - requested.X) <= tolerance
+            && Math.Abs(actual.Y - requested.Y) <= tolerance
+            && Math.Abs(actual.Width - requested.Width) <= tolerance
+            && Math.Abs(actual.Height - requested.Height) <= tolerance;
+    }
+}
+
+/// <summary>
 /// Per-app stubborn cooldown (§12). A window that refuses the geometry is not
 /// fought every drain: its app is remembered for a short cooldown while the
 /// planner leaves its frame alone. Cooldown-only — no minimum size is learned.
