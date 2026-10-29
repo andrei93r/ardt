@@ -1,0 +1,64 @@
+# winget manifest template for Adrt.
+#
+# This is a singleton manifest; it is NOT valid until every <PLACEHOLDER> is
+# replaced. The release workflow builds AdrtSetup-<version>.exe and its SHA256;
+# copy those values here, then validate and submit:
+#
+#   winget validate --manifest windows/installer/winget
+#   winget install --manifest windows/installer/winget
+#
+# For the public winget-pkgs repository, rename this file to
+# manifests/a/Adrt/Adrt/<version>/Adrt.Adrt.yaml and open a PR.
+#
+# Placeholders:
+#   <VERSION>       package version without the leading "v" (e.g. 0.3.0)
+#   <INSTALLER_URL> HTTPS URL of the built AdrtSetup-<VERSION>.exe
+#   <SHA256>        lowercase hex SHA256 of that installer
+#   <LICENSE>       SPDX license identifier once the project license is fixed
+#   <PROJECT_URL>   project homepage
+#   <REPO_URL>      source repository URL
+---
+PackageIdentifier: Adrt.Adrt
+PackageVersion: <VERSION>
+PackageLocale: en-US
+Publisher: Adrt
+PublisherUrl: <PROJECT_URL>
+PublisherSupportUrl: <REPO_URL>/issues
+PackageName: Adrt
+PackageUrl: <PROJECT_URL>
+License: <LICENSE>
+LicenseUrl: <REPO_URL>/blob/main/LICENSE
+ShortDescription: Tile windows into pairs per monitor with keyboard-driven layouts.
+Description: >-
+  Adrt is a tiling window manager for Windows. It keeps two windows per monitor
+  in a split layout, with keyboard focus, swap, move, resize and float actions,
+  an optional focus border and a per-user settings file.
+Moniker: adrt
+Tags:
+  - tiling
+  - window-manager
+  - window-management
+  - keyboard
+  - productivity
+ReleaseNotesUrl: <REPO_URL>/releases/tag/v<VERSION>
+Installers:
+  - Architecture: x64
+    InstallerType: inno
+    InstallerUrl: <INSTALLER_URL>
+    InstallerSha256: <SHA256>
+    Scope: user
+    InstallModes:
+      - interactive
+      - silent
+      - silentWithProgress
+    InstallerSwitches:
+      Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+      SilentWithProgress: /SILENT /SUPPRESSMSGBOXES /NORESTART
+    UpgradeBehavior: install
+    AppsAndFeaturesEntries:
+      - DisplayName: Adrt
+        Publisher: Adrt
+        DisplayVersion: <VERSION>
+        ProductCode: '{F01C18E9-C568-48E6-BB70-31A92C6C8159}_is1'
+ManifestType: singleton
+ManifestVersion: 1.10.0

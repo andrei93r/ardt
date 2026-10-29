@@ -1,0 +1,108 @@
+# Adrt Windows release
+#
+# Triggered by a v* tag. Builds the self-contained win-x64 host, records every
+# SHA256, compiles the per-user Inno Setup installer, and uploads one artifact
+# bundle (payload + checksums + installer).
+#
+# The product is not code-signed yet: W8.3 (certificate/signtool) is still open,
+# so Windows SmartScreen may warn about the downloaded installer and host.
+#
+# This workflow only uploads workflow artifacts. Publishing a GitHub Release
+# (and the winget manifest update) is a deliberate manual step after the
+# artifact has been checked on a clean Windows machine.
+name: Windows release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish host and build installer
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Resolve version from tag
+        id: version
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.+-]+)?$') {
+            throw "tag '$env:GITHUB_REF_NAME' does not contain a valid version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Adrt version $version"
+
+      - name: Publish self-contained host
+        run: ./scripts/windows/publish.ps1 -Version ${{ steps.version.outputs.version }}
+
+      - name: Show host checksums
+        run: Get-Content dist/SHA256SUMS.txt
+
+      - name: Install Inno Setup 6
+        run: choco install innosetup --no-progress -y
+
+      - name: Build per-user installer
+        run: |
+          $iscc = Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $iscc) {
+            $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+            if ($command) { $iscc = Get-Item $command.Source }
+          }
+          if (-not $iscc) { throw 'ISCC.exe was not found after installing Inno Setup' }
+
+          & $iscc.FullName "/DAppVersion=${{ steps.version.outputs.version }}" "windows/installer/adrt.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+
+          $setup = Get-ChildItem 'dist/installer/AdrtSetup-*.exe' |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $setup) { throw 'the installer executable was not produced' }
+
+          $hash = (Get-FileHash -LiteralPath $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($setup.Name)" | Set-Content -LiteralPath 'dist/installer/SHA256SUMS.txt' -Encoding ascii
+          Write-Host "installer: $($setup.FullName)"
+          Write-Host "SHA256:    $hash"
+
+          @"
+          ### Adrt ${{ steps.version.outputs.version }}
+          - Host payload: ``dist/windows/``
+          - Installer: ``$($setup.Name)``
+          - Installer SHA256: ``$hash``
+          "@ >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Verify release payload
+        run: |
+          if (-not (Test-Path 'dist/windows/Adrt.Windows.exe')) { throw 'host payload is missing' }
+          if (-not (Test-Path 'dist/SHA256SUMS.txt')) { throw 'host checksums are missing' }
+          if (-not (Get-ChildItem 'dist/installer/AdrtSetup-*.exe')) { throw 'installer is missing' }
+          Get-Content dist/installer/SHA256SUMS.txt
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: adrt-windows-${{ steps.version.outputs.version }}
+          path: |
+            dist/windows/
+            dist/installer/
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
