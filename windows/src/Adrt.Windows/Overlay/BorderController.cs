@@ -4,27 +4,42 @@ using Adrt.Core;
 namespace Adrt.Windows.Overlay;
 
 /// <summary>
-/// Owns the border state machine and the overlay window. One place decides
-/// "should the border be visible, and where" (<see cref="BorderState"/>); the
-/// overlay only renders the answer.
+/// Owns the border state machine and paints the focus border with the Windows 11
+/// DWM border colour. One place decides "should the border be visible"
+/// (<see cref="BorderState"/>); DWM only renders the answer.
 /// </summary>
 /// <remarks>
+/// <para>
+/// The border is a single <c>DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, ...)</c>
+/// call on the focused top-level window, so it needs no overlay window and no
+/// layered-window composition. The accent is #3B82F6 as a COLORREF
+/// (<c>0x00F6823B</c>); the previously decorated window is always reset to
+/// <c>DWMWA_COLOR_DEFAULT</c> when focus moves or the border hides.
+/// </para>
+/// <para>
 /// Visibility gates are the core's <see cref="SuppressionReason"/> set (pause,
 /// sharing) plus the session's own <see cref="IndicatorSuppression"/>. The user's
 /// config switch is a separate hard gate (<see cref="Enabled"/>), so toggling the
 /// border off and on never loses the current focus.
+/// </para>
+/// <para>
+/// <see cref="BorderWindow"/> remains compiled but dormant: its layered-window
+/// path never presented on the target build. DWM is only available on Windows 11;
+/// on older builds the attribute call fails, which is logged once and the border
+/// is a no-op.
+/// </para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
 internal sealed class BorderController : IDisposable
 {
-    private readonly BorderWindow _window;
     private readonly BorderState _state = new();
-    private readonly Func<IReadOnlyList<MonitorInfo>> _monitors;
     private readonly Action<string> _log;
     private IndicatorSuppression? _sessionSuppression;
     private bool _sessionVisible = true;
     private bool _paused;
     private bool _dragging;
+    private nint _decorated;
+    private bool _dwmFailureLogged;
     private int _disposed;
 
     public BorderController(
@@ -32,20 +47,23 @@ internal sealed class BorderController : IDisposable
         Func<IReadOnlyList<MonitorInfo>> monitors,
         Action<string> log)
     {
+        // The monitor list only fed the retired overlay; the parameter stays so
+        // the public API (Program/Input) is unchanged.
         ArgumentNullException.ThrowIfNull(monitors);
         ArgumentNullException.ThrowIfNull(log);
 
         Enabled = enabled;
-        _monitors = monitors;
         _log = log;
-        _window = new BorderWindow(log);
     }
 
-    /// <summary>The config switch. When false the overlay is hidden but focus is remembered.</summary>
+    /// <summary>The config switch. When false the border is hidden but focus is remembered.</summary>
     public bool Enabled { get; private set; }
 
-    /// <summary>True when <paramref name="handle"/> is one of our overlay windows.</summary>
-    public bool IsOwnWindow(nint handle) => _window.IsOwnWindow(handle);
+    /// <summary>
+    /// True when <paramref name="handle"/> is one of our overlay windows. DWM
+    /// decorates the focused app window itself, so we never create one.
+    /// </summary>
+    public bool IsOwnWindow(nint handle) => false;
 
     /// <summary>Show or hide the border for this session.</summary>
     public void SetEnabled(bool enabled)
@@ -132,7 +150,7 @@ internal sealed class BorderController : IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
 
-        _window.Dispose();
+        ResetDecoration();
         GC.SuppressFinalize(this);
     }
 
@@ -163,18 +181,65 @@ internal sealed class BorderController : IDisposable
     {
         if (!Enabled || !_sessionVisible)
         {
-            _window.Hide();
+            ResetDecoration();
             return;
         }
 
         BorderSnapshot snapshot = _state.Snapshot();
-        if (snapshot.Visible && snapshot.Rect is { } rect)
+        if (snapshot.Visible && snapshot.Rect is not null)
         {
-            _window.Show(_monitors(), rect);
+            // The state machine only becomes visible for the foreground window
+            // (InputLayer feeds this controller from GetForegroundWindow), so the
+            // live foreground handle is the one HWND to decorate.
+            Decorate(OverlayNativeMethods.GetForegroundWindow());
         }
         else
         {
-            _window.Hide();
+            ResetDecoration();
         }
+    }
+
+    private void Decorate(nint hwnd)
+    {
+        if (hwnd == 0)
+        {
+            ResetDecoration();
+            return;
+        }
+
+        if (hwnd == _decorated) return;
+
+        ResetDecoration();
+
+        uint color = OverlayNativeMethods.ACCENT_BORDER_COLOR;
+        int hr = OverlayNativeMethods.DwmSetWindowAttribute(
+            hwnd,
+            OverlayNativeMethods.DWMWA_BORDER_COLOR,
+            ref color,
+            sizeof(uint));
+
+        // Remember the HWND even on failure so a pre-Windows-11 host does not
+        // retry (and log) on every frame; resetting it later is harmless.
+        _decorated = hwnd;
+
+        if (hr < 0 && !_dwmFailureLogged)
+        {
+            _dwmFailureLogged = true;
+            _log($"adrt: DWM border colour unavailable (hr=0x{hr:X8}); focus border disabled");
+        }
+    }
+
+    private void ResetDecoration()
+    {
+        nint previous = _decorated;
+        if (previous == 0) return;
+
+        _decorated = 0;
+        uint color = OverlayNativeMethods.DWMWA_COLOR_DEFAULT;
+        _ = OverlayNativeMethods.DwmSetWindowAttribute(
+            previous,
+            OverlayNativeMethods.DWMWA_BORDER_COLOR,
+            ref color,
+            sizeof(uint));
     }
 }

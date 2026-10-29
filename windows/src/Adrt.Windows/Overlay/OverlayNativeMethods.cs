@@ -16,6 +16,7 @@ internal static class OverlayNativeMethods
 {
     internal const string User32 = "user32.dll";
     internal const string Gdi32 = "gdi32.dll";
+    internal const string DwmApi = "dwmapi.dll";
     internal const string WtsApi32 = "wtsapi32.dll";
 
     internal const int WS_POPUP = unchecked((int)0x80000000);
@@ -58,6 +59,14 @@ internal static class OverlayNativeMethods
     internal const uint DIB_RGB_COLORS = 0;
 
     internal const int ERROR_CLASS_ALREADY_EXISTS = 1410;
+
+    // Windows 11 (build 22000+) DWM border colour. A plain COLORREF, applied to a
+    // top-level window; no overlay window and no layered-window composition.
+    internal const int DWMWA_BORDER_COLOR = 34;
+    internal const uint DWMWA_COLOR_DEFAULT = 0xFFFFFFFF;
+
+    /// <summary>Accent #3B82F6 as a COLORREF (0x00BBGGRR): 0x00F6823B.</summary>
+    internal const uint ACCENT_BORDER_COLOR = 0x00F6823B;
 
     internal static readonly nint HwndTopMost = -1;
 
@@ -196,6 +205,9 @@ internal static class OverlayNativeMethods
         ref BLENDFUNCTION blend,
         uint flags);
 
+    [DllImport(User32, EntryPoint = "GetForegroundWindow", SetLastError = true)]
+    internal static extern nint GetForegroundWindow();
+
     [DllImport(User32, EntryPoint = "GetDC", SetLastError = true)]
     internal static extern nint GetDC(nint hWnd);
 
@@ -237,6 +249,13 @@ internal static class OverlayNativeMethods
     [DllImport(Gdi32, EntryPoint = "DeleteObject", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool DeleteObject(nint gdiObject);
+
+    [DllImport(DwmApi, EntryPoint = "DwmSetWindowAttribute", SetLastError = true)]
+    internal static extern int DwmSetWindowAttribute(
+        nint hWnd,
+        int attribute,
+        ref uint value,
+        int valueSize);
 
     [DllImport(WtsApi32, EntryPoint = "WTSRegisterSessionNotification", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

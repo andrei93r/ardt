@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 // DllImport is deliberate here: this file is the self-contained virtual-desktop
-// bridge, so its two small user32 declarations stay local rather than growing
+// bridge, so its small user32 declarations stay local rather than growing
 // NativeMethods. Source-generated LibraryImport would need AllowUnsafeBlocks.
 #pragma warning disable SYSLIB1054 // Use LibraryImport instead of DllImport.
 
@@ -39,7 +39,6 @@ internal sealed class VirtualDesktops
     private const string IidVirtualDesktopManager = "A5CD92FF-29BE-454C-8D04-D82879FB3F1B";
 
     private static readonly Guid Clsid = new(ClsidVirtualDesktopManager);
-    private static readonly Guid Iid = new(IidVirtualDesktopManager);
 
     private readonly Action<string>? _log;
     private IVirtualDesktopManager? _manager;
@@ -83,8 +82,15 @@ internal sealed class VirtualDesktops
     {
         if (!EnsureManager()) return;
 
-        Guid? current = QueryCurrentDesktopId();
-        if (current is { } desktopId) _currentDesktopId = desktopId;
+        try
+        {
+            Guid? current = QueryCurrentDesktopId();
+            if (current is { } desktopId) _currentDesktopId = desktopId;
+        }
+        catch (Exception error)
+        {
+            MarkUnavailable(error.Message, error.HResult);
+        }
     }
 
     /// <summary>Move one top-level window to <paramref name="desktopId"/>.</summary>
